@@ -1,0 +1,27 @@
+.idea
+.vscode
+.DS_Store
+*.lock
+*.log
+
+*.egg-info
+
+build
+dist
+.venv
+venv
+venv*
+__pycache__
+
+.coverage
+htmlcov
+cov.tmp
+coverage.xml
+.pytest_cache
+
+node_modules
+package-lock.json
+pyrightconfig.json
+
+# spec-workflow tool artifacts
+.spec-workflow
