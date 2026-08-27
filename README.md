@@ -1,5 +1,10 @@
 # 基于 tRPC-Agent 设计多租户节点化 Agent 部署平台
 
+## 架构图文档
+- [系统架构图](docs/architecture/diagrams/system-architecture.mmd)（[SVG](docs/architecture/diagrams/system-architecture.svg)）
+- [企业微信核心链路时序图](docs/architecture/diagrams/wecom-core-sequence.mmd)（[SVG](docs/architecture/diagrams/wecom-core-sequence.svg)）
+- [企业微信故障恢复时序图](docs/architecture/diagrams/wecom-failure-recovery-sequence.mmd)（[SVG](docs/architecture/diagrams/wecom-failure-recovery-sequence.svg)）
+
 ## 背景和价值
 企业在落地 Agent 应用时，通常不会只部署一个单体机器人，而是希望面向多个部门、多个业务线、多个 IM 入口和多个数据后端
 ，构建一套可统一管理的 Agent 平台。例如：客服团队希望把 Agent 接入企业微信，研发团队希望接入内部群机器人，运营团队>希望接入微信公众号或微信客服，不同租户又需要隔离会话、记忆、知识库、工具权限和审计日志。

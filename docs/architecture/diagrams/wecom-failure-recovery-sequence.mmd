@@ -1,0 +1,111 @@
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Arial, Microsoft YaHei, sans-serif","primaryTextColor":"#172033","lineColor":"#52606d"},"sequence":{"useMaxWidth":false,"wrap":true,"diagramMarginX":24,"actorMargin":48,"messageMargin":24}}}%%
+sequenceDiagram
+  autonumber
+  participant WX as 企业微信
+  participant CG as Channel Gateway / Adapter
+  participant PG as PostgreSQL
+  participant OP as Outbox Publisher（逻辑组件）
+  participant K as Kafka 执行总线
+  participant AW as Agent Worker
+  participant RD as Redis 租约
+  participant L as LLM Gateway
+  participant T as Tool
+  participant JW as Job Worker
+
+  rect rgb(255, 247, 237)
+    Note over WX,PG: 入站提交失败与重复回调
+    WX->>CG: callback(external_event_id)
+    CG->>PG: 入站消息 + execution + Outbox 同事务写入
+    alt PostgreSQL 在 COMMIT 前失败
+      PG--xCG: 未提交
+      CG--xWX: 不确认或返回可重试错误
+      WX->>CG: 重试相同 external_event_id
+      CG->>PG: 同一 inbound_idempotency_key 重试
+    else COMMIT 成功但响应丢失
+      PG--xCG: COMMIT 结果未送达
+      WX->>CG: 重试相同 external_event_id
+      CG->>PG: 查询幂等账本
+      PG-->>CG: 复用原 execution_id，不重复创建
+    end
+  end
+
+  rect rgb(239, 246, 255)
+    Note over PG,K: Kafka 故障不回滚已提交业务事务
+    PG-->>OP: 读取 committed Outbox
+    OP->>K: 发布 execution.requested
+    K--xOP: Broker 不可用或 ACK 丢失
+    PG->>PG: 保留 Outbox，积压告警并退避
+    OP->>K: 使用同一 event_id 重试发布
+    K-->>AW: 至少一次投递；消费者幂等状态机去重
+  end
+
+  rect rgb(254, 252, 232)
+    Note over K,RD: Worker 故障、重平衡与过期提交
+    K->>AW: execution.requested
+    AW->>RD: 获取 lease + fencing_token = 41
+    AW--xK: Worker 崩溃；Kafka 未提交消费位点
+    K->>AW: 重投 execution.requested
+    AW->>RD: 获取新 fencing_token = 42
+    AW->>PG: 以 token 42 和 expected_version 提交
+    PG-->>AW: COMMIT 成功
+    AW->>PG: 迟到 Worker 以 token 41 提交
+    PG--xAW: fencing / version 冲突；禁止提交
+  end
+
+  rect rgb(245, 243, 255)
+    Note over AW,L: 模型超时与显式降级
+    AW->>L: 模型调用 + budget reservation_id
+    L--xAW: 超时
+    alt 首个可见输出前且重试安全
+      AW->>L: 限次安全重试
+    else Agent Release 允许模型 fallback
+      AW->>L: 切换允许的低成本或备用模型
+      Note over AW,L: 记录用户可见降级、审计、指标与告警
+    else 无安全重试或 fallback
+      AW->>PG: 失败关闭；结算或释放预算预留
+    end
+  end
+
+  rect rgb(255, 241, 242)
+    Note over AW,T: Tool 超时按副作用等级处理
+    AW->>T: tool_invocation_id + tool_idempotency_key
+    T--xAW: 超时或响应丢失
+    alt READ_ONLY
+      AW->>T: 退避后重试
+    else IDEMPOTENT_WRITE 且下游接受幂等键
+      AW->>T: 使用相同 tool_idempotency_key 重试
+    else NON_IDEMPOTENT_WRITE / HIGH_RISK
+      AW->>PG: Tool Invocation = OUTCOME_UNKNOWN
+      Note over AW,T: 不盲目重试；查询外部结果或进入人工处置
+    end
+  end
+
+  rect rgb(240, 253, 244)
+    Note over K,JW: Summary / Memory 是提交后的异步增强能力
+    K->>JW: session.events.committed
+    JW--xPG: Memory 后端暂不可用
+    JW--xK: 不提交消费位点
+    Note over AW,JW: 当前回复继续使用权威 Session 上下文；不等待 Memory
+    K->>JW: 退避重投相同 source event range
+    JW->>PG: 幂等写入 source_version / source range
+    Note over K,JW: 积压超标时显式降级并告警
+  end
+
+  rect rgb(248, 250, 252)
+    Note over WX,PG: 回复投递超时、对账与死信
+    PG->>CG: delivery_id = d-1，创建 attempt_id = a-1
+    CG->>WX: 发送或更新消息
+    WX--xCG: 响应超时，结果不确定
+    CG->>PG: delivery d-1 = OUTCOME_UNKNOWN
+    CG->>WX: 按通道能力查询 external_message_id
+    alt 已送达
+      WX-->>CG: 找到原消息
+      CG->>PG: delivery d-1 = DELIVERED
+    else 确认未送达且允许重试
+      CG->>PG: 新建 attempt_id = a-2，保持 delivery_id = d-1
+      CG->>WX: 保守重试 / 更新原消息
+    else 超期或无法安全判断
+      CG->>K: delivery d-1 进入死信
+      Note over CG,K: 人工或补偿重放仍使用原 delivery_id
+    end
+  end

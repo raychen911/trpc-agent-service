@@ -1,0 +1,171 @@
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Arial, Microsoft YaHei, sans-serif","primaryTextColor":"#172033","lineColor":"#52606d"},"flowchart":{"curve":"basis","htmlLabels":true}}}%%
+flowchart TB
+  subgraph EXTERNAL["企业外部系统"]
+    direction LR
+    PLATFORM_USER["平台用户"]
+    API_CLIENT["HTTP / SSE / AG-UI / A2A 客户端"]
+    IM_USER["IM 用户"]
+    OIDC["企业 OIDC"]
+    WECOM["企业微信"]
+    FEISHU["飞书"]
+    MODEL_PROVIDER["模型供应商 / 私有模型 Endpoint"]
+    EXTERNAL_TOOL["外部 Tool / MCP Server"]
+  end
+
+  subgraph PRODUCTION["Production 环境｜企业私有化部署"]
+    direction TB
+
+    subgraph TENANT_SCOPE["租户逻辑隔离范围｜tenant_id 必须贯穿身份、配置、消息、存储、预算与审计"]
+      direction LR
+      CHANNEL_BINDING["通道绑定"]
+      RELEASE_DEPLOYMENT["Agent Release / Deployment"]
+      STORAGE_PROFILE["存储配置档"]
+      POLICY_BUNDLE["治理策略 / Policy Bundle"]
+    end
+
+    subgraph CONTROL_PLANE["控制面"]
+      direction LR
+      WEB_CONSOLE["Web Console<br/>部署单元"]
+      ADMIN_API["Admin API<br/>部署单元"]
+    end
+
+    subgraph DATA_PLANE["数据面"]
+      direction LR
+      AGENT_GATEWAY["Agent Gateway<br/>部署单元"]
+
+      subgraph CHANNEL_GATEWAY["Channel Gateway｜部署单元"]
+        direction TB
+        WECOM_ADAPTER["企业微信 Channel Adapter<br/>进程内插件"]
+        FEISHU_ADAPTER["飞书 Channel Adapter<br/>进程内插件"]
+        CHANNEL_CORE["验签 / 解密 / 绑定解析<br/>入站幂等 / 回复投递"]
+        WECOM_ADAPTER --> CHANNEL_CORE
+        FEISHU_ADAPTER --> CHANNEL_CORE
+      end
+
+      subgraph AGENT_WORKER["Agent Worker｜部署单元"]
+        direction TB
+        AGENT_CORE["执行状态机 / Session 并发控制"]
+        RUNNER["tRPC-Agent Runner"]
+        FILTER["Filter<br/>Runner 管线内模块"]
+        AGENT_STORAGE_ADAPTER["Storage Adapter<br/>进程内模块"]
+        AGENT_CORE --> RUNNER
+        RUNNER --> FILTER
+        AGENT_CORE --> AGENT_STORAGE_ADAPTER
+      end
+
+      subgraph JOB_WORKER["Job Worker｜部署单元"]
+        direction TB
+        JOB_CORE["Summary / Memory / Knowledge<br/>迁移 / 删除 / 审计 / 补偿"]
+        JOB_STORAGE_ADAPTER["Storage Adapter<br/>进程内模块"]
+        JOB_CORE --> JOB_STORAGE_ADAPTER
+      end
+
+      OUTBOX_PUBLISHER["Outbox Publisher<br/>逻辑组件；部署归属未冻结"]
+    end
+
+    subgraph INFRA["治理与基础设施"]
+      direction LR
+      KAFKA[("Kafka 兼容执行总线")]
+      POSTGRES[("PostgreSQL<br/>权威状态 / 幂等 / Outbox / 审计索引")]
+      REDIS[("Redis<br/>缓存 / 限流 / fencing 租约")]
+      VECTOR[("PostgreSQL / PGVector<br/>Knowledge / 语义 Memory")]
+      OBJECT_STORE[("S3 兼容对象存储<br/>Artifact / 知识源 / 归档")]
+      OPA["OPA Sidecar<br/>Policy Bundle"]
+      VAULT["OpenBao / Vault<br/>密钥引用解析"]
+      LLM_GATEWAY["LLM Gateway<br/>基础设施部署"]
+      OTEL["OpenTelemetry Collector"]
+      OBSERVABILITY["Prometheus / Tempo / Loki / Grafana"]
+      PLATFORM_RUNTIME["Kubernetes / Istio Ambient Mesh<br/>Helm / Argo"]
+    end
+  end
+
+  PLATFORM_USER -->|"浏览器"| WEB_CONSOLE
+  WEB_CONSOLE -->|"同步 REST / OpenAPI"| ADMIN_API
+  ADMIN_API -->|"OIDC 认证"| OIDC
+  API_CLIENT -->|"同步协议 / 流式连接"| AGENT_GATEWAY
+  IM_USER --> WECOM
+  IM_USER --> FEISHU
+  WECOM -->|"HTTPS 回调"| WECOM_ADAPTER
+  FEISHU -->|"Webhook / 长连接"| FEISHU_ADAPTER
+
+  ADMIN_API -->|"管理"| CHANNEL_BINDING
+  ADMIN_API -->|"发布"| RELEASE_DEPLOYMENT
+  ADMIN_API -->|"绑定"| STORAGE_PROFILE
+  ADMIN_API -->|"签名发布"| POLICY_BUNDLE
+  CHANNEL_BINDING -.->|"绑定解析"| CHANNEL_CORE
+  RELEASE_DEPLOYMENT -.->|"固定版本"| AGENT_CORE
+  STORAGE_PROFILE -.->|"后端路由"| AGENT_STORAGE_ADAPTER
+  STORAGE_PROFILE -.->|"后端路由"| JOB_STORAGE_ADAPTER
+  POLICY_BUNDLE -.->|"本地策略"| OPA
+
+  ADMIN_API -.->|"控制面元数据 / Audit Outbox"| POSTGRES
+  AGENT_GATEWAY ==>|"异步 execution 命令"| KAFKA
+  CHANNEL_CORE -.->|"事务写入入站消息 / execution / Outbox"| POSTGRES
+  OUTBOX_PUBLISHER -.->|"读取 committed Outbox"| POSTGRES
+  OUTBOX_PUBLISHER ==>|"异步领域事件"| KAFKA
+  KAFKA ==>|"按 tenant_id + session_id 分区"| AGENT_CORE
+  KAFKA ==>|"异步 Job / 补偿"| JOB_CORE
+  KAFKA ==>|"reply.delivery.requested"| CHANNEL_CORE
+
+  AGENT_CORE -.->|"租约 / 热投影"| REDIS
+  AGENT_STORAGE_ADAPTER -.->|"Session Event / State / Outbox"| POSTGRES
+  AGENT_STORAGE_ADAPTER -.->|"缓存"| REDIS
+  AGENT_STORAGE_ADAPTER -.->|"Knowledge / Memory"| VECTOR
+  AGENT_STORAGE_ADAPTER -.->|"Artifact"| OBJECT_STORE
+  JOB_STORAGE_ADAPTER -.->|"Summary / 审计索引 / Outbox"| POSTGRES
+  JOB_STORAGE_ADAPTER -.->|"缓存失效"| REDIS
+  JOB_STORAGE_ADAPTER -.->|"Memory / Knowledge"| VECTOR
+  JOB_STORAGE_ADAPTER -.->|"Artifact / 归档"| OBJECT_STORE
+
+  FILTER -->|"同步策略决策"| OPA
+  AGENT_GATEWAY -->|"同步策略决策"| OPA
+  CHANNEL_CORE -->|"同步策略决策"| OPA
+  JOB_CORE -->|"同步策略决策"| OPA
+  RUNNER -->|"同步模型调用"| LLM_GATEWAY
+  RUNNER -->|"受治理的 Tool 调用"| EXTERNAL_TOOL
+  LLM_GATEWAY -.->|"密钥引用"| VAULT
+  LLM_GATEWAY -->|"受控出口"| MODEL_PROVIDER
+  ADMIN_API -.->|"密钥引用"| VAULT
+  WECOM_ADAPTER -.->|"密钥引用"| VAULT
+  FEISHU_ADAPTER -.->|"密钥引用"| VAULT
+
+  ADMIN_API -.->|"遥测"| OTEL
+  AGENT_GATEWAY -.->|"遥测"| OTEL
+  CHANNEL_CORE -.->|"遥测"| OTEL
+  AGENT_CORE -.->|"遥测"| OTEL
+  JOB_CORE -.->|"遥测 / Span Link"| OTEL
+  LLM_GATEWAY -.->|"遥测"| OTEL
+  OTEL -.->|"指标 / Trace / 日志"| OBSERVABILITY
+  PLATFORM_RUNTIME -.->|"调度 / mTLS / GitOps"| ADMIN_API
+  PLATFORM_RUNTIME -.->|"调度 / mTLS / GitOps"| AGENT_GATEWAY
+  PLATFORM_RUNTIME -.->|"调度 / mTLS / GitOps"| CHANNEL_CORE
+  PLATFORM_RUNTIME -.->|"调度 / mTLS / GitOps"| AGENT_CORE
+  PLATFORM_RUNTIME -.->|"调度 / mTLS / GitOps"| JOB_CORE
+
+  subgraph LEGEND["连线语义"]
+    direction LR
+    L1["调用方"] -->|"同步调用"| L2["被调用方"]
+    L3["生产者"] ==>|"异步事件"| L4["消费者"]
+    L5["组件"] -.->|"持久化 / 配置 / 遥测 / 密钥"| L6["依赖"]
+  end
+
+  classDef external fill:#fff8e1,stroke:#b7791f,color:#5f370e;
+  classDef deploy fill:#e8f1ff,stroke:#2563eb,color:#172033,stroke-width:2px;
+  classDef module fill:#f3f7ff,stroke:#6b8fd6,color:#172033;
+  classDef infra fill:#eefbf3,stroke:#2f855a,color:#173b2a;
+  classDef tenant fill:#fff2f2,stroke:#c53030,color:#5c1f1f;
+  class PLATFORM_USER,API_CLIENT,IM_USER,OIDC,WECOM,FEISHU,MODEL_PROVIDER,EXTERNAL_TOOL external;
+  class WEB_CONSOLE,ADMIN_API,AGENT_GATEWAY deploy;
+  class WECOM_ADAPTER,FEISHU_ADAPTER,CHANNEL_CORE,OUTBOX_PUBLISHER,AGENT_CORE,RUNNER,FILTER,AGENT_STORAGE_ADAPTER,JOB_CORE,JOB_STORAGE_ADAPTER module;
+  class KAFKA,POSTGRES,REDIS,VECTOR,OBJECT_STORE,OPA,VAULT,LLM_GATEWAY,OTEL,OBSERVABILITY,PLATFORM_RUNTIME infra;
+  class CHANNEL_BINDING,RELEASE_DEPLOYMENT,STORAGE_PROFILE,POLICY_BUNDLE tenant;
+  style EXTERNAL fill:#fffdf7,stroke:#d69e2e,stroke-width:2px
+  style PRODUCTION fill:#ffffff,stroke:#334155,stroke-width:3px
+  style TENANT_SCOPE fill:#fffafa,stroke:#c53030,stroke-width:2px,stroke-dasharray:6 4
+  style CONTROL_PLANE fill:#f5f3ff,stroke:#7c3aed,stroke-width:2px
+  style DATA_PLANE fill:#f8fbff,stroke:#2563eb,stroke-width:2px
+  style INFRA fill:#f4fbf6,stroke:#2f855a,stroke-width:2px
+  style CHANNEL_GATEWAY fill:#eef5ff,stroke:#2563eb,stroke-width:2px
+  style AGENT_WORKER fill:#eef5ff,stroke:#2563eb,stroke-width:2px
+  style JOB_WORKER fill:#eef5ff,stroke:#2563eb,stroke-width:2px
+  style LEGEND fill:#fafafa,stroke:#64748b,stroke-width:1px

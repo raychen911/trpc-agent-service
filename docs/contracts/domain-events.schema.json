@@ -1,0 +1,316 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:trpc-agent-platform:schema:domain-events:v1",
+  "title": "tRPC Agent platform domain events v1",
+  "oneOf": [
+    { "$ref": "#/$defs/agentExecutionRequested" },
+    { "$ref": "#/$defs/sessionEventsCommitted" },
+    { "$ref": "#/$defs/memoryUpserted" },
+    { "$ref": "#/$defs/toolInvocationRequested" },
+    { "$ref": "#/$defs/replyDeliveryRequested" },
+    { "$ref": "#/$defs/storageMigrationChanged" }
+  ],
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "classification": {
+      "enum": ["PUBLIC", "INTERNAL", "CONFIDENTIAL", "RESTRICTED"]
+    },
+    "baseEvent": {
+      "type": "object",
+      "required": [
+        "specversion",
+        "id",
+        "source",
+        "type",
+        "subject",
+        "time",
+        "datacontenttype",
+        "dataschema",
+        "tenantid",
+        "correlationid",
+        "causationid",
+        "traceparent",
+        "classification",
+        "data"
+      ],
+      "properties": {
+        "specversion": { "const": "1.0" },
+        "id": { "$ref": "#/$defs/uuid" },
+        "source": { "type": "string", "format": "uri-reference", "minLength": 1 },
+        "type": { "type": "string", "minLength": 1 },
+        "subject": { "type": "string", "minLength": 1 },
+        "time": { "type": "string", "format": "date-time" },
+        "datacontenttype": { "const": "application/json" },
+        "dataschema": { "type": "string", "format": "uri" },
+        "tenantid": { "$ref": "#/$defs/uuid" },
+        "correlationid": { "$ref": "#/$defs/uuid" },
+        "causationid": { "$ref": "#/$defs/uuid" },
+        "traceparent": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$"
+        },
+        "classification": { "$ref": "#/$defs/classification" },
+        "data": { "type": "object" }
+      },
+      "additionalProperties": true
+    },
+    "agentExecutionRequested": {
+      "allOf": [
+        { "$ref": "#/$defs/baseEvent" },
+        {
+          "properties": {
+            "type": { "const": "com.trpc.agent.execution.requested.v1" },
+            "dataschema": {
+              "const": "urn:trpc-agent-platform:schema:domain-events:v1#/$defs/agentExecutionRequested"
+            },
+            "data": { "$ref": "#/$defs/agentExecutionRequestedData" }
+          }
+        }
+      ]
+    },
+    "agentExecutionRequestedData": {
+      "type": "object",
+      "required": [
+        "execution_id",
+        "inbound_message_id",
+        "agent_app_id",
+        "agent_release_id",
+        "session_id",
+        "expected_session_version",
+        "requested_at"
+      ],
+      "properties": {
+        "execution_id": { "$ref": "#/$defs/uuid" },
+        "inbound_message_id": { "$ref": "#/$defs/uuid" },
+        "agent_app_id": { "$ref": "#/$defs/uuid" },
+        "agent_release_id": { "$ref": "#/$defs/uuid" },
+        "session_id": { "$ref": "#/$defs/uuid" },
+        "expected_session_version": { "type": "integer", "minimum": 0 },
+        "requested_at": { "type": "string", "format": "date-time" }
+      },
+      "additionalProperties": true
+    },
+    "sessionEventsCommitted": {
+      "allOf": [
+        { "$ref": "#/$defs/baseEvent" },
+        {
+          "properties": {
+            "type": { "const": "com.trpc.session.events.committed.v1" },
+            "dataschema": {
+              "const": "urn:trpc-agent-platform:schema:domain-events:v1#/$defs/sessionEventsCommitted"
+            },
+            "data": { "$ref": "#/$defs/sessionEventsCommittedData" }
+          }
+        }
+      ]
+    },
+    "sessionEventsCommittedData": {
+      "type": "object",
+      "required": [
+        "execution_id",
+        "session_id",
+        "previous_version",
+        "committed_version",
+        "first_sequence",
+        "last_sequence",
+        "event_ids",
+        "state_digest"
+      ],
+      "properties": {
+        "execution_id": { "$ref": "#/$defs/uuid" },
+        "session_id": { "$ref": "#/$defs/uuid" },
+        "previous_version": { "type": "integer", "minimum": 0 },
+        "committed_version": { "type": "integer", "minimum": 1 },
+        "first_sequence": { "type": "integer", "minimum": 1 },
+        "last_sequence": { "type": "integer", "minimum": 1 },
+        "event_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/uuid" }
+        },
+        "state_digest": { "$ref": "#/$defs/digest" }
+      },
+      "additionalProperties": true
+    },
+    "memoryUpserted": {
+      "allOf": [
+        { "$ref": "#/$defs/baseEvent" },
+        {
+          "properties": {
+            "type": { "const": "com.trpc.memory.upserted.v1" },
+            "dataschema": {
+              "const": "urn:trpc-agent-platform:schema:domain-events:v1#/$defs/memoryUpserted"
+            },
+            "data": { "$ref": "#/$defs/memoryUpsertedData" }
+          }
+        }
+      ]
+    },
+    "memoryUpsertedData": {
+      "type": "object",
+      "required": [
+        "memory_id",
+        "im_principal_id",
+        "source_session_id",
+        "source_from_sequence",
+        "source_to_sequence",
+        "strategy_version",
+        "content_digest",
+        "visibility_cursor"
+      ],
+      "properties": {
+        "memory_id": { "$ref": "#/$defs/uuid" },
+        "im_principal_id": { "$ref": "#/$defs/uuid" },
+        "source_session_id": { "$ref": "#/$defs/uuid" },
+        "source_from_sequence": { "type": "integer", "minimum": 1 },
+        "source_to_sequence": { "type": "integer", "minimum": 1 },
+        "strategy_version": { "type": "string", "minLength": 1 },
+        "content_digest": { "$ref": "#/$defs/digest" },
+        "visibility_cursor": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": true
+    },
+    "toolInvocationRequested": {
+      "allOf": [
+        { "$ref": "#/$defs/baseEvent" },
+        {
+          "properties": {
+            "type": { "const": "com.trpc.tool.invocation.requested.v1" },
+            "dataschema": {
+              "const": "urn:trpc-agent-platform:schema:domain-events:v1#/$defs/toolInvocationRequested"
+            },
+            "data": { "$ref": "#/$defs/toolInvocationRequestedData" }
+          }
+        }
+      ]
+    },
+    "toolInvocationRequestedData": {
+      "type": "object",
+      "required": [
+        "tool_invocation_id",
+        "execution_id",
+        "session_id",
+        "tool_id",
+        "tool_version",
+        "side_effect_class",
+        "arguments_digest",
+        "idempotency_key"
+      ],
+      "properties": {
+        "tool_invocation_id": { "$ref": "#/$defs/uuid" },
+        "execution_id": { "$ref": "#/$defs/uuid" },
+        "session_id": { "$ref": "#/$defs/uuid" },
+        "tool_id": { "$ref": "#/$defs/uuid" },
+        "tool_version": { "type": "string", "minLength": 1 },
+        "side_effect_class": {
+          "enum": ["READ_ONLY", "IDEMPOTENT_WRITE", "NON_IDEMPOTENT_WRITE", "HIGH_RISK"]
+        },
+        "arguments_digest": { "$ref": "#/$defs/digest" },
+        "idempotency_key": { "type": "string", "minLength": 16, "maxLength": 200 },
+        "approval_request_id": { "$ref": "#/$defs/uuid" }
+      },
+      "additionalProperties": true
+    },
+    "replyDeliveryRequested": {
+      "allOf": [
+        { "$ref": "#/$defs/baseEvent" },
+        {
+          "properties": {
+            "type": { "const": "com.trpc.reply.delivery.requested.v1" },
+            "dataschema": {
+              "const": "urn:trpc-agent-platform:schema:domain-events:v1#/$defs/replyDeliveryRequested"
+            },
+            "data": { "$ref": "#/$defs/replyDeliveryRequestedData" }
+          }
+        }
+      ]
+    },
+    "replyDeliveryRequestedData": {
+      "type": "object",
+      "required": [
+        "delivery_id",
+        "execution_id",
+        "session_id",
+        "channel_binding_id",
+        "logical_part",
+        "content_digest"
+      ],
+      "properties": {
+        "delivery_id": { "$ref": "#/$defs/uuid" },
+        "execution_id": { "$ref": "#/$defs/uuid" },
+        "session_id": { "$ref": "#/$defs/uuid" },
+        "channel_binding_id": { "$ref": "#/$defs/uuid" },
+        "logical_part": { "type": "integer", "minimum": 0 },
+        "content_digest": { "$ref": "#/$defs/digest" },
+        "content_object_ref": { "type": "string", "minLength": 1 },
+        "ordered_after_delivery_id": { "$ref": "#/$defs/uuid" }
+      },
+      "additionalProperties": true
+    },
+    "storageMigrationChanged": {
+      "allOf": [
+        { "$ref": "#/$defs/baseEvent" },
+        {
+          "properties": {
+            "type": { "const": "com.trpc.storage.migration.changed.v1" },
+            "dataschema": {
+              "const": "urn:trpc-agent-platform:schema:domain-events:v1#/$defs/storageMigrationChanged"
+            },
+            "data": { "$ref": "#/$defs/storageMigrationChangedData" }
+          }
+        }
+      ]
+    },
+    "storageMigrationChangedData": {
+      "type": "object",
+      "required": [
+        "migration_id",
+        "profile_key",
+        "source_profile_version_id",
+        "target_profile_version_id",
+        "data_domain",
+        "previous_state",
+        "state",
+        "changed_at"
+      ],
+      "properties": {
+        "migration_id": { "$ref": "#/$defs/uuid" },
+        "profile_key": { "type": "string", "minLength": 1 },
+        "source_profile_version_id": { "$ref": "#/$defs/uuid" },
+        "target_profile_version_id": { "$ref": "#/$defs/uuid" },
+        "data_domain": {
+          "enum": ["SESSION", "MEMORY", "VECTOR", "OBJECT", "AUDIT"]
+        },
+        "previous_state": { "$ref": "#/$defs/migrationState" },
+        "state": { "$ref": "#/$defs/migrationState" },
+        "changed_at": { "type": "string", "format": "date-time" },
+        "error_code": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": true
+    },
+    "migrationState": {
+      "enum": [
+        "PREPARING",
+        "BACKFILLING",
+        "CATCHING_UP",
+        "VALIDATING",
+        "READY_TO_CUTOVER",
+        "CUTTING_OVER",
+        "OBSERVING",
+        "COMPLETED",
+        "FAILED",
+        "ROLLING_BACK",
+        "ROLLED_BACK"
+      ]
+    }
+  }
+}

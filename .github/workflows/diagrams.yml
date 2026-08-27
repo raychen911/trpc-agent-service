@@ -1,0 +1,149 @@
+name: Documentation gate
+
+"on":
+  pull_request:
+    paths:
+      - "docs/**"
+      - ".github/workflows/diagrams.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "docs/**"
+      - ".github/workflows/diagrams.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  docs-gate:
+    name: docs-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned schema validator
+        run: python -m pip install "jsonschema[format-nongpl]==4.25.1"
+
+      - name: Check local documentation links
+        shell: bash
+        run: |
+          python - <<'PY'
+          import re
+          from pathlib import Path
+          from urllib.parse import unquote, urlsplit
+
+          missing = []
+          for document in Path("docs").rglob("*.md"):
+              for raw_target in re.findall(r"(?<!!)\[[^]]*\]\(([^)]+)\)", document.read_text()):
+                  raw_target = raw_target.strip()
+                  if raw_target.startswith("<"):
+                      target = raw_target[1:].split(">", 1)[0]
+                  else:
+                      target = raw_target.split(maxsplit=1)[0]
+                  parsed = urlsplit(target)
+                  if parsed.scheme or target.startswith(("#", "//")):
+                      continue
+                  path = unquote(parsed.path)
+                  candidate = Path.cwd() / path.lstrip("/") if path.startswith("/") else document.parent / path
+                  if path and not candidate.exists():
+                      missing.append(f"{document}: {target}")
+
+          if missing:
+              raise SystemExit("Missing local documentation links:\n" + "\n".join(missing))
+          PY
+
+      - name: Check domain event schema and examples
+        shell: bash
+        run: |
+          python - <<'PY'
+          import copy
+          import json
+          from pathlib import Path
+
+          from jsonschema import Draft202012Validator, FormatChecker
+
+          schema = json.loads(Path("docs/contracts/domain-events.schema.json").read_text())
+          Draft202012Validator.check_schema(schema)
+          validator = Draft202012Validator(schema, format_checker=FormatChecker())
+          event_id = "01890f3e-7b4a-7cc2-8f1d-4e2b8f018901"
+          valid = {
+              "specversion": "1.0",
+              "id": event_id,
+              "source": "urn:trpc-agent-platform:execution",
+              "type": "com.trpc.agent.execution.requested.v1",
+              "subject": "tenant/session",
+              "time": "2026-08-26T00:00:00Z",
+              "datacontenttype": "application/json",
+              "dataschema": "urn:trpc-agent-platform:schema:domain-events:v1#/$defs/agentExecutionRequested",
+              "tenantid": event_id,
+              "correlationid": event_id,
+              "causationid": event_id,
+              "traceparent": "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+              "classification": "INTERNAL",
+              "data": {
+                  "execution_id": event_id,
+                  "inbound_message_id": event_id,
+                  "agent_app_id": event_id,
+                  "agent_release_id": event_id,
+                  "session_id": event_id,
+                  "expected_session_version": 0,
+                  "requested_at": "2026-08-26T00:00:00Z"
+              }
+          }
+          validator.validate(valid)
+
+          invalid_uuid = copy.deepcopy(valid)
+          invalid_uuid["id"] = "123e4567-e89b-42d3-a456-426614174000"
+          invalid_version = copy.deepcopy(valid)
+          invalid_version["data"]["expected_session_version"] = -1
+          assert list(validator.iter_errors(invalid_uuid)), "UUIDv4 negative example unexpectedly passed"
+          assert list(validator.iter_errors(invalid_version)), "negative version example unexpectedly passed"
+          PY
+
+  render-mermaid:
+    name: render-mermaid
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install pinned Mermaid CLI
+        run: npm install --global @mermaid-js/mermaid-cli@11.16.0
+
+      - name: Render Mermaid sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p rendered-diagrams
+          diagram_puppeteer_config="$(mktemp)"
+          printf '%s' '{"args":["--no-sandbox"]}' > "$diagram_puppeteer_config"
+          for source in docs/architecture/diagrams/*.mmd; do
+            test -f "${source%.mmd}.svg"
+            output="rendered-diagrams/$(basename "${source%.mmd}").svg"
+            mmdc -i "$source" -o "$output" --backgroundColor white \
+              --puppeteerConfigFile "$diagram_puppeteer_config"
+          done
+
+      - name: Upload generated and controlled diagrams for review
+        uses: actions/upload-artifact@v4
+        with:
+          name: architecture-diagram-review
+          path: |
+            rendered-diagrams/*.svg
+            docs/architecture/diagrams/*.svg
+          if-no-files-found: error

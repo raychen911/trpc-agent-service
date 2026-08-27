@@ -1,0 +1,127 @@
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Arial, Microsoft YaHei, sans-serif","primaryTextColor":"#172033","lineColor":"#52606d"},"sequence":{"useMaxWidth":false,"wrap":true,"diagramMarginX":24,"actorMargin":36,"messageMargin":24}}}%%
+sequenceDiagram
+  autonumber
+  actor U as 企业微信用户
+  participant WX as 企业微信
+  participant AD as 企业微信 Channel Adapter
+  participant CG as Channel Gateway
+  participant PG as PostgreSQL
+  participant OP as Outbox Publisher
+  participant K as Kafka 执行总线
+  participant AW as Agent Worker
+  participant RD as Redis 租约
+  participant R as tRPC-Agent Runner
+  participant P as Filter / OPA
+  participant L as LLM Gateway
+  participant T as Tool
+  participant JW as Job Worker
+  participant SA as Storage Adapter
+  participant V as PGVector
+
+  U->>WX: 发送消息
+  WX->>AD: 回调 external_event_id + timestamp + signature + ciphertext
+  AD->>AD: 创建 trace_id；校验时间窗与签名；解密并规范化
+  alt 验签、解密或通道绑定失败
+    AD-->>WX: 拒绝回调；记录脱敏审计与 trace
+  else 验证通过
+    AD->>CG: 规范化事件 + trace_id + external_event_id + channel_binding_id
+    CG->>CG: 解析 tenant_id / IM 主体；确定 session_id
+    CG->>PG: BEGIN；按 tenant + binding + external_event_id 写幂等账本
+    alt 已存在且 payload_hash 相同
+      PG-->>CG: 返回原 inbound_message_id / execution_id / session_id
+      CG-->>AD: 复用原 Agent 执行，不再发布
+      AD-->>WX: 成功确认
+    else 幂等键相同但 payload_hash 不同
+      PG-->>CG: 冲突
+      CG-->>AD: 隔离事件并告警
+      AD-->>WX: 拒绝回调
+    else 首次接收
+      CG->>PG: 创建 inbound_message_id、execution_id、session_id、inbound_idempotency_key 与 Outbox
+      CG->>PG: COMMIT
+      PG-->>CG: 已持久提交
+      CG-->>AD: callback committed
+      AD-->>WX: 成功确认（仅在 COMMIT 后）
+    end
+  end
+
+  Note over CG,K: 以下为首次创建的 execution 路径；重复入站在上一步终止
+  OP->>PG: 读取 committed Outbox
+  PG-->>OP: execution.requested v1
+  OP-)K: 发布 CloudEvent；Kafka Header 传播 trace_id<br/>execution_id / session_id / inbound_idempotency_key
+  K-)AW: 按 tenant_id + session_id 分区消费
+  AW->>RD: 获取可续期 Session 租约
+  RD-->>AW: lease_id + fencing_token
+  AW->>PG: 加载固定 Agent Release、Session Event / State 与 expected_version
+  PG-->>AW: release_id + session snapshot
+  AW->>R: 启动 Agent 执行<br/>trace_id + execution_id + session_id + fencing_token
+
+  R->>P: Filter 输入：租户、主体、Release、数据分级、预算上下文
+  P-->>R: allow + policy_version（拒绝则失败关闭）
+
+  loop Runner Model / Tool 循环（0..N）
+    R->>L: 模型请求（仅传播允许的上下文）
+    L->>PG: 预留本次调用预算
+    PG-->>L: reservation_id + allowed limit
+    L->>L: 解析 secret_ref；限流、路由并调用模型
+    L->>PG: 按实际费用结算并释放余量
+    L-->>R: 模型输出或 Tool 提议
+
+    opt 模型提议 Tool 调用
+    R->>PG: 持久创建 Tool Invocation<br/>tool_invocation_id + tool_idempotency_key + args_hash
+    R->>P: Tool Filter / OPA 决策
+    alt needs_approval
+      P-->>R: 需要审批 + 不可变操作预览
+      R->>PG: COMMIT WAITING_APPROVAL、审批请求、checkpoint 与 Outbox
+      PG-->>OP: committed approval Outbox
+      OP-)K: approval.requested
+      R-->>AW: 持久 checkpoint
+      AW->>RD: 释放 Session 租约；等待期间不占 Worker
+      Note over K,AW: 审批决定经企业微信、飞书卡片或 Web Console 持久提交
+      K-)AW: approval.resolved<br/>execution_id + tool_invocation_id
+      AW->>RD: 重新获取租约与新 fencing_token
+      AW->>PG: 校验 Release / policy / args_hash；加载 checkpoint
+      AW->>R: 从 checkpoint 恢复
+    else allow
+      P-->>R: 允许调用
+    else deny
+      P-->>R: 拒绝调用
+      R->>PG: 持久 Tool Result = DENIED
+    end
+
+    alt 允许或审批通过
+      R->>T: 调用 Tool<br/>tool_invocation_id + tool_idempotency_key
+      T-->>R: Tool 结果
+      R->>PG: 持久 Tool Invocation 最终状态
+    else 已拒绝
+      Note over R,T: 不调用外部 Tool；Runner 使用拒绝结果继续生成回复
+    end
+    end
+  end
+
+  R-->>AW: 最终 Agent 执行结果
+  AW->>PG: BEGIN；校验 execution 幂等键、fencing_token 与 expected_version
+  AW->>PG: 原子追加 Session Event；递增版本；更新 Session State<br/>创建 delivery_id 与 Reply / Summary / Memory Outbox
+  AW->>PG: COMMIT
+  PG-->>AW: committed session_version
+  AW->>RD: 释放 Session 租约
+
+  OP->>PG: 读取 committed Outbox
+  par 回复投递不等待 Summary / Memory
+    OP-)K: reply.delivery.requested<br/>trace Span Link + execution_id + session_id + delivery_id
+    K-)CG: 消费回复投递任务
+    CG->>PG: 持久化 attempt_id 与 SENDING 状态
+    CG->>AD: 转换通道回复<br/>delivery_id + attempt_id
+    AD->>WX: 发送或更新企业微信消息
+    WX-->>AD: external_message_id / 已接受
+    AD-->>CG: 投递结果
+    CG->>PG: delivery_id = DELIVERED；记录 attempt
+    WX-->>U: 展示最终回复
+  and 异步 Summary / Memory
+    OP-)K: session.events.committed<br/>trace Span Link + execution_id + session_id + event range
+    K-)JW: 消费已提交 Session Event
+    JW->>PG: 读取确定 event version 范围
+    JW->>SA: 写 Summary(source_version) 与 Memory(source range)
+    SA->>PG: 更新可重建 Summary 投影与 Outbox
+    SA->>V: 幂等写入语义 Memory
+    JW-->>K: 成功后提交消费位点
+  end
