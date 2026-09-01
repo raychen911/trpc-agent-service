@@ -1,0 +1,12 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# The base manifest is intentionally a parameterized production template.
+# Override this image with the registry and immutable digest used by CI/CD.
+resources:
+  - platform.yaml
+
+images:
+  - name: ghcr.io/xyxhhhhh/trpc-agent-service
+    newName: registry.example.com/platform/trpc-agent-service
+    newTag: "replace-with-release"

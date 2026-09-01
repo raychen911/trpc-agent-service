@@ -1,0 +1,913 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: trpc-agent
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: trpc-agent
+  namespace: trpc-agent
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trpc-agent-config
+  namespace: trpc-agent
+data:
+  PYTHONPATH: /app
+  DEFAULT_SESSION_BACKEND: redis
+  DEFAULT_MEMORY_BACKEND: postgres
+  DEFAULT_SUMMARY_BACKEND: postgres
+  DEFAULT_KNOWLEDGE_BACKEND: remote
+  DEFAULT_ARTIFACT_BACKEND: s3
+  DEFAULT_AUDIT_BACKEND: postgres
+  SYNC_DEMO_DEFAULT_STORAGE: "1"
+  OBJECT_REGION: us-east-1
+  OBJECT_BUCKET: trpc-agent-prod
+  REQUIRE_SHARED_COORDINATION: "1"
+  WORKER_QUEUE_TRANSPORT: streams
+  WORKER_STREAM_GROUP: workers
+  DURABLE_INBOX_OUTBOX: "1"
+  INBOX_LEASE_SECONDS: "180"
+  SESSION_LEASE_TTL_SECONDS: "120"
+  REQUIRE_ETAG: "1"
+  DURABLE_OUTBOX_SINK_URL: redis://redis:6379/0
+  DURABLE_OUTBOX_STREAM: trpc-agent:outbox:events
+  DURABLE_OUTBOX_MAX_ATTEMPTS: "10"
+  COMPENSATION_REPLAY_LIMIT: "100"
+  COMPENSATION_INTERVAL_SECONDS: "5"
+  POSTGRES_RLS_ENABLED: "1"
+  POSTGRES_AUTO_CREATE_SCHEMA: "0"
+  POSTGRES_RLS_APP_ROLE: trpc_agent_app
+  POSTGRES_RLS_ADMIN_ROLE: trpc_agent_admin
+  OTEL_SERVICE_NAME: trpc-agent
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+  OTEL_TRACES_EXPORTER: otlp
+  OUTBOUND_QUEUE_ENABLED: "1"
+---
+# Requires External Secrets Operator and a ClusterSecretStore named
+# "platform-secrets". No credentials are stored in this manifest.
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: trpc-agent-secrets
+  namespace: trpc-agent
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: platform-secrets
+    kind: ClusterSecretStore
+  target:
+    name: trpc-agent-secrets
+    creationPolicy: Owner
+  data:
+    - secretKey: REDIS_URL
+      remoteRef:
+        key: prod/trpc-agent/REDIS_URL
+    - secretKey: WORKER_QUEUE_URL
+      remoteRef:
+        key: prod/trpc-agent/WORKER_QUEUE_URL
+    - secretKey: OUTBOUND_QUEUE_URL
+      remoteRef:
+        key: prod/trpc-agent/OUTBOUND_QUEUE_URL
+    - secretKey: POSTGRES_DSN
+      remoteRef:
+        key: prod/trpc-agent/POSTGRES_DSN
+    - secretKey: TENANT_DB_DSN
+      remoteRef:
+        key: prod/trpc-agent/TENANT_DB_DSN
+    - secretKey: ADMIN_API_KEY
+      remoteRef:
+        key: prod/trpc-agent/ADMIN_API_KEY
+    - secretKey: OPENAI_API_KEY
+      remoteRef:
+        key: prod/trpc-agent/OPENAI_API_KEY
+    - secretKey: VECTOR_TOKEN_REF
+      remoteRef:
+        key: prod/trpc-agent/VECTOR_TOKEN_REF
+    - secretKey: OBJECT_ACCESS_KEY_REF
+      remoteRef:
+        key: prod/trpc-agent/OBJECT_ACCESS_KEY_REF
+    - secretKey: OBJECT_SECRET_KEY_REF
+      remoteRef:
+        key: prod/trpc-agent/OBJECT_SECRET_KEY_REF
+---
+# Migration credentials are intentionally separate from the runtime Secret.
+# Only the schema migration Job should receive this Secret.
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: trpc-agent-migration-secrets
+  namespace: trpc-agent
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: platform-secrets
+    kind: ClusterSecretStore
+  target:
+    name: trpc-agent-migration-secrets
+    creationPolicy: Owner
+  data:
+    - secretKey: POSTGRES_SCHEMA_DSN
+      remoteRef:
+        key: prod/trpc-agent/POSTGRES_SCHEMA_DSN
+    - secretKey: POSTGRES_RLS_APP_PASSWORD
+      remoteRef:
+        key: prod/trpc-agent/POSTGRES_RLS_APP_PASSWORD
+    - secretKey: POSTGRES_RLS_ADMIN_PASSWORD
+      remoteRef:
+        key: prod/trpc-agent/POSTGRES_RLS_ADMIN_PASSWORD
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: trpc-agent-schema-migration
+  namespace: trpc-agent
+spec:
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: trpc-agent-migration
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: trpc-agent
+      containers:
+        - name: schema-migration
+          image: ghcr.io/xyxhhhhh/trpc-agent-service:v0.1.0
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              python -m trpc_service.migrate schema --backend postgres --sql-dsn "$POSTGRES_SCHEMA_DSN"
+              python -m trpc_service.migrate rls --sql-dsn "$POSTGRES_SCHEMA_DSN" \
+                --app-role "$POSTGRES_RLS_APP_ROLE" \
+                --admin-role "$POSTGRES_RLS_ADMIN_ROLE"
+          envFrom:
+            - configMapRef:
+                name: trpc-agent-config
+            - secretRef:
+                name: trpc-agent-migration-secrets
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  namespace: trpc-agent
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: trpc-agent-gateway
+  template:
+    metadata:
+      labels:
+        app: trpc-agent-gateway
+    spec:
+      serviceAccountName: trpc-agent
+      containers:
+        - name: gateway
+          image: ghcr.io/xyxhhhhh/trpc-agent-service:v0.1.0
+          imagePullPolicy: IfNotPresent
+          command: ["uvicorn", "trpc_service.web.app:app", "--host", "0.0.0.0", "--port", "8000"]
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: trpc-agent-config
+            - secretRef:
+                name: trpc-agent-secrets
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway
+  namespace: trpc-agent
+spec:
+  selector:
+    app: trpc-agent-gateway
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  namespace: trpc-agent
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: trpc-agent-worker
+  template:
+    metadata:
+      labels:
+        app: trpc-agent-worker
+    spec:
+      serviceAccountName: trpc-agent
+      containers:
+        - name: worker
+          image: ghcr.io/xyxhhhhh/trpc-agent-service:v0.1.0
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "trpc_service._cli", "worker"]
+          env:
+            - name: WORKER_COUNT
+              value: "2"
+            - name: OTEL_SERVICE_NAME
+              value: trpc-agent-worker
+          envFrom:
+            - configMapRef:
+                name: trpc-agent-config
+            - secretRef:
+                name: trpc-agent-secrets
+          resources:
+            requests:
+              cpu: 500m
+              memory: 768Mi
+            limits:
+              cpu: "4"
+              memory: 4Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: compensation-worker
+  namespace: trpc-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: trpc-agent-compensation
+  template:
+    metadata:
+      labels:
+        app: trpc-agent-compensation
+    spec:
+      serviceAccountName: trpc-agent
+      containers:
+        - name: compensation-worker
+          image: ghcr.io/xyxhhhhh/trpc-agent-service:v0.1.0
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "trpc_service._cli", "compensate", "--limit", "100", "--interval", "5"]
+          env:
+            - name: OTEL_SERVICE_NAME
+              value: trpc-agent-compensation
+          envFrom:
+            - configMapRef:
+                name: trpc-agent-config
+            - secretRef:
+                name: trpc-agent-secrets
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: outbound-worker
+  namespace: trpc-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: trpc-agent-outbound
+  template:
+    metadata:
+      labels:
+        app: trpc-agent-outbound
+    spec:
+      serviceAccountName: trpc-agent
+      containers:
+        - name: outbound-worker
+          image: ghcr.io/xyxhhhhh/trpc-agent-service:v0.1.0
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "trpc_service._cli", "outbound"]
+          env:
+            - name: OTEL_SERVICE_NAME
+              value: trpc-agent-outbound
+          envFrom:
+            - configMapRef:
+                name: trpc-agent-config
+            - secretRef:
+                name: trpc-agent-secrets
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: durable-outbox-worker
+  namespace: trpc-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: trpc-agent-durable-outbox
+  template:
+    metadata:
+      labels:
+        app: trpc-agent-durable-outbox
+    spec:
+      serviceAccountName: trpc-agent
+      containers:
+        - name: durable-outbox-worker
+          image: ghcr.io/xyxhhhhh/trpc-agent-service:v0.1.0
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "trpc_service._cli", "durable-outbox", "--limit", "100", "--interval", "5"]
+          env:
+            - name: OTEL_SERVICE_NAME
+              value: trpc-agent-durable-outbox
+          envFrom:
+            - configMapRef:
+                name: trpc-agent-config
+            - secretRef:
+                name: trpc-agent-secrets
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: worker
+  namespace: trpc-agent
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: worker
+  minReplicas: 2
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: gateway
+  namespace: trpc-agent
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: trpc-agent-gateway
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: worker
+  namespace: trpc-agent
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: trpc-agent-worker
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: durable-outbox-worker
+  namespace: trpc-agent
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: trpc-agent-durable-outbox
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: gateway
+  namespace: trpc-agent
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - agent.example.com
+      secretName: trpc-agent-tls
+  rules:
+    - host: agent.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: gateway
+                port:
+                  number: 8000
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gateway-egress
+  namespace: trpc-agent
+spec:
+  podSelector:
+    matchLabels:
+      app: trpc-agent-gateway
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 8000
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 6379
+        - protocol: TCP
+          port: 5432
+        - protocol: TCP
+          port: 4318
+        - protocol: TCP
+          port: 443
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        # Replace 0.0.0.0/0 with the approved CIDRs for model, IM, vector,
+        # object-storage and telemetry endpoints in production.
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 6379
+        - protocol: TCP
+          port: 5432
+        - protocol: TCP
+          port: 4318
+        - protocol: TCP
+          port: 443
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+# Workers consume the shared queue and call storage, telemetry, model and
+# tool endpoints. Keep the selector explicit so a default-deny policy can be
+# added for the namespace without accidentally exposing the worker pods.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: worker-egress
+  namespace: trpc-agent
+spec:
+  podSelector:
+    matchLabels:
+      app: trpc-agent-worker
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: trpc-agent-gateway
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 6379
+        - protocol: TCP
+          port: 5432
+        - protocol: TCP
+          port: 4318
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 6379
+        - protocol: TCP
+          port: 5432
+        - protocol: TCP
+          port: 4318
+        - protocol: TCP
+          port: 443
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: compensation-egress
+  namespace: trpc-agent
+spec:
+  podSelector:
+    matchLabels:
+      app: trpc-agent-compensation
+  policyTypes: ["Ingress", "Egress"]
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 6379
+        - protocol: TCP
+          port: 5432
+        - protocol: TCP
+          port: 4318
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 6379
+        - protocol: TCP
+          port: 5432
+        - protocol: TCP
+          port: 4318
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: outbound-egress
+  namespace: trpc-agent
+spec:
+  podSelector:
+    matchLabels:
+      app: trpc-agent-outbound
+  policyTypes: ["Ingress", "Egress"]
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 6379
+        - protocol: TCP
+          port: 5432
+        - protocol: TCP
+          port: 4318
+        - protocol: TCP
+          port: 443
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 6379
+        - protocol: TCP
+          port: 5432
+        - protocol: TCP
+          port: 4318
+        - protocol: TCP
+          port: 443
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+  namespace: trpc-agent
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+    processors:
+      batch: {}
+    exporters:
+      debug:
+        verbosity: basic
+    service:
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [debug]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+  namespace: trpc-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: trpc-agent-otel
+  template:
+    metadata:
+      labels:
+        app: trpc-agent-otel
+    spec:
+      serviceAccountName: trpc-agent
+      containers:
+        - name: otel-collector
+          image: otel/opentelemetry-collector:0.103.0
+          args: ["--config=/conf/config.yaml"]
+          ports:
+            - name: otlp-grpc
+              containerPort: 4317
+            - name: otlp-http
+              containerPort: 4318
+          volumeMounts:
+            - name: config
+              mountPath: /conf
+              readOnly: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: config
+          configMap:
+            name: otel-collector-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+  namespace: trpc-agent
+spec:
+  selector:
+    app: trpc-agent-otel
+  ports:
+    - name: otlp-grpc
+      port: 4317
+      targetPort: 4317
+    - name: otlp-http
+      port: 4318
+      targetPort: 4318
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: otel-ingress
+  namespace: trpc-agent
+spec:
+  podSelector:
+    matchLabels:
+      app: trpc-agent-otel
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: trpc-agent-gateway
+        - podSelector:
+            matchLabels:
+              app: trpc-agent-worker
+        - podSelector:
+            matchLabels:
+              app: trpc-agent-compensation
+        - podSelector:
+            matchLabels:
+              app: trpc-agent-durable-outbox
+      ports:
+        - protocol: TCP
+          port: 4317
+        - protocol: TCP
+          port: 4318
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: redis-ingress
+  namespace: trpc-agent
+spec:
+  podSelector:
+    matchLabels:
+      app: redis
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: trpc-agent-gateway
+        - podSelector:
+            matchLabels:
+              app: trpc-agent-worker
+        - podSelector:
+            matchLabels:
+              app: trpc-agent-compensation
+        - podSelector:
+            matchLabels:
+              app: trpc-agent-outbound
+        - podSelector:
+            matchLabels:
+              app: trpc-agent-durable-outbox
+      ports:
+        - protocol: TCP
+          port: 6379
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres-ingress
+  namespace: trpc-agent
+spec:
+  podSelector:
+    matchLabels:
+      app: postgres
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: trpc-agent-gateway
+        - podSelector:
+            matchLabels:
+              app: trpc-agent-worker
+        - podSelector:
+            matchLabels:
+              app: trpc-agent-compensation
+        - podSelector:
+            matchLabels:
+              app: trpc-agent-outbound
+        - podSelector:
+            matchLabels:
+              app: trpc-agent-durable-outbox
+      ports:
+        - protocol: TCP
+          port: 5432
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: durable-outbox-egress
+  namespace: trpc-agent
+spec:
+  podSelector:
+    matchLabels:
+      app: trpc-agent-durable-outbox
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 6379
+        - protocol: TCP
+          port: 5432
+        - protocol: TCP
+          port: 4318
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53

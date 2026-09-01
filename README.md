@@ -105,5 +105,5 @@ tRPC-Agent-Python 已经具备 Agent 编排、Tool / MCP、Session、Memory、Kn
     |-- tool # 需要使用的tool
     |-- version.py # 版本
     |-- web # 提供网页版本页面可以访问服务
-    `-- workspace # 工作目录,包含本地,容器等沙箱环境
+    `-- workspace # 工作目录与租户级沙箱策略边界
 ```
