@@ -1,109 +1,140 @@
-# 基于 tRPC-Agent 设计多租户节点化 Agent 部署平台
+# tRPC-Agent 多租户节点化部署平台
 
-## 背景和价值
-企业在落地 Agent 应用时，通常不会只部署一个单体机器人，而是希望面向多个部门、多个业务线、多个 IM 入口和多个数据后端
-，构建一套可统一管理的 Agent 平台。例如：客服团队希望把 Agent 接入企业微信，研发团队希望接入内部群机器人，运营团队>希望接入微信公众号或微信客服，不同租户又需要隔离会话、记忆、知识库、工具权限和审计日志。
-tRPC-Agent-Python 已经具备 Agent 编排、Tool / MCP、Session、Memory、Knowledge、Filter、Telemetry、FastAPI 服务化、OpenClaw / IM 通道、A2A / AG-UI 等能力。该题要求基于这些能力设计一个“多租户、可节点化部署、支持多后端数据同步、可接>入微信 / 企业微信等 IM 软件”的生产级方案。
-这个题目解决的业务痛点是：企业希望把 Agent 能力从单点 demo 扩展成平台化服务，同时满足租户隔离、弹性部署、数据一致性
-、IM 触达、审计合规和后端可替换等要求。它的价值在于把框架能力真正映射到企业级 Agent 平台架构，而不是只停留在单个 Agent 脚本。 
-根据需要可以选择Python或者Go语言框架进行实现
-任务描述
-请设计一个基于 tRPC-Agent-Python 的多租户节点化 Agent 部署平台。平台需要支持多个租户创建和部署自己的 Agent，每个租>户可以绑定不同 IM 通道、选择不同数据后端、配置不同工具权限和知识库，并允许多个 Agent 节点水平扩展。系统需要考虑跨节
-点会话路由、数据同步、后端适配、IM 消息接入、监控审计和故障恢复。
-本题以架构设计为主，可以包含少量关键伪代码、接口定义或数据模型示例。不要求实现完整系统，但方案必须足够具体，能指导>后续工程落地。
+> Python 3.12 · tRPC-Agent-Python 1.1.19 · FastAPI · PostgreSQL · Redis · OpenTelemetry
 
-## 具体要求
-### 多租户与节点部署
-- 设计租户模型，至少包含 tenant_id、应用配置、模型配置、工具权限、IM 通道配置、数据后端配置、审计策略。
-- 设计节点部署拓扑，说明 Agent Gateway、Agent Worker、Channel Adapter、Storage Adapter、Admin API、Telemetry Collector 等组件如何协作。
-- 支持多节点水平扩展，说明用户消息如何路由到正确租户和正确 session。
-- 说明是否需要 sticky session；如果不需要，说明如何依赖共享 Session / Memory 后端实现无状态 Worker。
-- 设计租户隔离机制，包括配置隔离、数据隔离、工具权限隔离、日志脱敏和密钥管理。
+本仓库不是单 Agent 示例，而是一套可运行、可验证的企业级平台骨架：企业微信和 Telegram 消息先经过协议验签与租户绑定，再进入持久 Inbox；任意 Worker 节点都可领取任务，但只有持有最新租约、fencing token 和版本号的节点能提交状态；Agent 回复通过 Outbox 异步投递；Summary/Memory 由独立 Projector 在 T2 提交后生成。平台不依赖 sticky session。
 
-### 数据同步与多后端支持
-- 支持不同租户选择不同数据后端，例如 InMemory、Redis、SQL、向量库、对象存储或外部 Memory 服务。
-- 设计统一的数据访问抽象，说明 Session、Memory、Summary、Artifact、Knowledge、Audit Log 分别如何存储。
-- 设计数据同步策略，至少覆盖：  
-- 多节点并发写入同一 session 的一致性。
-- Session event、state、summary 的更新顺序。
-- Memory 写入后的跨节点可见性。
-- 后端从 Redis 迁移到 SQL 或从本地向量库迁移到远端向量库时的数据迁移方案。
-- IM 消息重复投递时的幂等处理。
-- 说明不同后端的一致性取舍，例如强一致、最终一致、读写延迟、成本和运维复杂度。
-- 给出一个最小数据模型或表结构示例，至少包含 tenant、agent app、session、message/event、memory、summary、channel binding、audit log。
+课题原文完整保存在 [docs/requirements.md](docs/requirements.md)，逐项验收证据见 [docs/acceptance.md](docs/acceptance.md)。
 
-### IM 软件接入
-- 设计 IM Channel Adapter，支持企业微信、微信客服、微信公众号、Telegram 或其他 IM 通道中的至少两类。
-- 说明外部 IM 消息如何转换为 tRPC-Agent-Python 的用户输入，Agent Event 如何转换为 IM 回复、流式消息或卡片消息。
-- 设计 IM 账号和租户绑定方式，包括 webhook URL、token、secret、回调验签、消息去重、用户身份映射。
-- 说明群聊和单聊的 session_id 生成规则，以及用户跨群、跨租户时的隔离策略。
-- 考虑 IM 平台限制，例如消息长度、频率限制、异步回复、图片 / 文件消息、撤回或失败重试。
+## 架构总览
 
-### 治理、监控和安全
-- 使用 Filter 设计租户级治理策略，例如工具白名单、敏感信息脱敏、预算限制、危险工具二次确认、IM 用户权限校验。
-- 设计监控指标，例如请求量、模型调用耗时、工具调用耗时、IM 投递成功率、错误率、token 消耗、每租户成本、Session 后端延迟。
-- 说明如何接入 OpenTelemetry 或等价 tracing，要求 trace 能串起 IM callback、Runner 执行、Tool 调用、Session / Memory 读写和 IM 回复。
-- 设计审计日志字段，至少包含 tenant_id、channel、user_id、session_id、agent_name、tool_name、decision、latency、error_type、cost、trace_id。
-- 说明密钥管理和脱敏策略，IM token、模型 API key、数据库密码不能明文出现在日志、trace 或错误报告中。
-
-### 故障恢复与运维
-- 设计节点故障、IM 重试、数据库短暂不可用、模型超时、工具执行失败时的降级策略。
-- 说明如何做灰度发布和租户级配置回滚。
-- 说明如何做容量评估，例如每节点并发 session 数、平均 token 消耗、Redis / SQL QPS、IM 回调峰值。
-- 设计最小可运行部署方案和生产推荐部署方案，可以使用 Docker Compose、Kubernetes 或等价部署方式描述。
-交付物
-- 一份架构设计文档，建议 2000 – 4000 字。
-- 一张系统架构图，展示 Gateway、Worker、Channel Adapter、Storage Adapter、Filter、Telemetry、数据库和 IM 平台之间的
-关系。
-- 一张核心时序图，展示“企业微信用户发消息 → Agent 执行 → Tool 调用 → Session / Memory 写入 → IM 回复”的完整链路。
-- 一份数据模型设计，包含核心表结构或 JSON schema。
-- 一份数据同步和幂等策略说明。
-- 一份多后端适配方案，说明 Redis / SQL / 向量库 / 对象存储分别适合存什么。
-- 一份风险清单，列出至少 8 个生产风险及对应缓解措施。 
-- 一份基于该设计的github实现的代码 
-
-## 题目难点
-- 多租户隔离不是只加一个 tenant_id 字段，还涉及配置、权限、密钥、数据、日志、工具和成本隔离。
-- 节点化部署要求 Agent Worker 尽量无状态，但 Agent 又天然依赖 Session、Memory、Summary 和工具上下文，需要设计可靠的
-共享状态层。
-- IM 通道存在消息乱序、重复投递、响应超时、长度限制和身份映射问题，不能简单等同于 HTTP chat API。
-- 不同后端的数据一致性能力不同，Redis、SQL、向量库、对象存储无法用同一种同步策略处理。
-- Agent 执行链路包含模型、工具、MCP、知识库、沙箱和外部系统，监控和审计必须跨组件串联。 
-- 企业级平台必须考虑灰度、回滚、租户级限流、成本控制和合规审计。 
-
-## 验收标准
-1.架构方案必须覆盖多租户、节点化部署、数据同步、多后端支持、IM 接入、治理监控和故障恢复。
-2.数据模型必须能表达 tenant、agent、channel binding、session、event、memory、summary、audit log 的关系。
-3.必须说明至少两种 IM 通道的接入差异，其中至少包含微信或企业微信。
-4.必须说明至少三类后端的数据存储和同步策略，例如 Redis、SQL、向量库或对象存储。
-5.必须给出一条完整消息链路的时序说明，包含 trace_id 或 request_id 如何贯穿链路。 
-6.必须列出至少 8 个生产风险和缓解措施。 
-7.方案需要明确哪些能力可直接复用 tRPC-Agent-Python，哪些需要新增平台层模块。
-
-## 代码目录
-
-```txt
-|-- README.md  # 说明文档,包含设计, 安装,使用
-|-- build.sh   # 开发的时候,用于构建项目
-|-- clean.sh   # 清理当前项目的中间产物 
-|-- coverage.sh # 运行单测覆盖率 
-|-- data     # 存储服务需要的数据文件夹
-|-- docs    # 各模块的说明文档目录 
-|-- format.sh # 格式化项目代码风格
-|-- lint_flake8.sh # 格式化项目代码风格
-|-- start.sh  # 运行脚本可以启动服务 
-|-- stop.sh  # 运行脚本可以停止服务 
-`-- trpc_service # 源码项目
-    |-- _cli.py # cli 可以直接命令行运行
-    |-- agent   # agent 的源码
-    |-- channels # 对接im 的channel
-    |-- config   # 需要的配置 
-    |-- log   # 日志代码,可以设置日志文件级别的操作
-    |-- metrics # 监控
-    |-- skill # 可以运行的skill文件
-    |-- tenant # 多租户的代码 
-    |-- tool # 需要使用的tool
-    |-- version.py # 版本
-    |-- web # 提供网页版本页面可以访问服务
-    `-- workspace # 工作目录,包含本地,容器等沙箱环境
+```mermaid
+flowchart LR
+    IM["企业微信 / Telegram"] --> GW["Gateway + Channel Adapter"]
+    ADMIN["平台管理员"] --> API["Admin API"]
+    API --> CFG["不可变租户配置版本"]
+    GW --> IN["T0: Inbox + 加密回复路由"]
+    IN --> PG[("PostgreSQL 权威平面")]
+    PG --> WK["Agent Worker"]
+    WK --> FILTER["Tenant Context + Tool/Filter 治理"]
+    FILTER --> RUN["tRPC-Agent Runner"]
+    RUN --> SS["Fenced SessionService"]
+    SS --> PG
+    WK --> OUT["T2: Reply Outbox + Audit"]
+    OUT --> DISP["Dispatcher"]
+    DISP --> IM
+    PG --> PROJ["Projector"]
+    PROJ --> SUM["Summary / Explicit Memory"]
+    SUM --> PG
+    PG --> REDIS[("Redis 可重建投影")]
+    GW --> OTEL["OTel / Prometheus"]
+    WK --> OTEL
+    DISP --> OTEL
+    PROJ --> OTEL
 ```
+
+### 四个可独立扩缩的进程角色
+
+| 角色 | 启动命令 | 责任边界 |
+|---|---|---|
+| Gateway | `trpc-agent-service serve` | HTTP 限制、验签/解密、租户路由、T0 持久化 ACK、Admin API |
+| Worker | `trpc-agent-service worker` | 公平轮询租户、租约心跳、tRPC Runner、CAS 事件、T2 原子完成 |
+| Dispatcher | `trpc-agent-service dispatcher` | 顺序领取 Outbox、解密短期回复坐标、限流/重试/UNKNOWN 分类 |
+| Projector | `trpc-agent-service projector` | fenced 投影任务、窗口摘要、用户显式 Memory、单调水位提交 |
+
+## 关键设计
+
+- **多租户不是只加 `tenant_id`**：租户配置不可变版本化；Inbox 固定接收时的 config/app revision；PostgreSQL runtime 角色启用 `FORCE ROW LEVEL SECURITY`；工具集合按租户白名单重新构造；外部用户、群和会话 ID 通过 HMAC 派生为不可逆内部标识。
+- **不使用 sticky session**：同 session 的写入同时受数据库租约、单调 fencing token 和 `log_version` OCC 保护；旧 Worker 即使延迟恢复也不能覆盖新状态。
+- **事务边界明确**：T0 提交 Inbox 后才 ACK；Runner 完整事件先 staged；T2 在单事务中发布 committed event、state、Outbox、Audit 和 ProjectionJob。
+- **不虚构 exactly-once**：跨模型、Tool 和 IM 没有分布式事务。平台使用幂等账本，并为结果不明的 Tool/IM 调用保留 `unknown`，不进行危险的盲目重试。
+- **权威数据与投影分离**：Session event、运行账本、审计和加密 SDK event object 在 PostgreSQL；Redis/向量索引/缓存均按 watermark 重建，不能反向覆盖权威状态。
+- **配置回滚可追溯**：旧 revision 不修改、不删除；回滚通过重新物化 active revision 完成。Agent revision 进入 session 命名空间，新旧版本互不污染。
+
+## 已实现范围
+
+| 能力 | 可核验实现 |
+|---|---|
+| 租户与配置 | Tenant/App/Channel/Backend/Audit schema，不可变 publish、幂等发布、读取指定 revision、回滚 |
+| 企业微信 | 智能机器人 JSON 验签、AES-CBC 解密、24 小时回调防重放、单聊/群聊身份派生、一次性 `response_url` 加密保存 |
+| Telegram | webhook secret 常量时间校验、单聊/群组/topic 映射、重复 update 去重、Bot API 投递分类 |
+| 可靠性 | Inbox、Session lease、fence、OCC、staged/committed event、ToolEffect、Outbox、append-only Audit |
+| tRPC 集成 | 精确锁定 `trpc-agent-py==1.1.19`，运行时兼容检查，真实 `Runner.run_async` 与自定义 `BaseSessionService` |
+| 数据后端 | SQL 权威面、SQL/Redis/InMemory Session 投影合同、双写迁移状态机、Summary/Memory 单调投影 |
+| 安全 | AES-GCM envelope、租户 AAD、环境密钥 allowlist、递归日志/trace 脱敏、URL 凭据清洗、PostgreSQL RLS |
+| 部署 | Dockerfile、完整 Compose 四角色、Kubernetes/Kustomize 起点、migration owner/runtime 角色分离 |
+| 工程门禁 | frozen lock、Ruff、Mypy、pytest、覆盖率阈值、迁移往返、Alembic drift、PostgreSQL 专属 CI |
+
+尚未冒充“已经完成”的部分包括：真实企业微信/Telegram 账号联调、具体业务 Tool/MCP、附件下载沙箱、向量库/S3 适配器、完整跨进程 OTel parent context、KMS/Vault 与 OIDC Admin 鉴权。详细差距见 [验收矩阵](docs/acceptance.md#4-诚实边界与后续工程)。
+
+## 快速开始
+
+### 本地开发
+
+前置条件：Python 3.12、[uv](https://docs.astral.sh/uv/)。
+
+```bash
+cp .env.example .env
+uv sync --frozen --all-extras
+uv run trpc-agent-service migrate
+uv run trpc-agent-service doctor
+uv run trpc-agent-service serve --host 127.0.0.1 --port 8000 --reload
+```
+
+Windows PowerShell 将第一行改为：
+
+```powershell
+Copy-Item .env.example .env
+```
+
+默认配置使用 SQLite 和 mock 模型标识，只用于 Gateway、Admin API 与合同测试。Worker 会拒绝以 mock provider 启动，避免演示桩误入业务流。需要实际 Worker 时，设置模型 provider/key 并分别启动：
+
+```bash
+uv run trpc-agent-service worker
+uv run trpc-agent-service dispatcher
+uv run trpc-agent-service projector
+```
+
+### Docker Compose
+
+```bash
+docker compose config --quiet
+docker compose up --build
+```
+
+Compose 包含 migration、Gateway、Worker、Dispatcher、Projector、PostgreSQL、Redis 和 OTel Collector。示例密码仅用于本机；真实环境不得复用。
+
+### Kubernetes
+
+部署骨架位于 [deploy/k8s](deploy/k8s/README.md)。它故意不提交 Secret；使用前必须换成镜像 digest、真实域名、External Secrets/KMS 以及目标集群的 egress 规则。
+
+## 质量门禁
+
+```bash
+uv lock --check
+uv sync --frozen --all-extras
+uv run ruff format --check trpc_service tests migrations
+uv run ruff check trpc_service tests migrations
+uv run mypy trpc_service
+uv run pytest --cov=trpc_service --cov-report=term-missing
+uv pip check
+```
+
+本地最新证据：`271 passed, 5 skipped`，语句/分支综合覆盖率为 `86.37%`；5 项跳过均为需要 `TEST_POSTGRES_URL` 的 PostgreSQL 专属合同。CI 会以非 superuser runtime 角色执行这些测试，覆盖 FORCE RLS、append-only、`SKIP LOCKED` 和 stale-fence 拒绝。最终成绩以当前提交的 GitHub Actions 结果为准。
+
+## 文档导航
+
+- [架构与组件边界](docs/architecture.md)
+- [数据模型与多后端分工](docs/data-model.md)
+- [一致性、幂等与故障语义](docs/reliability.md)
+- [IM 通道与完整时序](docs/channels.md)
+- [安全模型与 15 项生产风险](docs/security.md)
+- [部署、容量、灰度与恢复](docs/operations.md)
+- [开源组件评估与复用边界](docs/oss-evaluation.md)
+- [验收标准—证据追踪矩阵](docs/acceptance.md)
+
+## 上游与版本证据
+
+- 课题仓库：[raychen911/trpc-agent-service](https://github.com/raychen911/trpc-agent-service)，设计基线 `4cda37bfc41efc412e9ce5e38aa563859c1aa8ee`。
+- SDK：[trpc-group/trpc-agent-python](https://github.com/trpc-group/trpc-agent-python)，锁定 tag `v1.1.19` / commit `fd051a475574c900123acf0fa64eab9b3c502842`。
+- 依赖解析由 `uv.lock` 固定；关键兼容面由 `tests/framework` 覆盖。升级 SDK 必须先更新兼容审计与回归测试。

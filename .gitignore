@@ -1,27 +1,42 @@
 .idea
 .vscode
 .DS_Store
-*.lock
 *.log
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
 
 *.egg-info
 
-build
-dist
+build/
+dist/
 .venv
 venv
 venv*
 __pycache__
+*.py[cod]
 
 .coverage
 htmlcov
 cov.tmp
 coverage.xml
 .pytest_cache
+.mypy_cache
+.ruff_cache
 
 node_modules
 package-lock.json
 pyrightconfig.json
+
+# Local runtime state; only placeholders and fixtures are versioned.
+data/*
+!data/README.md
+!data/fixtures/
+data/fixtures/*
+!data/fixtures/.gitkeep
 
 # spec-workflow tool artifacts
 .spec-workflow

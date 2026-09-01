@@ -1,0 +1,283 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: trpc-agent-migrate
+  namespace: trpc-agent
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: trpc-agent-service
+        app.kubernetes.io/component: migration
+    spec:
+      restartPolicy: Never
+      serviceAccountName: trpc-agent-migration
+      containers:
+        - name: migrate
+          image: ghcr.io/cindycqy718-debug/trpc-agent-service:0.1.0
+          args: ["migrate"]
+          env:
+            - name: TRPC_SERVICE_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: trpc-agent-database-owner
+                  key: database_url
+            - name: TRPC_SERVICE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: trpc-agent-platform-secrets
+                  key: secret_key
+            - name: TRPC_SERVICE_ADMIN_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: trpc-agent-platform-secrets
+                  key: admin_api_key
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  namespace: trpc-agent
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: trpc-agent-service
+      app.kubernetes.io/component: gateway
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: trpc-agent-service
+        app.kubernetes.io/component: gateway
+    spec:
+      serviceAccountName: trpc-agent-gateway
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: gateway
+          image: ghcr.io/cindycqy718-debug/trpc-agent-service:0.1.0
+          args: ["serve", "--host", "0.0.0.0", "--port", "8000"]
+          ports:
+            - name: http
+              containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: trpc-agent-config
+          env:
+            - name: TRPC_SERVICE_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: trpc-agent-database-runtime
+                  key: database_url
+            - name: TRPC_SERVICE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: trpc-agent-platform-secrets
+                  key: secret_key
+            - name: TRPC_SERVICE_ADMIN_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: trpc-agent-platform-secrets
+                  key: admin_api_key
+            - name: WECOM_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: trpc-agent-channel-secrets
+                  key: wecom_token
+            - name: WECOM_AES_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: trpc-agent-channel-secrets
+                  key: wecom_aes_key
+            - name: TELEGRAM_BOT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: trpc-agent-channel-secrets
+                  key: telegram_bot_token
+            - name: TELEGRAM_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: trpc-agent-channel-secrets
+                  key: telegram_webhook_secret
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            requests: {cpu: 200m, memory: 256Mi}
+            limits: {cpu: "1", memory: 1Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+            readOnlyRootFilesystem: true
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  namespace: trpc-agent
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: trpc-agent-service
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: trpc-agent-service
+        app.kubernetes.io/component: worker
+    spec:
+      serviceAccountName: trpc-agent-worker
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: worker
+          image: ghcr.io/cindycqy718-debug/trpc-agent-service:0.1.0
+          args: ["worker"]
+          envFrom:
+            - configMapRef: {name: trpc-agent-config}
+          env:
+            - name: TRPC_SERVICE_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: trpc-agent-database-runtime
+                  key: database_url
+            - name: TRPC_SERVICE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: trpc-agent-platform-secrets
+                  key: secret_key
+            - name: TRPC_SERVICE_ADMIN_API_KEY
+              valueFrom:
+                secretKeyRef: {name: trpc-agent-platform-secrets, key: admin_api_key}
+            - name: TRPC_SERVICE_MODEL_API_KEY
+              valueFrom:
+                secretKeyRef: {name: trpc-agent-model-secrets, key: api_key}
+          resources:
+            requests: {cpu: "1", memory: 1Gi}
+            limits: {cpu: "4", memory: 4Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+            readOnlyRootFilesystem: true
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dispatcher
+  namespace: trpc-agent
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: trpc-agent-service
+      app.kubernetes.io/component: dispatcher
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: trpc-agent-service
+        app.kubernetes.io/component: dispatcher
+    spec:
+      serviceAccountName: trpc-agent-dispatcher
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: dispatcher
+          image: ghcr.io/cindycqy718-debug/trpc-agent-service:0.1.0
+          args: ["dispatcher"]
+          envFrom:
+            - configMapRef: {name: trpc-agent-config}
+          env:
+            - name: TRPC_SERVICE_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: trpc-agent-database-runtime
+                  key: database_url
+            - name: TRPC_SERVICE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: trpc-agent-platform-secrets
+                  key: secret_key
+            - name: TRPC_SERVICE_ADMIN_API_KEY
+              valueFrom:
+                secretKeyRef: {name: trpc-agent-platform-secrets, key: admin_api_key}
+            - name: TELEGRAM_BOT_TOKEN
+              valueFrom:
+                secretKeyRef: {name: trpc-agent-channel-secrets, key: telegram_bot_token}
+          resources:
+            requests: {cpu: 200m, memory: 256Mi}
+            limits: {cpu: "1", memory: 1Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+            readOnlyRootFilesystem: true
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: projector
+  namespace: trpc-agent
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: trpc-agent-service
+      app.kubernetes.io/component: projector
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: trpc-agent-service
+        app.kubernetes.io/component: projector
+    spec:
+      serviceAccountName: trpc-agent-projector
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: projector
+          image: ghcr.io/cindycqy718-debug/trpc-agent-service:0.1.0
+          args: ["projector"]
+          envFrom:
+            - configMapRef: {name: trpc-agent-config}
+          env:
+            - name: TRPC_SERVICE_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: trpc-agent-database-runtime
+                  key: database_url
+            - name: TRPC_SERVICE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: trpc-agent-platform-secrets
+                  key: secret_key
+            - name: TRPC_SERVICE_ADMIN_API_KEY
+              valueFrom:
+                secretKeyRef: {name: trpc-agent-platform-secrets, key: admin_api_key}
+          resources:
+            requests: {cpu: 200m, memory: 256Mi}
+            limits: {cpu: "1", memory: 1Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+            readOnlyRootFilesystem: true

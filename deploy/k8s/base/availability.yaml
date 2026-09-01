@@ -1,0 +1,32 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: gateway, namespace: trpc-agent}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: trpc-agent-service, app.kubernetes.io/component: gateway}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: worker, namespace: trpc-agent}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: trpc-agent-service, app.kubernetes.io/component: worker}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: {name: gateway, namespace: trpc-agent}
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: gateway}
+  minReplicas: 2
+  maxReplicas: 10
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: {type: Utilization, averageUtilization: 65}
+

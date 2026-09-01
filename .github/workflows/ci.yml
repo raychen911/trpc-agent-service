@@ -1,0 +1,89 @@
+name: ci
+
+on:
+  push:
+    branches: [main, "feature/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.7"
+          enable-cache: true
+      - run: uv lock --check
+      - run: uv sync --frozen --all-extras
+      - run: uv run ruff format --check trpc_service tests migrations
+      - run: uv run ruff check trpc_service tests migrations
+      - run: uv run mypy trpc_service
+      - name: Verify clean-room migrations
+        env:
+          TRPC_SERVICE_ENV: test
+          TRPC_SERVICE_DATABASE_URL: sqlite+aiosqlite:///./data/ci-migration.db
+        run: |
+          uv run alembic upgrade head
+          uv run alembic downgrade base
+          uv run alembic upgrade head
+          uv run alembic check
+      - run: uv run pytest -m "not postgres and not release_gate" --cov=trpc_service --cov-report=term-missing --cov-report=xml
+      - run: uv pip check
+
+  postgres-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: agent
+          POSTGRES_USER: agent_owner
+          POSTGRES_PASSWORD: owner-test-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U agent_owner -d agent"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.7"
+      - run: uv sync --frozen --all-extras
+      - name: Create non-owner RLS runtime role
+        env:
+          PGPASSWORD: owner-test-password
+        run: |
+          psql -h localhost -U agent_owner -d agent -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE agent_runtime LOGIN PASSWORD 'runtime-test-password'
+            NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT;
+          GRANT CONNECT ON DATABASE agent TO agent_runtime;
+          GRANT USAGE ON SCHEMA public TO agent_runtime;
+          ALTER DEFAULT PRIVILEGES FOR ROLE agent_owner IN SCHEMA public
+            GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO agent_runtime;
+          ALTER DEFAULT PRIVILEGES FOR ROLE agent_owner IN SCHEMA public
+            GRANT USAGE, SELECT ON SEQUENCES TO agent_runtime;
+          SQL
+      - name: Apply migrations as owner
+        env:
+          TRPC_SERVICE_ENV: test
+          TRPC_SERVICE_DATABASE_URL: postgresql+asyncpg://agent_owner:owner-test-password@localhost:5432/agent
+        run: uv run alembic upgrade head
+      - name: Run PostgreSQL isolation and concurrency contracts as runtime role
+        env:
+          TEST_POSTGRES_URL: postgresql+asyncpg://agent_runtime:runtime-test-password@localhost:5432/agent
+        run: uv run pytest -m postgres

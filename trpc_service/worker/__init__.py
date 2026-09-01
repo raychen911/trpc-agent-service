@@ -1,0 +1,73 @@
+"""Claim-bound Worker orchestration and tRPC-Agent session integration."""
+
+from trpc_service.worker.codec import (
+    EnvelopeEventCodec,
+    EventCodecError,
+    EventObjectStore,
+)
+from trpc_service.worker.contracts import (
+    EncryptedEventCodec,
+    EventCodecContext,
+    FailureClass,
+    FailureClassifier,
+    InboundMessageDecoder,
+    ResolvedTenantTurn,
+    TenantSpecLoader,
+    TenantTurnResolver,
+    TurnExecutor,
+    TurnExecutorFactory,
+    WorkerPort,
+)
+from trpc_service.worker.orchestrator import (
+    ActiveTenantTurnResolver,
+    DefaultFailureClassifier,
+    InboundPayloadError,
+    LeaseLostError,
+    TenantAgentExecutorFactory,
+    TextInboundMessageDecoder,
+    WorkerConfigurationError,
+    WorkerOrchestrator,
+    WorkerOutcome,
+    WorkerRunResult,
+)
+from trpc_service.worker.session import (
+    FencedSessionService,
+    RuntimeEventView,
+    RuntimeSessionView,
+    SessionIdentityError,
+    SessionReplayError,
+    SessionServiceClosedError,
+)
+
+__all__ = [
+    "ActiveTenantTurnResolver",
+    "DefaultFailureClassifier",
+    "EncryptedEventCodec",
+    "EnvelopeEventCodec",
+    "EventCodecContext",
+    "EventCodecError",
+    "EventObjectStore",
+    "FailureClass",
+    "FailureClassifier",
+    "FencedSessionService",
+    "InboundMessageDecoder",
+    "InboundPayloadError",
+    "LeaseLostError",
+    "ResolvedTenantTurn",
+    "RuntimeEventView",
+    "RuntimeSessionView",
+    "SessionIdentityError",
+    "SessionReplayError",
+    "SessionServiceClosedError",
+    "TenantAgentExecutorFactory",
+    "TenantSpecLoader",
+    "TenantTurnResolver",
+    "TextInboundMessageDecoder",
+    "TurnExecutor",
+    "TurnExecutorFactory",
+    "WorkerConfigurationError",
+    "WorkerOrchestrator",
+    "WorkerOutcome",
+    "WorkerPort",
+    "WorkerRunResult",
+]
