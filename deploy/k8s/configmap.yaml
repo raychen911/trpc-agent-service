@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trpc-agent-config
+  namespace: default
+data:
+  ENVIRONMENT: "production"
+  LOG_LEVEL: "INFO"
+  REDIS_URL: "redis://redis-master.default.svc.cluster.local:6379/0"
+  DATABASE_URL: "postgresql://trpc_user:trpc_pass@postgres-ha.default.svc.cluster.local:5432/trpc_prod"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: trpc-agent-secret
+  namespace: default
+type: Opaque
+stringData:
+  TRPC_KMS_MASTER_KEY: "tRPC-Production-KMS-MasterKey-2026-SuperSecret"

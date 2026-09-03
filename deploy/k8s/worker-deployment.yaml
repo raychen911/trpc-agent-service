@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trpc-agent-worker
+  namespace: default
+  labels:
+    app: trpc-agent-worker
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: trpc-agent-worker
+  template:
+    metadata:
+      labels:
+        app: trpc-agent-worker
+    spec:
+      containers:
+        - name: worker
+          image: trpc-agent-service:0.1.0
+          command: ["uvicorn", "trpc_service.web.app:app", "--host", "0.0.0.0", "--port", "8000"]
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: trpc-agent-config
+            - secretRef:
+                name: trpc-agent-secret
+          resources:
+            requests:
+              cpu: "1000m"
+              memory: "2Gi"
+            limits:
+              cpu: "4"
+              memory: "8Gi"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: trpc-agent-worker-hpa
+  namespace: default
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: trpc-agent-worker
+  minReplicas: 2
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

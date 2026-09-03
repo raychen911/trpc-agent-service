@@ -1,0 +1,91 @@
+version: '3.8'
+
+services:
+  # 1. Agent Gateway (Inbound Webhook & API)
+  agent-gateway:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: trpc-agent-gateway
+    command: ["uvicorn", "trpc_service.web.app:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql://trpc_user:trpc_pass@postgres:5432/trpc_db
+      - TRPC_KMS_MASTER_KEY=tRPC-Enterprise-KMS-MasterKey-2026-Secret
+    depends_on:
+      - redis
+      - postgres
+    restart: always
+
+  # 2. Agent Worker 1 (Stateless Reasoning Node)
+  agent-worker-1:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: trpc-agent-worker-1
+    command: ["uvicorn", "trpc_service.web.app:app", "--host", "0.0.0.0", "--port", "8001"]
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql://trpc_user:trpc_pass@postgres:5432/trpc_db
+      - TRPC_KMS_MASTER_KEY=tRPC-Enterprise-KMS-MasterKey-2026-Secret
+    depends_on:
+      - redis
+      - postgres
+    restart: always
+
+  # 3. Agent Worker 2 (Stateless Reasoning Node for High Availability)
+  agent-worker-2:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: trpc-agent-worker-2
+    command: ["uvicorn", "trpc_service.web.app:app", "--host", "0.0.0.0", "--port", "8002"]
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql://trpc_user:trpc_pass@postgres:5432/trpc_db
+      - TRPC_KMS_MASTER_KEY=tRPC-Enterprise-KMS-MasterKey-2026-Secret
+    depends_on:
+      - redis
+      - postgres
+    restart: always
+
+  # 4. Redis (Distributed Lock, Idempotency & Active Session State)
+  redis:
+    image: redis:7.2-alpine
+    container_name: trpc-redis
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    restart: always
+
+  # 5. PostgreSQL (ACID Session Events, Tenant Configs, Audit Logs)
+  postgres:
+    image: postgres:16-alpine
+    container_name: trpc-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=trpc_user
+      - POSTGRES_PASSWORD=trpc_pass
+      - POSTGRES_DB=trpc_db
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    restart: always
+
+  # 6. Prometheus (Metrics Scraper)
+  prometheus:
+    image: prom/prometheus:v2.45.0
+    container_name: trpc-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    restart: always
+
+volumes:
+  redis-data:
+  pg-data:

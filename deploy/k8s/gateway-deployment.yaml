@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trpc-agent-gateway
+  namespace: default
+  labels:
+    app: trpc-agent-gateway
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: trpc-agent-gateway
+  template:
+    metadata:
+      labels:
+        app: trpc-agent-gateway
+    spec:
+      containers:
+        - name: gateway
+          image: trpc-agent-service:0.1.0
+          command: ["uvicorn", "trpc_service.web.app:app", "--host", "0.0.0.0", "--port", "8000"]
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: trpc-agent-config
+            - secretRef:
+                name: trpc-agent-secret
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 15
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: trpc-agent-gateway-svc
+  namespace: default
+spec:
+  type: ClusterIP
+  selector:
+    app: trpc-agent-gateway
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8000
