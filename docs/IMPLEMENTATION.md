@@ -3,14 +3,16 @@
 本分支已经按方案文档补齐一个可运行的最小平台闭环：
 
 - 租户、Agent App、Channel Binding、配置版本、发布和回滚。
-- Gateway + 无状态 Worker，按租户和会话隔离，重复 IM 消息幂等。
+- Gateway + 无状态 Worker,按租户和会话隔离,重复 IM 消息幂等。
 - InMemory、SQLite、真实 Redis 和 PostgreSQL 结构化存储；本地持久化向量库和文件对象存储。
-- Docker Compose 默认将 Session 放入 Redis、Memory/Summary/Audit 放入 PostgreSQL，保证多 Worker 共享状态和审计持久化；Knowledge 与 Artifact 可按环境切换到远端后端。
-- Memory、Summary、Audit 等派生写入失败时进入 `compensation_task` 补偿队列，可由 Web 内置线程、独立 CLI 或部署中的补偿 Worker 重放。
-- 企业微信、微信客服、微信公众号、Telegram 四类统一 Channel Adapter。
+- Docker Compose 默认将 Session 放入 Redis、Memory/Summary/Audit 放入 PostgreSQL,保证多 Worker 共享状态和审计持久化；Knowledge 与 Artifact 可按环境切换到远端后端。
+- Memory、Summary、Audit 等派生写入失败时进入 `compensation_task` 补偿队列,可由 Web 内置线程、独立 CLI 或部署中的补偿 Worker 重放。
+- 企业微信智能机器人(wecom_ai_bot)、飞书(feishu)、Telegram(telegram)和 Web 四类统一 Channel Adapter。企业微信主验收入口是 wecom_ai_bot(BotID + BotSecret 长连接),传统回调适配器 wecom 默认禁用。
 - 真实 IM 出站优先使用成熟 SDK：Telegram 使用 `python-telegram-bot`，
-  企业微信和微信生态使用 `wechatpy`；SDK 不可用或未配置 SDK 凭据时保留
-  平台 HTTP API 兜底。
+  飞书使用 `lark-oapi`；企业微信智能机器人使用可选的
+  `wecom-aibot-sdk-python`，传统企业微信和微信生态兼容适配器使用
+  `wechatpy`。可选 SDK 未安装或未配置凭据时，不影响本地 Web UI、pytest
+  和其他默认通道的复现。
 - 工具策略、敏感信息脱敏、审计记录和 tenant-aware trace。
 - 可选 FastAPI Admin/Webhook 服务、Docker Compose 和 Kubernetes 部署说明。
 
@@ -72,8 +74,9 @@ Web UI 是本地自测通道，不替代真实 IM Adapter。真实平台 Adapter
 | 通道 | SDK | SDK 发送条件 |
 | --- | --- | --- |
 | Telegram | `python-telegram-bot>=22.8,<23` | `token_ref` 可解析，且 `sdk_enabled` 不为 `false` |
-| 企业微信 | `wechatpy>=1.8.18,<1.9` | `corp_id`、`corp_secret_ref`、`agent_id` 都配置 |
-| 微信公众号 / 微信客服 | `wechatpy>=1.8.18,<1.9` | `app_id`、`app_secret_ref` 都配置 |
+| 飞书 | `lark-oapi>=1.3.22` | App Secret 和签名配置可解析 |
+| 企业微信智能机器人 | 可选 `wecom-aibot-sdk-python` | BotID/BotSecret 可解析，并显式启用连接器 |
+| 传统企业微信应用 | `wechatpy>=1.8.18,<1.9` | `corp_id`、`corp_secret_ref`、`agent_id` 都配置；默认禁用 |
 
 示例通道配置只保存密钥引用，不保存明文 token 或 secret：
 
@@ -92,6 +95,10 @@ Web UI 是本地自测通道，不替代真实 IM Adapter。真实平台 Adapter
 }
 ```
 
+上面的 `wecom` 示例是传统企业微信应用回调的兼容性配置，默认不在运行时
+注册表中。企业微信智能机器人主验收请使用 `wecom_ai_bot`，配置和长连接
+启动方式见 [docs/IM_INTEGRATION.md](IM_INTEGRATION.md)。
+
 企业微信机器人 webhook URL 中的 `key=` 也视为密钥，生产配置应使用
 `webhook_url_ref` 指向 `secret://...`；Admin API 的公共配置返回会递归隐藏
 `token_ref`、`secret_ref`、`*_ref`、明文 secret 字段和带 token/key/secret 的 URL。
@@ -109,14 +116,13 @@ webhook URL。
   形式保存后进入 Agent 链路。
 - Telegram 支持 SDK 和 HTTP 两条媒体发送路径，分别对应
   `send_photo` / `send_document`。
-- 企业微信支持 `wechatpy.enterprise` 媒体上传后发送图片或文件；企业微信
-  机器人 webhook 支持图片消息，文件消息不能通过机器人 webhook 原生发送。
-- 微信公众号和微信客服支持图片；两者的客服消息接口没有原生文件消息类型，
-  文件会明确返回不支持，不会伪装成文本发送。
+- 传统企业微信应用支持 `wechatpy.enterprise` 媒体上传后发送图片或文件；
+  企业微信智能机器人媒体能力取决于可选 SDK 和提供商协议。
+- 微信公众号和微信客服适配器仅保留兼容性代码和针对性测试，不属于默认运行路径。
 - 所有外部媒体发送都复用大小限制、账号限流、指数退避重试和死信记录；平台
   不支持的原生媒体类型不会伪装成成功的文本消息。
 
-灰度发布通过 `TenantConfig.gray_release` 和 Admin API 落地，支持按稳定 hash 百分比路由，也支持指定 session 覆盖。迁移工具通过 `python -m trpc_service.migrate` 提供 `export`、`import`、`verify` 和 `cutover-plan`，迁移包覆盖 session、event、state、summary、memory、audit、idempotency、knowledge 和 artifact。可观测性通过 `/metrics` 暴露 Prometheus 指标，并可通过 `OTEL_EXPORTER_OTLP_ENDPOINT` 接入 OpenTelemetry Collector。
+灰度发布通过 `TenantConfig.gray_release` 和 Admin API 落地，支持按稳定 hash 百分比路由，也支持指定 session 覆盖。迁移工具通过 `trpc-agent-migrate` 提供 `export`、`import`、`verify` 和 `cutover-plan`，结构化快照 CLI 的后端参数是 `memory/redis/sql/postgres`，迁移包覆盖 session、event、state、summary、memory、audit、idempotency、knowledge 和 artifact；远端向量库与 S3 兼容对象存储需按 `docs/MIGRATION.md` 的重建/复制策略在目标环境执行，不可直接把 `qdrant` 或 `s3` 作为 CLI `--backend`。PostgreSQL Schema 由 Alembic `db upgrade` 和 `db check` 独立管理。可观测性通过 `/metrics` 暴露 Prometheus 指标，并可通过 `OTEL_EXPORTER_OTLP_ENDPOINT` 接入 OpenTelemetry Collector。
 危险工具二次确认通过租户 `tool_policy.approval_rules`、持久化 `tool_approval_requested` 事件和签名 approval token 串联，未确认前 Worker 只返回 `approval_required`，不会执行真实工具。IM 撤回、withdraw、recall、delete 等事件会归一化为 `message_revoked`，只写 Session/Audit，不触发模型、工具或出站回复。
 
 ## tRPC-Agent-Python 能力复用边界

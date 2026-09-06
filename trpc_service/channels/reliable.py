@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-from time import sleep
-from typing import Callable
 import json
-from pathlib import Path
-from collections import defaultdict, deque
-from threading import RLock
-from time import monotonic
-import time
 import os
+import random
+import time
+from collections import defaultdict, deque
+from collections.abc import Callable
+from pathlib import Path
+from threading import RLock
+from time import monotonic, sleep
 
 from trpc_service.channels.base import SendResult
 from trpc_service.security.identifiers import filesystem_component
@@ -72,8 +72,15 @@ class ChannelRateLimiter:
 
 
 def send_with_retry(
-    sender: Callable[[], SendResult], attempts: int = 3, dead_letter: Callable[[SendResult], None] | None = None
+    sender: Callable[[], SendResult],
+    attempts: int = 3,
+    dead_letter: Callable[[SendResult], None] | None = None,
+    *,
+    base_delay: float = 0.25,
+    max_delay: float = 8.0,
+    jitter: float = 0.1,
 ) -> SendResult:
+    attempts = max(1, int(attempts))
     last = SendResult(False, "", "delivery not attempted")
     for attempt in range(attempts):
         try:
@@ -83,7 +90,16 @@ def send_with_retry(
         if last.ok:
             return last
         if attempt + 1 < attempts:
-            sleep(0.25 * (2**attempt))
+            retry_after = last.metadata.get("retry_after_seconds") if isinstance(last.metadata, dict) else None
+            try:
+                delay = (
+                    max(0.0, float(retry_after))
+                    if retry_after is not None
+                    else min(max_delay, base_delay * (2**attempt))
+                )
+            except (TypeError, ValueError):
+                delay = min(max_delay, base_delay * (2**attempt))
+            sleep(delay + random.uniform(0.0, max(0.0, jitter)))
     if dead_letter:
         dead_letter(last)
     return last

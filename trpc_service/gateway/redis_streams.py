@@ -25,6 +25,7 @@ class RedisStreamsTransport:
         group: str = "workers",
         consumer: str | None = None,
         max_attempts: int = 3,
+        stream_key: str | None = None,
     ) -> None:
         try:
             import redis
@@ -34,7 +35,7 @@ class RedisStreamsTransport:
             url or os.getenv("WORKER_QUEUE_URL", "redis://localhost:6379/0"),
             decode_responses=True,
         )
-        self.stream_key = f"{prefix}:{stream}:stream"
+        self.stream_key = stream_key or f"{prefix}:{stream}:stream"
         self.dead_letter_key = f"{prefix}:{stream}:dead-letter"
         self.group = group
         self.consumer = consumer or f"{stream}-{uuid4()}"

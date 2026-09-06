@@ -25,7 +25,7 @@ def approval_token(approval: str, tenant_id: str) -> str:
     )
     return hmac.new(
         secret.encode("utf-8"),
-        f"{tenant_id}:{approval}".encode("utf-8"),
+        f"{tenant_id}:{approval}".encode(),
         hashlib.sha256,
     ).hexdigest()
 

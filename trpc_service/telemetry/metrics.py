@@ -5,9 +5,11 @@ from __future__ import annotations
 try:
     from prometheus_client import (
         CONTENT_TYPE_LATEST,
+        CollectorRegistry,
         Counter,
         Histogram,
-        CollectorRegistry,
+    )
+    from prometheus_client import (
         generate_latest as prometheus_generate_latest,
     )
 except ImportError:

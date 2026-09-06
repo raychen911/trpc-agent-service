@@ -6,6 +6,7 @@ import json
 from datetime import datetime
 from urllib.request import Request, urlopen
 
+from trpc_service.security.ssrf import validate_outbound_url
 from trpc_service.storage.base import MemoryItem
 
 
@@ -15,7 +16,7 @@ class ExternalMemoryStore:
     def __init__(self, base_url: str, token: str = "", timeout: float = 10.0) -> None:
         if not base_url:
             raise ValueError("external memory backend requires external_memory_url")
-        self.base_url = base_url.rstrip("/")
+        self.base_url = validate_outbound_url(base_url).rstrip("/")
         self.token = token
         self.timeout = timeout
 

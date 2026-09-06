@@ -1,64 +1,67 @@
 # 核心链路时序图
 
-本文档展示“企业微信用户发消息 -> Agent 执行 -> Tool 调用 -> Session / Memory 写入 -> IM 回复”的完整链路。其他 IM 通道，如微信公众号、微信客服、Telegram，也遵循同一标准入站消息和出站消息模型，只是在 Channel Adapter 层处理各自的平台协议。
+本文档展示“企业微信用户发消息 -> Agent 执行 -> Tool 调用 -> Session / Memory 写入 -> IM 回复”的完整链路。飞书和 Telegram 也遵循同一标准入站消息和出站消息模型，只是在 Channel Adapter 层处理各自的平台协议。
 
 ```mermaid
 sequenceDiagram
-    participant U as 企业微信用户
-    participant IM as 企业微信平台
-    participant CA as 企业微信 Channel Adapter
-    participant GW as Agent Gateway
-    participant RQ as Redis Run Queue
-    participant W as Agent Worker
-    participant P as Tenant Filter / Policy
-    participant K as Tool / MCP / Knowledge
-    participant M as Model Provider
-    participant S as Redis / PostgreSQL / Vector Store
-    participant O as IM Outbound Delivery
-    participant OT as OpenTelemetry Collector
+    participant U as 用户
+    participant IM as 企业微信
+    participant CA as Channel Adapter
+    participant GW as Gateway
+    participant Q as Redis Queue
+    participant W as Worker
+    participant P as Filter / Policy
+    participant T as Tool / Knowledge
+    participant M as Model
+    participant D as Session / Memory DB
+    participant O as Outbound
+    participant OT as OTel
 
-    U->>IM: 发送文本/图片/文件消息
-    IM->>CA: Webhook XML/JSON + signature + timestamp + nonce
-    CA->>CA: 校验 Token/签名，按需解密，提取 MsgId 和用户身份
-    CA->>GW: 标准 InboundMessage + trace_id
-    GW->>S: 通过 channel + account_id 查询 ChannelBinding
-    GW->>S: 生成 session_id，检查 idempotency_key
+    rect rgb(232, 241, 255)
+      U->>IM: 发送文本 / 图片 / 文件
+      IM->>CA: 回调 + 签名 + 时间戳
+      CA->>CA: 验签、解密、提取 MsgId / 用户
+      CA->>GW: InboundMessage + trace_id
+    end
+
+    GW->>D: ChannelBinding 路由
+    GW->>D: 生成 session_id，检查幂等键
     alt 重复消息且已完成
-        S-->>GW: 返回已保存 response_ref / result_json
+        D-->>GW: 返回已保存 response / result
         GW-->>O: 复用已完成回复
         O-->>IM: 平台出站回复
         IM-->>U: 用户收到回复
     else 新消息
-        GW->>S: 检查并预留 QPS / Token / Cost 配额
-        GW->>RQ: 写入带租户和配置版本的 RunRequest
-        RQ->>W: Worker 消费请求
-        W->>S: 加载租户配置、Session event/state、Memory、Summary
+        GW->>D: 预留 QPS / Token / Cost 配额
+        GW->>Q: 写入租户 + 配置版本的 RunRequest
+        Q->>W: Worker 消费
+        W->>D: 加载 Session event/state、Memory、Summary
         W->>P: 输入长度、敏感信息、IM 用户权限校验
         opt 需要知识检索
-            W->>K: 按租户 Knowledge 后端检索 top-k chunk
-            K-->>W: 返回检索结果和引用元数据
+            W->>T: 按租户检索 top-k
+            T-->>W: 结果 + 引用元数据
         end
         opt 需要工具或 MCP 调用
             W->>P: 校验工具白名单、审批规则、危险操作策略
-            W->>K: 执行已授权 Tool / MCP Server
-            K-->>W: 返回工具结果或审批状态
+            W->>T: 执行已授权 Tool / MCP
+            T-->>W: 工具结果或审批状态
         end
-        W->>M: 携带上下文、工具结果和模型配置调用模型
-        M-->>W: 返回 Agent Event、回复文本和 token usage
-        W->>S: 追加 user / assistant / tool message_event
-        W->>S: CAS 更新 session_state
-        W->>S: 写入 Memory、Summary、Audit Log；失败则写入 compensation_task
-        W-->>RQ: 返回 AgentEvents 和执行结果
-        RQ-->>GW: Gateway 获取执行结果
-        GW->>S: 完成幂等状态，提交实际 token/cost 用量
-        GW->>O: 按平台限制切分文本、卡片或文件消息并投递
-        O-->>IM: 失败则重试，超限进入 DLQ
+        W->>M: 上下文 + 工具结果 + 模型配置
+        M-->>W: Agent Event + 回复 + token usage
+        W->>D: 追加 message_event，CAS 更新 session_state
+        W->>D: 写入 Memory / Summary / Audit
+        Note right of D: 派生写失败 -> compensation_task
+        W-->>Q: 返回 AgentEvents 和结果
+        Q-->>GW: Gateway 获取结果
+        GW->>D: 完成幂等，提交 token / cost
+        GW->>O: 按平台限制分片并投递
+        O-->>IM: 失败重试，超限进入 DLQ
         IM-->>U: 用户收到 Agent 回复
     end
-    CA-->>OT: IM callback span
-    GW-->>OT: binding / routing / quota / queue span
+    CA-->>OT: callback span
+    GW-->>OT: routing / quota / queue span
     W-->>OT: runner / model / tool / storage span
-    O-->>OT: IM outbound delivery span
+    O-->>OT: outbound span
 ```
 
 ## Trace 串联

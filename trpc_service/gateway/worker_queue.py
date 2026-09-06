@@ -9,13 +9,29 @@ from dataclasses import asdict
 from threading import Event, Thread
 from uuid import uuid4
 
-from trpc_service.tenant.models import RunRequest, TenantConfig, TenantContext, UserInput
-from trpc_service.security.secrets import redact_secret_text
+from trpc_service.channels.base import sanitize_event_payload
 from trpc_service.gateway.redis_streams import RedisStreamsTransport
+from trpc_service.security.secrets import redact_secret_text
+from trpc_service.tenant.models import RunRequest, TenantConfig, TenantContext, UserInput
 
 
 def _is_transient_redis_error(exc: Exception) -> bool:
     return exc.__class__.__name__ in {"TimeoutError", "ConnectionError", "BusyLoadingError"}
+
+
+def _bounded_webhook_result(value) -> dict:
+    """Keep task status useful without turning Redis into an answer store."""
+
+    if not isinstance(value, dict):
+        return {}
+    result = {}
+    for key in ("ok", "accepted", "durable", "duplicate", "revoked", "session_id", "response_ref", "task_id"):
+        if key in value:
+            result[key] = value[key]
+    if "answer" in value:
+        answer = str(value["answer"] or "")
+        result["answer_length"] = len(answer)
+    return result
 
 
 class WorkerQueue:
@@ -405,24 +421,64 @@ class DurableWebhookQueue:
         self.processing_key = f"{prefix}:webhook:processing"
         self.processing_meta_key = f"{prefix}:webhook:processing-meta"
         self.dead_letter_key = f"{prefix}:webhook:dead-letter"
+        self.status_prefix = f"{prefix}:webhook:status:"
         self.max_attempts = max_attempts
         self.visibility_timeout = visibility_timeout
         self.orphan_grace_seconds = float(os.getenv("WEBHOOK_ORPHAN_GRACE_SECONDS", "5"))
         self._orphan_seen_at: dict[str, float] = {}
 
-    def submit(self, channel: str, account_id: str, payload: dict, traceparent: str | None) -> str:
+    def submit(
+        self,
+        channel: str,
+        account_id: str,
+        payload: dict,
+        traceparent: str | None,
+        tenant_id: str | None = None,
+    ) -> str:
         task_id = str(uuid4())
         item = {
             "task_id": task_id,
             "attempt": 0,
             "channel": channel,
             "account_id": account_id,
-            "payload": payload,
+            "tenant_id": tenant_id,
+            "payload": sanitize_event_payload(payload),
             "traceparent": traceparent,
             "created_at": time.time(),
         }
         self.client.rpush(self.queue_key, json.dumps(item, ensure_ascii=False, default=str))
+        self._set_status(
+            task_id,
+            {
+                "task_id": task_id,
+                "tenant_id": tenant_id,
+                "channel": channel,
+                "account_id": account_id,
+                "status": "accepted",
+                "attempt": 0,
+                "created_at": item["created_at"],
+            },
+        )
         return task_id
+
+    def status(self, task_id: str) -> dict | None:
+        """Return a bounded, non-secret lifecycle record for a webhook task."""
+
+        encoded = self.client.get(f"{self.status_prefix}{task_id}")
+        if not encoded:
+            return None
+        try:
+            value = json.loads(encoded)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return {"task_id": task_id, "status": "unknown"}
+        return value if isinstance(value, dict) else {"task_id": task_id, "status": "unknown"}
+
+    def _set_status(self, task_id: str, value: dict, ttl: int = 86_400) -> None:
+        self.client.setex(
+            f"{self.status_prefix}{task_id}",
+            ttl,
+            json.dumps(value, ensure_ascii=False, default=str),
+        )
 
     def consume(self, handler, timeout: int = 5) -> None:
         while True:
@@ -451,13 +507,49 @@ class DurableWebhookQueue:
             return True
         task_id = item["task_id"]
         heartbeat_stop = self._start_heartbeat(task_id)
+        self._set_status(
+            task_id,
+            {
+                "task_id": task_id,
+                "tenant_id": item.get("tenant_id"),
+                "channel": item.get("channel"),
+                "account_id": item.get("account_id"),
+                "status": "processing",
+                "attempt": int(item.get("attempt", 0)) + 1,
+                "created_at": item.get("created_at"),
+            },
+        )
         try:
-            handler(item)
+            result = handler(item)
+            status = {
+                "task_id": task_id,
+                "tenant_id": item.get("tenant_id"),
+                "channel": item.get("channel"),
+                "account_id": item.get("account_id"),
+                "status": "completed",
+                "attempt": int(item.get("attempt", 0)) + 1,
+                "created_at": item.get("created_at"),
+                "result": _bounded_webhook_result(result),
+            }
+            self._set_status(task_id, status)
         except Exception as exc:
             item["attempt"] = int(item.get("attempt", 0)) + 1
             encoded = json.dumps(item, ensure_ascii=False, default=str)
             if item["attempt"] < self.max_attempts:
                 self.client.rpush(self.queue_key, encoded)
+                self._set_status(
+                    task_id,
+                    {
+                        "task_id": task_id,
+                        "tenant_id": item.get("tenant_id"),
+                        "channel": item.get("channel"),
+                        "account_id": item.get("account_id"),
+                        "status": "retrying",
+                        "attempt": item["attempt"],
+                        "created_at": item.get("created_at"),
+                        "error": redact_secret_text(f"{type(exc).__name__}: {exc}")[:500],
+                    },
+                )
             else:
                 self.client.rpush(
                     self.dead_letter_key,
@@ -469,6 +561,19 @@ class DurableWebhookQueue:
                         ensure_ascii=False,
                         default=str,
                     ),
+                )
+                self._set_status(
+                    task_id,
+                    {
+                        "task_id": task_id,
+                        "tenant_id": item.get("tenant_id"),
+                        "channel": item.get("channel"),
+                        "account_id": item.get("account_id"),
+                        "status": "dead",
+                        "attempt": item["attempt"],
+                        "created_at": item.get("created_at"),
+                        "error": redact_secret_text(f"{type(exc).__name__}: {exc}")[:500],
+                    },
                 )
         finally:
             heartbeat_stop.set()
@@ -507,6 +612,19 @@ class DurableWebhookQueue:
                     self.queue_key,
                     json.dumps(item, ensure_ascii=False, default=str),
                 )
+                self._set_status(
+                    task_id,
+                    {
+                        "task_id": task_id,
+                        "tenant_id": item.get("tenant_id"),
+                        "channel": item.get("channel"),
+                        "account_id": item.get("account_id"),
+                        "status": "retrying",
+                        "attempt": item["attempt"],
+                        "created_at": item.get("created_at"),
+                        "error": "webhook visibility timeout exceeded",
+                    },
+                )
             else:
                 self.client.rpush(
                     self.dead_letter_key,
@@ -515,6 +633,19 @@ class DurableWebhookQueue:
                         ensure_ascii=False,
                         default=str,
                     ),
+                )
+                self._set_status(
+                    task_id,
+                    {
+                        "task_id": task_id,
+                        "tenant_id": item.get("tenant_id"),
+                        "channel": item.get("channel"),
+                        "account_id": item.get("account_id"),
+                        "status": "dead",
+                        "attempt": item["attempt"],
+                        "created_at": item.get("created_at"),
+                        "error": "webhook visibility timeout exceeded",
+                    },
                 )
             recovered += 1
             self.client.hdel(self.processing_meta_key, task_id)

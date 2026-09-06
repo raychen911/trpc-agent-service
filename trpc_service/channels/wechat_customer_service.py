@@ -7,24 +7,25 @@ Official Account adapter.
 
 from __future__ import annotations
 
-from hashlib import sha1
 import hmac
+from hashlib import sha1
 from xml.etree import ElementTree
 
 from trpc_service.channels.base import (
+    ChannelCapabilities,
     ChannelVerificationError,
     InboundMessage,
     OutboundMessage,
     SendResult,
-    parse_attachments,
     normalize_attachment,
+    parse_attachments,
+    sanitize_event_payload,
     verify_optional_hmac,
 )
 from trpc_service.channels.media import attachment_kind, post_multipart_json, prepare_attachment_file
 from trpc_service.channels.simple import SimpleJsonChannelAdapter
 from trpc_service.channels.wechat_crypto import decrypt_message, verify_handshake
-from trpc_service.security.secrets import SecretManager
-from trpc_service.security.secrets import redact_secret_data, redact_secret_text
+from trpc_service.security.secrets import SecretManager, redact_secret_data, redact_secret_text
 
 
 def _wechat_json(url: str, payload: dict) -> dict:
@@ -43,6 +44,7 @@ def _wechat_json(url: str, payload: dict) -> dict:
 
 class WeChatCustomerServiceAdapter(SimpleJsonChannelAdapter):
     channel_name = "wechat_customer_service"
+    capabilities = ChannelCapabilities(max_text_length=2048, supports_media=True, supports_cards=False)
     message_id_fields = ("MsgId", "MsgID", "message_id", "msg_id")
     user_id_fields = (
         "OpenId",
@@ -132,7 +134,7 @@ class WeChatCustomerServiceAdapter(SimpleJsonChannelAdapter):
             group_id=self._optional_first(payload, self.group_id_fields),
             text=self._optional_first(payload, self.text_fields),
             attachments=attachments,
-            raw_event=dict(payload),
+            raw_event=sanitize_event_payload(payload),
             internal_user_id=binding.resolve_user_id(external_user_id),
         )
 

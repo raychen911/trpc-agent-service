@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Callable
-import json
 import inspect
-from typing import get_args, get_origin, get_type_hints
+import json
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any, get_args, get_origin, get_type_hints
 from urllib.request import Request, urlopen
+
+from trpc_service.security.ssrf import validate_outbound_url
 
 
 @dataclass(slots=True)
@@ -94,6 +96,7 @@ class ToolRegistry:
         headers: dict[str, str] | None = None,
         timeout: float = 10,
     ) -> None:
+        validate_outbound_url(endpoint)
         self._mcp_servers[name] = {
             "endpoint": endpoint,
             "tools": list(tools),
@@ -127,7 +130,7 @@ class ToolRegistry:
                     },
                 }
                 request = Request(
-                    server["endpoint"],
+                    validate_outbound_url(server["endpoint"]),
                     data=json.dumps(body).encode("utf-8"),
                     headers={"Content-Type": "application/json", **server.get("headers", {})},
                     method="POST",

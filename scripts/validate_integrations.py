@@ -80,10 +80,9 @@ def check_postgres() -> CheckResult:
     try:
         import psycopg
 
-        with psycopg.connect(dsn, connect_timeout=3) as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT 1")
-                cur.fetchone()
+        with psycopg.connect(dsn, connect_timeout=3) as conn, conn.cursor() as cur:
+            cur.execute("SELECT 1")
+            cur.fetchone()
         return _ok("postgres")
     except Exception as exc:  # pragma: no cover - optional service
         return _fail("postgres", exc)

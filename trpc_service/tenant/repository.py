@@ -2,19 +2,19 @@
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
 import json
-import sqlite3
 import os
+import sqlite3
+from abc import ABC, abstractmethod
 from copy import deepcopy
 from functools import wraps
 from pathlib import Path
 from threading import RLock
 
-from trpc_service.tenant.models import ChannelBinding, TenantConfig, default_demo_config, utc_now
 from trpc_service.storage.durable import _json_object
 from trpc_service.storage.locking import postgres_advisory_lock
 from trpc_service.storage.postgres_rls import postgres_schema_auto_create, validate_runtime_role
+from trpc_service.tenant.models import ChannelBinding, TenantConfig, default_demo_config, utc_now
 
 
 class TenantRepositoryError(RuntimeError):
@@ -232,7 +232,7 @@ def demo_repository() -> InMemoryTenantRepository:
     return repository
 
 
-def persistent_demo_repository(path: str | Path = "data/tenant_config.sqlite3") -> "SQLiteTenantRepository":
+def persistent_demo_repository(path: str | Path = "data/tenant_config.sqlite3") -> SQLiteTenantRepository:
     """Open the durable repository and seed the demo tenant once."""
     dsn = os.getenv("TENANT_DB_DSN", "").strip()
     repository = PostgresTenantRepository(dsn) if dsn else SQLiteTenantRepository(path)
@@ -285,15 +285,24 @@ def _sync_demo_defaults(repository: TenantRepository, current: TenantConfig) -> 
                 setattr(app.model_config, field_name, default_value)
                 changed = True
 
-    current_bindings = {(binding.channel, binding.account_id) for binding in current.channel_bindings}
+    current_bindings = {(binding.channel.lower(), binding.account_id) for binding in current.channel_bindings}
     missing = [
-        binding for binding in default.channel_bindings if (binding.channel, binding.account_id) not in current_bindings
+        binding
+        for binding in default.channel_bindings
+        if (binding.channel.lower(), binding.account_id) not in current_bindings
     ]
+    retired = {"wechat_customer_service", "wechat_official_account"}
+    if os.getenv("ENABLE_LEGACY_WECOM", "0").lower() not in {"1", "true", "yes", "on"}:
+        retired.add("wecom")
+    retained_bindings = [binding for binding in current.channel_bindings if binding.channel.lower() not in retired]
+    retired_removed = len(retained_bindings) != len(current.channel_bindings)
     sync_storage = os.getenv("SYNC_DEMO_DEFAULT_STORAGE", "0") == "1"
     storage_changed = sync_storage and (current.storage_profile.to_dict() != default.storage_profile.to_dict())
-    if not missing and not changed and not storage_changed:
+    if not missing and not changed and not storage_changed and not retired_removed:
         return
     merged = deepcopy(current)
+    if retired_removed:
+        merged.channel_bindings = retained_bindings
     if missing:
         merged.channel_bindings.extend(deepcopy(binding) for binding in missing)
     if storage_changed:
@@ -528,18 +537,14 @@ class PostgresTenantRepository(TenantRepository):
             with postgres_advisory_lock(self._conn, "trpc-agent-tenant-schema-v1"):
                 with self._conn.cursor() as cur:
                     cur.execute(
-                        (
-                            "CREATE TABLE IF NOT EXISTS tenant_config ("
-                            "tenant_id TEXT NOT NULL, version INTEGER NOT NULL, "
-                            "config_json JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL, "
-                            "updated_at TIMESTAMPTZ NOT NULL, PRIMARY KEY (tenant_id, version))"
-                        )
+                        "CREATE TABLE IF NOT EXISTS tenant_config ("
+                        "tenant_id TEXT NOT NULL, version INTEGER NOT NULL, "
+                        "config_json JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL, "
+                        "updated_at TIMESTAMPTZ NOT NULL, PRIMARY KEY (tenant_id, version))"
                     )
                     cur.execute(
-                        (
-                            "CREATE TABLE IF NOT EXISTS tenant_active ("
-                            "tenant_id TEXT PRIMARY KEY, active_version INTEGER NOT NULL)"
-                        )
+                        "CREATE TABLE IF NOT EXISTS tenant_active ("
+                        "tenant_id TEXT PRIMARY KEY, active_version INTEGER NOT NULL)"
                     )
         else:
             validate_runtime_role(self, expected_role_env="POSTGRES_RLS_ADMIN_ROLE")
@@ -673,11 +678,9 @@ class PostgresTenantRepository(TenantRepository):
     def all_active(self) -> list[TenantConfig]:
         with self._conn.cursor() as cur:
             cur.execute(
-                (
-                    "SELECT c.config_json FROM tenant_active a "
-                    "JOIN tenant_config c ON c.tenant_id=a.tenant_id "
-                    "AND c.version=a.active_version ORDER BY c.tenant_id"
-                )
+                "SELECT c.config_json FROM tenant_active a "
+                "JOIN tenant_config c ON c.tenant_id=a.tenant_id "
+                "AND c.version=a.active_version ORDER BY c.tenant_id"
             )
             return [TenantConfig.from_dict(_json_object(row[0])) for row in cur.fetchall()]
 

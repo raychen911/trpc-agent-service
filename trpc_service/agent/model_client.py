@@ -13,15 +13,16 @@ import os
 import shutil
 import subprocess
 import tempfile
-from time import sleep, monotonic
 from dataclasses import dataclass, field
 from pathlib import Path
+from time import monotonic, sleep
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from trpc_service.tenant.models import ModelConfig
 from trpc_service.security.secrets import SecretManager, redact_secret_text
+from trpc_service.security.ssrf import validate_outbound_url
+from trpc_service.tenant.models import ModelConfig
 
 
 class ModelClientError(RuntimeError):
@@ -56,7 +57,7 @@ class CodexCliModelClient:
     cwd: str | None = None
 
     @classmethod
-    def from_environment(cls, timeout_ms: int = 120_000) -> "CodexCliModelClient":
+    def from_environment(cls, timeout_ms: int = 120_000) -> CodexCliModelClient:
         executable = os.getenv("CPA_CODEX_EXECUTABLE", "").strip() or shutil.which("codex.cmd") or shutil.which("codex")
         if not executable:
             raise ModelClientError("Codex CLI was not found; install the original codex-cli or unset CPA_USE_CODEX_CLI")
@@ -178,7 +179,7 @@ class ResponsesModelClient:
         cls,
         config: ModelConfig,
         secrets: SecretManager | None = None,
-    ) -> "ResponsesModelClient | CodexCliModelClient | None":
+    ) -> ResponsesModelClient | CodexCliModelClient | None:
         if os.getenv("CPA_USE_CODEX_CLI", "0").strip().lower() in {"1", "true", "yes"}:
             return CodexCliModelClient.from_environment(config.timeout_ms)
         api_key = ""
@@ -294,7 +295,7 @@ class ResponsesModelClient:
         if tools:
             payload["tools"] = tools
         request = Request(
-            self.base_url.rstrip("/") + "/responses",
+            validate_outbound_url(self.base_url).rstrip("/") + "/responses",
             data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
             headers={
                 "Authorization": f"Bearer {self.api_key}",
@@ -378,7 +379,7 @@ class ResponsesModelClient:
         if tools:
             payload["tools"] = tools
         request = Request(
-            self.base_url.rstrip("/") + "/chat/completions",
+            validate_outbound_url(self.base_url).rstrip("/") + "/chat/completions",
             data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
             headers={
                 "Authorization": f"Bearer {self.api_key}",

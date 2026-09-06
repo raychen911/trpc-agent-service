@@ -1,10 +1,11 @@
 import base64
 import hashlib
-from hashlib import sha1
 import hmac
+from hashlib import sha1
 from xml.etree import ElementTree
 
 from trpc_service.channels.base import (
+    ChannelCapabilities,
     ChannelVerificationError,
     OutboundMessage,
     SendResult,
@@ -14,9 +15,8 @@ from trpc_service.channels.base import (
 )
 from trpc_service.channels.media import attachment_kind, post_multipart_json, prepare_attachment_file
 from trpc_service.channels.simple import SimpleJsonChannelAdapter
-from trpc_service.security.secrets import SecretManager
-from trpc_service.security.secrets import redact_secret_data, redact_secret_text
 from trpc_service.channels.wechat_crypto import decrypt_message, verify_handshake
+from trpc_service.security.secrets import SecretManager, redact_secret_data, redact_secret_text
 
 
 def _post_json(url: str, payload: dict) -> dict:
@@ -35,6 +35,7 @@ def _post_json(url: str, payload: dict) -> dict:
 
 class WeComAdapter(SimpleJsonChannelAdapter):
     channel_name = "wecom"
+    capabilities = ChannelCapabilities(max_text_length=2048, supports_media=True, supports_cards=True)
     message_id_fields = ("MsgId", "message_id", "msg_id")
     user_id_fields = ("FromUserName", "user_id", "external_user_id")
     group_id_fields = ("ChatId", "group_id", "room_id")

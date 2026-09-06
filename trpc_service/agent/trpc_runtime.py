@@ -15,16 +15,15 @@ import threading
 from contextvars import ContextVar, copy_context
 from typing import Any
 
-from trpc_service.gateway.router import AgentWorker
-from trpc_service.agent.model_client import ModelResponse
-from trpc_service.storage.factory import StorageBundle
-from trpc_service.telemetry.tracing import TraceRecorder
-from trpc_service.policy.tenant_filter import TenantPolicy
-from trpc_service.tenant.models import AgentEvent, RunRequest, TenantConfig
-
-
 from trpc_agent_sdk.tools import BaseTool
 from trpc_agent_sdk.types import FunctionDeclaration
+
+from trpc_service.agent.model_client import ModelResponse
+from trpc_service.gateway.router import AgentWorker
+from trpc_service.policy.tenant_filter import TenantPolicy
+from trpc_service.storage.factory import StorageBundle
+from trpc_service.telemetry.tracing import TraceRecorder
+from trpc_service.tenant.models import AgentEvent, RunRequest, TenantConfig
 
 
 class _ApprovalRequired(BaseException):
@@ -36,7 +35,7 @@ class _ApprovalRequired(BaseException):
 class _PlatformSdkTool(BaseTool):
     """Bridge one tenant tool into the SDK while keeping platform controls."""
 
-    def __init__(self, worker: "TrpcAgentWorker", name: str, schema: dict[str, Any]) -> None:
+    def __init__(self, worker: TrpcAgentWorker, name: str, schema: dict[str, Any]) -> None:
         function = schema.get("function", schema)
         super().__init__(
             name=name,
@@ -93,7 +92,6 @@ def _signature_proxy(handler: Any, name: str):
     """Provide an introspectable callable without bypassing platform execution."""
     def proxy(**kwargs: Any) -> None:
         del kwargs
-        return None
 
     proxy.__name__ = name
     if handler is not None:

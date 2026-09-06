@@ -30,6 +30,9 @@ data:
   WORKER_QUEUE_TRANSPORT: streams
   WORKER_STREAM_GROUP: workers
   DURABLE_INBOX_OUTBOX: "1"
+  SESSION_READY_ASYNC: "1"
+  SESSION_READY_STREAM: trpc-agent:session-ready:stream
+  SESSION_READY_GROUP: session-workers
   INBOX_LEASE_SECONDS: "180"
   SESSION_LEASE_TTL_SECONDS: "120"
   REQUIRE_ETAG: "1"
@@ -42,9 +45,11 @@ data:
   POSTGRES_AUTO_CREATE_SCHEMA: "0"
   POSTGRES_RLS_APP_ROLE: trpc_agent_app
   POSTGRES_RLS_ADMIN_ROLE: trpc_agent_admin
+  POSTGRES_RLS_WORKER_ROLE: trpc_worker
   OTEL_SERVICE_NAME: trpc-agent
   OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
   OTEL_TRACES_EXPORTER: otlp
+  PUBLIC_SURFACE_AUTH_REQUIRED: "1"
   OUTBOUND_QUEUE_ENABLED: "1"
 ---
 # Requires External Secrets Operator and a ClusterSecretStore named
@@ -84,6 +89,9 @@ spec:
     - secretKey: OPENAI_API_KEY
       remoteRef:
         key: prod/trpc-agent/OPENAI_API_KEY
+    - secretKey: POSTGRES_WORKER_DSN
+      remoteRef:
+        key: prod/trpc-agent/POSTGRES_WORKER_DSN
     - secretKey: VECTOR_TOKEN_REF
       remoteRef:
         key: prod/trpc-agent/VECTOR_TOKEN_REF
@@ -119,6 +127,9 @@ spec:
     - secretKey: POSTGRES_RLS_ADMIN_PASSWORD
       remoteRef:
         key: prod/trpc-agent/POSTGRES_RLS_ADMIN_PASSWORD
+    - secretKey: POSTGRES_RLS_WORKER_PASSWORD
+      remoteRef:
+        key: prod/trpc-agent/POSTGRES_RLS_WORKER_PASSWORD
 ---
 apiVersion: batch/v1
 kind: Job
@@ -141,7 +152,8 @@ spec:
           command: ["/bin/sh", "-ec"]
           args:
             - |
-              python -m trpc_service.migrate schema --backend postgres --sql-dsn "$POSTGRES_SCHEMA_DSN"
+              trpc-agent-migrate db upgrade --sql-dsn "$POSTGRES_SCHEMA_DSN"
+              trpc-agent-migrate db check --sql-dsn "$POSTGRES_SCHEMA_DSN"
               python -m trpc_service.migrate rls --sql-dsn "$POSTGRES_SCHEMA_DSN" \
                 --app-role "$POSTGRES_RLS_APP_ROLE" \
                 --admin-role "$POSTGRES_RLS_ADMIN_ROLE"
@@ -194,13 +206,13 @@ spec:
                 name: trpc-agent-secrets
           readinessProbe:
             httpGet:
-              path: /health
+              path: /readyz
               port: 8000
             initialDelaySeconds: 5
             periodSeconds: 5
           livenessProbe:
             httpGet:
-              path: /health
+              path: /livez
               port: 8000
             initialDelaySeconds: 20
             periodSeconds: 10
@@ -267,6 +279,8 @@ spec:
           imagePullPolicy: IfNotPresent
           command: ["python", "-m", "trpc_service._cli", "worker"]
           env:
+            - name: POSTGRES_PROCESS_ROLE
+              value: worker
             - name: WORKER_COUNT
               value: "2"
             - name: OTEL_SERVICE_NAME
@@ -323,6 +337,98 @@ spec:
           env:
             - name: OTEL_SERVICE_NAME
               value: trpc-agent-compensation
+          envFrom:
+            - configMapRef:
+                name: trpc-agent-config
+            - secretRef:
+                name: trpc-agent-secrets
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: session-ready-worker
+  namespace: trpc-agent
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: trpc-agent-session-ready
+  template:
+    metadata:
+      labels:
+        app: trpc-agent-session-ready
+    spec:
+      serviceAccountName: trpc-agent
+      containers:
+        - name: session-ready-worker
+          image: ghcr.io/xyxhhhhh/trpc-agent-service:v0.1.0
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "trpc_service._cli", "session-ready-worker"]
+          env:
+            - name: POSTGRES_PROCESS_ROLE
+              value: worker
+            - name: OTEL_SERVICE_NAME
+              value: trpc-agent-session-ready
+          envFrom:
+            - configMapRef:
+                name: trpc-agent-config
+            - secretRef:
+                name: trpc-agent-secrets
+          resources:
+            requests:
+              cpu: 500m
+              memory: 768Mi
+            limits:
+              cpu: "4"
+              memory: 4Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mailbox-maintenance
+  namespace: trpc-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: trpc-agent-mailbox-maintenance
+  template:
+    metadata:
+      labels:
+        app: trpc-agent-mailbox-maintenance
+    spec:
+      serviceAccountName: trpc-agent
+      containers:
+        - name: mailbox-maintenance
+          image: ghcr.io/xyxhhhhh/trpc-agent-service:v0.1.0
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "trpc_service._cli", "mailbox-maintenance", "--limit", "100", "--interval", "5"]
+          env:
+            - name: OTEL_SERVICE_NAME
+              value: trpc-agent-mailbox-maintenance
           envFrom:
             - configMapRef:
                 name: trpc-agent-config
@@ -504,7 +610,14 @@ spec:
     - host: agent.example.com
       http:
         paths:
-          - path: /
+          - path: /webhooks
+            pathType: Prefix
+            backend:
+              service:
+                name: gateway
+                port:
+                  number: 8000
+          - path: /admin
             pathType: Prefix
             backend:
               service:

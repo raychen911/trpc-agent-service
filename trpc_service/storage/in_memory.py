@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from threading import RLock
 from time import monotonic, sleep
 from uuid import uuid4
@@ -21,6 +21,9 @@ from trpc_service.storage.base import (
 from trpc_service.storage.compensation import InMemoryCompensationStore
 from trpc_service.storage.durable import InMemoryInboxOutbox
 from trpc_service.storage.locking import SessionLease, SessionLeaseLost, SessionLockTimeout
+from trpc_service.storage.mailbox import InMemoryMailboxStore
+from trpc_service.storage.session_mailbox import InMemorySessionMailboxStore
+from trpc_service.storage.tool_governance import InMemoryToolGovernanceStore
 
 
 class InMemorySessionStore:
@@ -88,7 +91,7 @@ class InMemorySessionStore:
         if (
             current is None
             or current.fencing_token != int(fencing_token)
-            or current.expires_at <= datetime.now(timezone.utc)
+            or current.expires_at <= datetime.now(UTC)
         ):
             raise SessionLeaseLost(f"session fencing token rejected: {tenant_id}/{session_id}")
 
@@ -112,7 +115,7 @@ class InMemorySessionStore:
         ttl = max(1.0, float(__import__("os").getenv("SESSION_LEASE_TTL_SECONDS", "120")))
         while True:
             with self._lock:
-                now = datetime.now(timezone.utc)
+                now = datetime.now(UTC)
                 current = self._leases.get(key)
                 if current is None or current.expires_at <= now:
                     fence = self._fencing_tokens.get(key, 0) + 1
@@ -147,7 +150,7 @@ class InMemorySessionStore:
                 lease.session_id,
                 lease.owner,
                 lease.fencing_token,
-                datetime.now(timezone.utc) + timedelta(seconds=ttl),
+                datetime.now(UTC) + timedelta(seconds=ttl),
             )
             self._leases[(lease.tenant_id, lease.session_id)] = renewed
             return renewed
@@ -159,7 +162,7 @@ class InMemorySessionStore:
                 current is None
                 or current.owner != lease.owner
                 or current.fencing_token != lease.fencing_token
-                or current.expires_at <= datetime.now(timezone.utc)
+                or current.expires_at <= datetime.now(UTC)
             ):
                 raise SessionLeaseLost(f"session fencing token rejected: {lease.tenant_id}/{lease.session_id}")
 
@@ -325,6 +328,9 @@ class InMemoryStorage:
         self.idempotency = InMemoryIdempotencyStore()
         self.compensation = InMemoryCompensationStore()
         self.inbox_outbox = InMemoryInboxOutbox()
+        self.mailbox = InMemoryMailboxStore()
+        self.session_mailbox_v2 = InMemorySessionMailboxStore()
+        self.tool_governance = InMemoryToolGovernanceStore()
 
     def close(self) -> None:
         """Keep the storage bundle lifecycle uniform for local callers."""

@@ -19,18 +19,22 @@ from uuid import uuid4
 
 from trpc_service.security.secrets import redact_secret_text
 from trpc_service.storage.base import now_utc
+from trpc_service.storage.locking import postgres_advisory_lock
 from trpc_service.storage.postgres_rls import (
     _tenant_from_first_argument,
     _tenant_from_optional_keyword,
+    _tenant_from_value,
     postgres_schema_auto_create,
     rls_tenant_method,
 )
+from trpc_service.storage.retry import retry_delay_seconds
 
 
 class InboxStatus:
     PROCESSING = "processing"
     COMPLETED = "completed"
     FAILED = "failed"
+    DEAD = "dead"
 
 
 class OutboxStatus:
@@ -82,11 +86,29 @@ class InboxOutboxStore(Protocol):
         payload: dict[str, Any],
         owner: str,
         lease_seconds: int = 180,
+        message_id: str | None = None,
     ) -> tuple[InboxRecord, bool]: ...
 
     def complete_inbox(self, tenant_id: str, dedupe_key: str, owner: str, result: dict[str, Any]) -> None: ...
 
+    def release_inbox(self, tenant_id: str, dedupe_key: str, owner: str) -> None: ...
+
+    def get_inbox_by_message_id(self, tenant_id: str, message_id: str) -> InboxRecord | None: ...
+
+    def complete_inbox_and_enqueue_outbox(
+        self,
+        tenant_id: str,
+        dedupe_key: str,
+        owner: str,
+        result: dict[str, Any],
+        topic: str,
+        aggregate_id: str,
+        event_id: str,
+    ) -> OutboxRecord: ...
+
     def fail_inbox(self, tenant_id: str, dedupe_key: str, owner: str, error: str) -> None: ...
+
+    def dead_inbox(self, tenant_id: str, dedupe_key: str, owner: str, error: str) -> None: ...
 
     def enqueue_outbox(
         self,
@@ -116,6 +138,16 @@ class InboxOutboxStore(Protocol):
         tenant_id: str | None = None,
     ) -> None: ...
 
+    def list_inbox_by_tenant(self, tenant_id: str) -> list[InboxRecord]: ...
+
+    def list_outbox_by_tenant(self, tenant_id: str) -> list[OutboxRecord]: ...
+
+    def restore_inbox(self, record: InboxRecord) -> InboxRecord: ...
+
+    def restore_outbox(self, record: OutboxRecord) -> OutboxRecord: ...
+
+    def replay_outbox(self, event_id: str, tenant_id: str) -> OutboxRecord: ...
+
 
 class DurableOutboxDispatcher:
     """Claim and deliver durable outbox records with crash recovery."""
@@ -144,10 +176,19 @@ class DurableOutboxDispatcher:
             try:
                 self.handler(record)
             except Exception as exc:
+                delay = retry_delay_seconds(
+                    record.attempts,
+                    identity=record.event_id,
+                    base_env="DURABLE_OUTBOX_RETRY_BASE_SECONDS",
+                    cap_env="DURABLE_OUTBOX_RETRY_MAX_SECONDS",
+                    default_base=5,
+                    default_cap=300,
+                )
                 self.store.fail_outbox(
                     record.event_id,
                     self.owner,
                     str(exc),
+                    retry_after_seconds=delay,
                     tenant_id=record.tenant_id,
                 )
             else:
@@ -215,13 +256,15 @@ class InMemoryInboxOutbox:
         self._outbox: dict[str, OutboxRecord] = {}
         self._lock = RLock()
 
-    def accept_inbox(self, tenant_id, dedupe_key, session_id, payload, owner, lease_seconds=180):
+    def accept_inbox(
+        self, tenant_id, dedupe_key, session_id, payload, owner, lease_seconds=180, message_id=None
+    ):
         with self._lock:
             key = (tenant_id, dedupe_key)
             current = self._inbox.get(key)
             now = now_utc()
             if current is not None:
-                if current.status == InboxStatus.COMPLETED:
+                if current.status in (InboxStatus.COMPLETED, InboxStatus.DEAD):
                     return deepcopy(current), False
                 if current.status == InboxStatus.PROCESSING and current.lease_until and current.lease_until > now:
                     return deepcopy(current), False
@@ -232,7 +275,7 @@ class InMemoryInboxOutbox:
                 current.updated_at = now
                 return deepcopy(current), True
             record = InboxRecord(
-                message_id=str(uuid4()),
+                message_id=message_id or str(uuid4()),
                 tenant_id=tenant_id,
                 dedupe_key=dedupe_key,
                 session_id=session_id,
@@ -254,12 +297,46 @@ class InMemoryInboxOutbox:
             record.result = deepcopy(result)
             record.updated_at = now_utc()
 
+    def release_inbox(self, tenant_id, dedupe_key, owner):
+        with self._lock:
+            record = self._inbox[(tenant_id, dedupe_key)]
+            if record.owner != owner:
+                raise RuntimeError("inbox ownership lost")
+            record.owner = None
+            record.lease_until = None
+            record.updated_at = now_utc()
+
+    def complete_inbox_and_enqueue_outbox(
+        self, tenant_id, dedupe_key, owner, result, topic, aggregate_id, event_id
+    ):
+        with self._lock:
+            record = self._inbox[(tenant_id, dedupe_key)]
+            if record.owner != owner:
+                raise RuntimeError("inbox ownership lost")
+            record.status = InboxStatus.COMPLETED
+            record.owner = None
+            record.lease_until = None
+            record.result = deepcopy(result)
+            record.updated_at = now_utc()
+            return self.enqueue_outbox(tenant_id, topic, aggregate_id, result, event_id=event_id)
+
     def fail_inbox(self, tenant_id, dedupe_key, owner, error):
         with self._lock:
             record = self._inbox[(tenant_id, dedupe_key)]
             if record.owner != owner:
                 raise RuntimeError("inbox ownership lost")
             record.status = InboxStatus.FAILED
+            record.owner = None
+            record.lease_until = None
+            record.result = {"error": redact_secret_text(str(error))[:1000]}
+            record.updated_at = now_utc()
+
+    def dead_inbox(self, tenant_id, dedupe_key, owner, error):
+        with self._lock:
+            record = self._inbox[(tenant_id, dedupe_key)]
+            if record.owner != owner:
+                raise RuntimeError("inbox ownership lost")
+            record.status = InboxStatus.DEAD
             record.owner = None
             record.lease_until = None
             record.result = {"error": redact_secret_text(str(error))[:1000]}
@@ -330,6 +407,61 @@ class InMemoryInboxOutbox:
             record.last_error = redact_secret_text(str(error))[:1000]
             record.updated_at = now_utc()
 
+    def list_inbox_by_tenant(self, tenant_id: str) -> list[InboxRecord]:
+        with self._lock:
+            return sorted(
+                (deepcopy(record) for (current_tenant, _), record in self._inbox.items()
+                 if current_tenant == tenant_id),
+                key=lambda item: item.created_at,
+            )
+
+    def get_inbox_by_message_id(self, tenant_id: str, message_id: str) -> InboxRecord | None:
+        with self._lock:
+            record = next(
+                (
+                    value for (current_tenant, _), value in self._inbox.items()
+                    if current_tenant == tenant_id and value.message_id == message_id
+                ),
+                None,
+            )
+            return deepcopy(record) if record is not None else None
+
+    def list_outbox_by_tenant(self, tenant_id: str) -> list[OutboxRecord]:
+        with self._lock:
+            return sorted(
+                (deepcopy(record) for record in self._outbox.values()
+                 if record.tenant_id == tenant_id),
+                key=lambda item: item.created_at,
+            )
+
+    def restore_inbox(self, record: InboxRecord) -> InboxRecord:
+        with self._lock:
+            current = self._inbox.setdefault(
+                (record.tenant_id, record.dedupe_key), deepcopy(record)
+            )
+            return deepcopy(current)
+
+    def restore_outbox(self, record: OutboxRecord) -> OutboxRecord:
+        with self._lock:
+            current = self._outbox.setdefault(record.event_id, deepcopy(record))
+            return deepcopy(current)
+
+    def replay_outbox(self, event_id: str, tenant_id: str) -> OutboxRecord:
+        with self._lock:
+            record = self._outbox.get(event_id)
+            if record is None or record.tenant_id != tenant_id:
+                raise KeyError("outbox record was not found")
+            if record.status != OutboxStatus.DEAD:
+                raise ValueError("only dead outbox records can be replayed")
+            record.status = OutboxStatus.PENDING
+            record.attempts = 0
+            record.available_at = now_utc()
+            record.locked_by = None
+            record.locked_until = None
+            record.last_error = None
+            record.updated_at = now_utc()
+            return deepcopy(record)
+
 
 class SQLiteInboxOutbox:
     def __init__(self, connection, lock: RLock) -> None:
@@ -376,12 +508,14 @@ class SQLiteInboxOutbox:
                 """
             )
 
-    def accept_inbox(self, tenant_id, dedupe_key, session_id, payload, owner, lease_seconds=180):
+    def accept_inbox(
+        self, tenant_id, dedupe_key, session_id, payload, owner, lease_seconds=180, message_id=None
+    ):
         with self._lock, self._conn:
             self._conn.execute("BEGIN IMMEDIATE")
             now = now_utc()
             record = InboxRecord(
-                str(uuid4()), tenant_id, dedupe_key, session_id, deepcopy(payload),
+                message_id or str(uuid4()), tenant_id, dedupe_key, session_id, deepcopy(payload),
                 owner=owner, lease_until=_lease_until(lease_seconds),
             )
             inserted = self._insert_inbox(record, ignore_conflict=True)
@@ -394,7 +528,7 @@ class SQLiteInboxOutbox:
             if row is None:
                 raise RuntimeError("inbox insert raced but existing record was not found")
             current = self._inbox_from_row(row)
-            if current.status == InboxStatus.COMPLETED:
+            if current.status in (InboxStatus.COMPLETED, InboxStatus.DEAD):
                 return current, False
             if current.status == InboxStatus.PROCESSING and current.lease_until and current.lease_until > now:
                 return current, False
@@ -416,12 +550,55 @@ class SQLiteInboxOutbox:
     def complete_inbox(self, tenant_id, dedupe_key, owner, result):
         self._update_inbox(tenant_id, dedupe_key, owner, InboxStatus.COMPLETED, result)
 
+    def release_inbox(self, tenant_id, dedupe_key, owner):
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                "UPDATE inbox_message SET owner=NULL, lease_until=NULL, updated_at=? "
+                "WHERE tenant_id=? AND dedupe_key=? AND owner=?",
+                (_iso(now_utc()), tenant_id, dedupe_key, owner),
+            )
+            if cur.rowcount != 1:
+                raise RuntimeError("inbox ownership lost")
+
+    def complete_inbox_and_enqueue_outbox(
+        self, tenant_id, dedupe_key, owner, result, topic, aggregate_id, event_id
+    ):
+        with self._lock, self._conn:
+            self._conn.execute("BEGIN IMMEDIATE")
+            cur = self._conn.execute(
+                """
+                UPDATE inbox_message
+                SET status=?, owner=NULL, lease_until=NULL, result_json=?, updated_at=?
+                WHERE tenant_id=? AND dedupe_key=? AND owner=?
+                """,
+                (
+                    InboxStatus.COMPLETED,
+                    json.dumps(result, ensure_ascii=False, default=str),
+                    _iso(now_utc()),
+                    tenant_id,
+                    dedupe_key,
+                    owner,
+                ),
+            )
+            if cur.rowcount != 1:
+                raise RuntimeError("inbox ownership lost")
+            return self.enqueue_outbox(tenant_id, topic, aggregate_id, result, event_id=event_id)
+
     def fail_inbox(self, tenant_id, dedupe_key, owner, error):
         self._update_inbox(
             tenant_id,
             dedupe_key,
             owner,
             InboxStatus.FAILED,
+            {"error": redact_secret_text(str(error))[:1000]},
+        )
+
+    def dead_inbox(self, tenant_id, dedupe_key, owner, error):
+        self._update_inbox(
+            tenant_id,
+            dedupe_key,
+            owner,
+            InboxStatus.DEAD,
             {"error": redact_secret_text(str(error))[:1000]},
         )
 
@@ -560,6 +737,97 @@ class SQLiteInboxOutbox:
             if cur.rowcount != 1:
                 raise RuntimeError("outbox ownership lost")
 
+    def list_inbox_by_tenant(self, tenant_id: str) -> list[InboxRecord]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM inbox_message WHERE tenant_id=? ORDER BY created_at",
+                (tenant_id,),
+            ).fetchall()
+            return [self._inbox_from_row(row) for row in rows]
+
+    def get_inbox_by_message_id(self, tenant_id: str, message_id: str) -> InboxRecord | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM inbox_message WHERE tenant_id=? AND message_id=?",
+                (tenant_id, message_id),
+            ).fetchone()
+            return self._inbox_from_row(row) if row is not None else None
+
+    def list_outbox_by_tenant(self, tenant_id: str) -> list[OutboxRecord]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM outbox_message WHERE tenant_id=? ORDER BY created_at",
+                (tenant_id,),
+            ).fetchall()
+            return [self._outbox_from_row(row) for row in rows]
+
+    def restore_inbox(self, record: InboxRecord) -> InboxRecord:
+        with self._lock, self._conn:
+            self._conn.execute(
+                """
+                INSERT OR IGNORE INTO inbox_message (
+                  message_id, tenant_id, dedupe_key, session_id, payload_json, status,
+                  attempts, owner, lease_until, result_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record.message_id, record.tenant_id, record.dedupe_key, record.session_id,
+                    json.dumps(record.payload, ensure_ascii=False, default=str), record.status,
+                    record.attempts, record.owner, _iso(record.lease_until),
+                    json.dumps(record.result, ensure_ascii=False, default=str)
+                    if record.result is not None else None,
+                    _iso(record.created_at), _iso(record.updated_at),
+                ),
+            )
+            row = self._conn.execute(
+                "SELECT * FROM inbox_message WHERE tenant_id=? AND dedupe_key=?",
+                (record.tenant_id, record.dedupe_key),
+            ).fetchone()
+            return self._inbox_from_row(row)
+
+    def restore_outbox(self, record: OutboxRecord) -> OutboxRecord:
+        with self._lock, self._conn:
+            self._conn.execute(
+                """
+                INSERT OR IGNORE INTO outbox_message (
+                  event_id, tenant_id, topic, aggregate_id, payload_json, status,
+                  attempts, available_at, locked_by, locked_until, last_error,
+                  created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record.event_id, record.tenant_id, record.topic, record.aggregate_id,
+                    json.dumps(record.payload, ensure_ascii=False, default=str), record.status,
+                    record.attempts, _iso(record.available_at), record.locked_by,
+                    _iso(record.locked_until), record.last_error, _iso(record.created_at),
+                    _iso(record.updated_at),
+                ),
+            )
+            row = self._conn.execute(
+                "SELECT * FROM outbox_message WHERE event_id=?", (record.event_id,)
+            ).fetchone()
+            return self._outbox_from_row(row)
+
+    def replay_outbox(self, event_id: str, tenant_id: str) -> OutboxRecord:
+        with self._lock, self._conn:
+            now = _iso(now_utc())
+            changed = self._conn.execute(
+                """
+                UPDATE outbox_message
+                   SET status='pending', attempts=0, available_at=?,
+                       locked_by=NULL, locked_until=NULL, last_error=NULL, updated_at=?
+                 WHERE event_id=? AND tenant_id=? AND status='dead'
+                """,
+                (now, now, event_id, tenant_id),
+            ).rowcount
+            if changed != 1:
+                raise ValueError("outbox record is missing or is not dead")
+            row = self._conn.execute(
+                "SELECT * FROM outbox_message WHERE event_id=? AND tenant_id=?",
+                (event_id, tenant_id),
+            ).fetchone()
+            return self._outbox_from_row(row)
+
     def _update_outbox(self, event_id, owner, status, error, available_at, tenant_id=None):
         with self._lock, self._conn:
             cur = self._conn.execute(
@@ -642,36 +910,42 @@ class PostgresInboxOutbox(SQLiteInboxOutbox):
     def _init_schema(self):
         if not postgres_schema_auto_create():
             return
-        with self._lock, self._conn.cursor() as cur:
-            cur.execute(
-                """
-                CREATE TABLE IF NOT EXISTS inbox_message (
-                  message_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL,
-                  dedupe_key TEXT NOT NULL, session_id TEXT NOT NULL,
-                  payload_json JSONB NOT NULL, status TEXT NOT NULL,
-                  attempts INTEGER NOT NULL DEFAULT 1, owner TEXT,
-                  lease_until TIMESTAMPTZ, result_json JSONB,
-                  created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL,
-                  UNIQUE (tenant_id, dedupe_key)
-                );
-                CREATE TABLE IF NOT EXISTS outbox_message (
-                  event_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL,
-                  topic TEXT NOT NULL, aggregate_id TEXT NOT NULL,
-                  payload_json JSONB NOT NULL, status TEXT NOT NULL,
-                  attempts INTEGER NOT NULL DEFAULT 0, available_at TIMESTAMPTZ NOT NULL,
-                  locked_by TEXT, locked_until TIMESTAMPTZ, last_error TEXT,
-                  created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS idx_outbox_ready
-                  ON outbox_message(status, available_at, created_at);
-                """
-            )
+        # PostgreSQL creates a companion row type for each table.  IF NOT
+        # EXISTS alone is not sufficient when multiple processes initialize
+        # the schema concurrently, so serialize this DDL with an advisory lock.
+        with self._lock, postgres_advisory_lock(self._conn, "trpc-agent-inbox-outbox-schema-v1"):
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS inbox_message (
+                      message_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL,
+                      dedupe_key TEXT NOT NULL, session_id TEXT NOT NULL,
+                      payload_json JSONB NOT NULL, status TEXT NOT NULL,
+                      attempts INTEGER NOT NULL DEFAULT 1, owner TEXT,
+                      lease_until TIMESTAMPTZ, result_json JSONB,
+                      created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL,
+                      UNIQUE (tenant_id, dedupe_key)
+                    );
+                    CREATE TABLE IF NOT EXISTS outbox_message (
+                      event_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL,
+                      topic TEXT NOT NULL, aggregate_id TEXT NOT NULL,
+                      payload_json JSONB NOT NULL, status TEXT NOT NULL,
+                      attempts INTEGER NOT NULL DEFAULT 0, available_at TIMESTAMPTZ NOT NULL,
+                      locked_by TEXT, locked_until TIMESTAMPTZ, last_error TEXT,
+                      created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_outbox_ready
+                      ON outbox_message(status, available_at, created_at);
+                    """
+                )
 
-    def accept_inbox(self, tenant_id, dedupe_key, session_id, payload, owner, lease_seconds=180):
+    def accept_inbox(
+        self, tenant_id, dedupe_key, session_id, payload, owner, lease_seconds=180, message_id=None
+    ):
         with self._lock, self._conn.transaction(), self._conn.cursor() as cur:
             now = now_utc()
             record = InboxRecord(
-                str(uuid4()),
+                message_id or str(uuid4()),
                 tenant_id,
                 dedupe_key,
                 session_id,
@@ -713,7 +987,7 @@ class PostgresInboxOutbox(SQLiteInboxOutbox):
             if row is None:
                 raise RuntimeError("inbox insert raced but existing record was not found")
             current = self._inbox_from_pg(row)
-            if current.status == InboxStatus.COMPLETED or (
+            if current.status in (InboxStatus.COMPLETED, InboxStatus.DEAD) or (
                 current.status == InboxStatus.PROCESSING and current.lease_until and current.lease_until > now
             ):
                 return current, False
@@ -731,12 +1005,81 @@ class PostgresInboxOutbox(SQLiteInboxOutbox):
     def complete_inbox(self, tenant_id, dedupe_key, owner, result):
         self._update_inbox_pg(tenant_id, dedupe_key, owner, InboxStatus.COMPLETED, result)
 
+    def release_inbox(self, tenant_id, dedupe_key, owner):
+        with self._lock, self._conn.transaction(), self._conn.cursor() as cur:
+            cur.execute(
+                "UPDATE inbox_message SET owner=NULL, lease_until=NULL, updated_at=%s "
+                "WHERE tenant_id=%s AND dedupe_key=%s AND owner=%s",
+                (now_utc(), tenant_id, dedupe_key, owner),
+            )
+            if cur.rowcount != 1:
+                raise RuntimeError("inbox ownership lost")
+
+    def complete_inbox_and_enqueue_outbox(
+        self, tenant_id, dedupe_key, owner, result, topic, aggregate_id, event_id
+    ):
+        with self._lock, self._conn.transaction(), self._conn.cursor() as cur:
+            cur.execute(
+                (
+                    "UPDATE inbox_message SET status=%s, owner=NULL, lease_until=NULL, "
+                    "result_json=%s, updated_at=%s "
+                    "WHERE tenant_id=%s AND dedupe_key=%s AND owner=%s"
+                ),
+                (
+                    InboxStatus.COMPLETED,
+                    json.dumps(result, default=str),
+                    now_utc(),
+                    tenant_id,
+                    dedupe_key,
+                    owner,
+                ),
+            )
+            if cur.rowcount != 1:
+                raise RuntimeError("inbox ownership lost")
+            record = OutboxRecord(event_id, tenant_id, topic, aggregate_id, deepcopy(result))
+            cur.execute(
+                """
+                INSERT INTO outbox_message (
+                  event_id, tenant_id, topic, aggregate_id, payload_json, status,
+                  attempts, available_at, locked_by, locked_until, last_error,
+                  created_at, updated_at
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                ON CONFLICT (event_id) DO NOTHING
+                """,
+                (
+                    record.event_id,
+                    record.tenant_id,
+                    record.topic,
+                    record.aggregate_id,
+                    json.dumps(record.payload, default=str),
+                    record.status,
+                    record.attempts,
+                    record.available_at,
+                    None,
+                    None,
+                    None,
+                    record.created_at,
+                    record.updated_at,
+                ),
+            )
+            cur.execute("SELECT * FROM outbox_message WHERE event_id=%s", (event_id,))
+            return self._outbox_from_pg(cur.fetchone())
+
     def fail_inbox(self, tenant_id, dedupe_key, owner, error):
         self._update_inbox_pg(
             tenant_id,
             dedupe_key,
             owner,
             InboxStatus.FAILED,
+            {"error": redact_secret_text(str(error))[:1000]},
+        )
+
+    def dead_inbox(self, tenant_id, dedupe_key, owner, error):
+        self._update_inbox_pg(
+            tenant_id,
+            dedupe_key,
+            owner,
+            InboxStatus.DEAD,
             {"error": redact_secret_text(str(error))[:1000]},
         )
 
@@ -873,6 +1216,94 @@ class PostgresInboxOutbox(SQLiteInboxOutbox):
             if cur.rowcount != 1:
                 raise RuntimeError("outbox ownership lost")
 
+    def list_inbox_by_tenant(self, tenant_id: str) -> list[InboxRecord]:
+        with self._lock, self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM inbox_message WHERE tenant_id=%s ORDER BY created_at",
+                (tenant_id,),
+            )
+            return [self._inbox_from_pg(row) for row in cur.fetchall()]
+
+    def get_inbox_by_message_id(self, tenant_id: str, message_id: str) -> InboxRecord | None:
+        with self._lock, self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM inbox_message WHERE tenant_id=%s AND message_id=%s",
+                (tenant_id, message_id),
+            )
+            row = cur.fetchone()
+            return self._inbox_from_pg(row) if row is not None else None
+
+    def list_outbox_by_tenant(self, tenant_id: str) -> list[OutboxRecord]:
+        with self._lock, self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM outbox_message WHERE tenant_id=%s ORDER BY created_at",
+                (tenant_id,),
+            )
+            return [self._outbox_from_pg(row) for row in cur.fetchall()]
+
+    def restore_inbox(self, record: InboxRecord) -> InboxRecord:
+        with self._lock, self._conn.transaction(), self._conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO inbox_message (
+                  message_id, tenant_id, dedupe_key, session_id, payload_json, status,
+                  attempts, owner, lease_until, result_json, created_at, updated_at
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                ON CONFLICT (tenant_id, dedupe_key) DO NOTHING
+                """,
+                (
+                    record.message_id, record.tenant_id, record.dedupe_key, record.session_id,
+                    json.dumps(record.payload, default=str), record.status, record.attempts,
+                    record.owner, record.lease_until,
+                    json.dumps(record.result, default=str) if record.result is not None else None,
+                    record.created_at, record.updated_at,
+                ),
+            )
+            cur.execute(
+                "SELECT * FROM inbox_message WHERE tenant_id=%s AND dedupe_key=%s",
+                (record.tenant_id, record.dedupe_key),
+            )
+            return self._inbox_from_pg(cur.fetchone())
+
+    def restore_outbox(self, record: OutboxRecord) -> OutboxRecord:
+        with self._lock, self._conn.transaction(), self._conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO outbox_message (
+                  event_id, tenant_id, topic, aggregate_id, payload_json, status,
+                  attempts, available_at, locked_by, locked_until, last_error,
+                  created_at, updated_at
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                ON CONFLICT (event_id) DO NOTHING
+                """,
+                (
+                    record.event_id, record.tenant_id, record.topic, record.aggregate_id,
+                    json.dumps(record.payload, default=str), record.status, record.attempts,
+                    record.available_at, record.locked_by, record.locked_until, record.last_error,
+                    record.created_at, record.updated_at,
+                ),
+            )
+            cur.execute("SELECT * FROM outbox_message WHERE event_id=%s", (record.event_id,))
+            return self._outbox_from_pg(cur.fetchone())
+
+    def replay_outbox(self, event_id: str, tenant_id: str) -> OutboxRecord:
+        with self._lock, self._conn.transaction(), self._conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE outbox_message
+                   SET status='pending', attempts=0, available_at=clock_timestamp(),
+                       locked_by=NULL, locked_until=NULL, last_error=NULL,
+                       updated_at=clock_timestamp()
+                 WHERE event_id=%s AND tenant_id=%s AND status='dead'
+                 RETURNING *
+                """,
+                (event_id, tenant_id),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise ValueError("outbox record is missing or is not dead")
+            return self._outbox_from_pg(row)
+
     @staticmethod
     def _inbox_from_pg(row):
         return InboxRecord(
@@ -905,11 +1336,20 @@ def _parse(value: str | datetime | None) -> datetime | None:
 _POSTGRES_INBOX_OUTBOX_METHODS = {
     "accept_inbox": _tenant_from_first_argument,
     "complete_inbox": _tenant_from_first_argument,
+    "complete_inbox_and_enqueue_outbox": _tenant_from_first_argument,
     "fail_inbox": _tenant_from_first_argument,
+    "dead_inbox": _tenant_from_first_argument,
     "enqueue_outbox": _tenant_from_first_argument,
     "claim_outbox": _tenant_from_optional_keyword(3),
     "complete_outbox": _tenant_from_optional_keyword(2),
     "fail_outbox": _tenant_from_optional_keyword(4),
+    "list_inbox_by_tenant": _tenant_from_first_argument,
+    "list_outbox_by_tenant": _tenant_from_first_argument,
+    "restore_inbox": _tenant_from_value,
+    "restore_outbox": _tenant_from_value,
+    "replay_outbox": lambda args, kwargs: (
+        args[1] if len(args) > 1 else kwargs.get("tenant_id")
+    ),
 }
 for _method_name, _tenant_getter in _POSTGRES_INBOX_OUTBOX_METHODS.items():
     method = rls_tenant_method(_tenant_getter)(getattr(PostgresInboxOutbox, _method_name))

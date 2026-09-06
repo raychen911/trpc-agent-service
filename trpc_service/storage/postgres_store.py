@@ -9,6 +9,7 @@ from functools import wraps
 from threading import RLock
 from typing import Any
 
+from trpc_service.security.secrets import redact_secret_text
 from trpc_service.storage.base import (
     AuditRecord,
     IdempotencyRecord,
@@ -20,12 +21,17 @@ from trpc_service.storage.base import (
     now_utc,
 )
 from trpc_service.storage.compensation import _task_from_dict
+from trpc_service.storage.durable import PostgresInboxOutbox, _json_object
 from trpc_service.storage.locking import (
     PostgresSessionLockMixin,
     SessionLeaseLost,
     postgres_advisory_lock,
 )
-from trpc_service.storage.durable import PostgresInboxOutbox, _json_object
+from trpc_service.storage.mailbox import PostgresMailboxStore
+from trpc_service.storage.migration_control import (
+    PostgresMigrationControl,
+    ensure_migration_control_schema,
+)
 from trpc_service.storage.postgres_rls import (
     _tenant_from_event,
     _tenant_from_first_argument,
@@ -34,8 +40,10 @@ from trpc_service.storage.postgres_rls import (
     postgres_schema_auto_create,
     rls_tenant_method,
     validate_runtime_role,
+    validate_worker_role,
 )
-from trpc_service.security.secrets import redact_secret_text
+from trpc_service.storage.postgres_session_mailbox import PostgresSessionMailboxStore
+from trpc_service.storage.tool_governance import PostgresToolGovernanceStore
 
 
 def _dt(value: datetime) -> str:
@@ -83,14 +91,24 @@ class PostgresStorage(PostgresSessionLockMixin):
         except ImportError as exc:
             raise RuntimeError("PostgreSQL backend requires psycopg[binary]") from exc
         self._psycopg = psycopg
-        self._dsn = dsn or os.getenv("POSTGRES_DSN", "")
+        process_role = os.getenv("POSTGRES_PROCESS_ROLE", "runtime").strip().lower()
+        self._dsn = dsn or (
+            os.getenv("POSTGRES_WORKER_DSN", "").strip()
+            or os.getenv("POSTGRES_DSN", "")
+            if process_role == "worker"
+            else os.getenv("POSTGRES_DSN", "")
+        )
+        self._process_role = process_role
         self._lock = RLock()
         self._connection = None
         self._connect()
         if postgres_schema_auto_create():
             self._init_schema()
         else:
-            validate_runtime_role(self, expected_role_env="POSTGRES_RLS_APP_ROLE")
+            if self._process_role == "worker":
+                validate_worker_role(self, expected_role_env="POSTGRES_RLS_WORKER_ROLE")
+            else:
+                validate_runtime_role(self, expected_role_env="POSTGRES_RLS_APP_ROLE")
         self.session = self
         self.memory = self
         self.summary = self
@@ -98,6 +116,22 @@ class PostgresStorage(PostgresSessionLockMixin):
         self.idempotency = self
         self.compensation = _PostgresCompensationStore(self)
         self.inbox_outbox = PostgresInboxOutbox(
+            self._conn,
+            self._lock,
+            connection_provider=lambda: self._conn,
+        )
+        self.mailbox = PostgresMailboxStore(
+            self._conn,
+            self._lock,
+            connection_provider=lambda: self._conn,
+        )
+        self.session_mailbox_v2 = PostgresSessionMailboxStore(self._conn, self._lock)
+        self.tool_governance = PostgresToolGovernanceStore(
+            self._conn,
+            self._lock,
+            connection_provider=lambda: self._conn,
+        )
+        self.migration_control = PostgresMigrationControl(
             self._conn,
             self._lock,
             connection_provider=lambda: self._conn,
@@ -117,6 +151,18 @@ class PostgresStorage(PostgresSessionLockMixin):
         inbox_outbox = getattr(self, "inbox_outbox", None)
         if inbox_outbox is not None:
             inbox_outbox.set_connection(connection)
+        mailbox = getattr(self, "mailbox", None)
+        if mailbox is not None:
+            mailbox.set_connection(connection)
+        session_mailbox_v2 = getattr(self, "session_mailbox_v2", None)
+        if session_mailbox_v2 is not None:
+            session_mailbox_v2.set_connection(connection)
+        tool_governance = getattr(self, "tool_governance", None)
+        if tool_governance is not None:
+            tool_governance.set_connection(connection)
+        migration_control = getattr(self, "migration_control", None)
+        if migration_control is not None:
+            migration_control.set_connection(connection)
 
     def _init_schema(self) -> None:
         with postgres_advisory_lock(self._conn, "trpc-agent-schema-v1"):
@@ -197,53 +243,62 @@ class PostgresStorage(PostgresSessionLockMixin):
                     """
                 )
                 cur.execute("ALTER TABLE idempotency ADD COLUMN IF NOT EXISTS attempt INTEGER NOT NULL DEFAULT 1")
+                for index_sql in (
+                    "CREATE INDEX IF NOT EXISTS idx_message_event_created "
+                    "ON message_event (tenant_id, created_at)",
+                    "CREATE INDEX IF NOT EXISTS idx_idempotency_cleanup "
+                    "ON idempotency (tenant_id, status, updated_at)",
+                    "CREATE INDEX IF NOT EXISTS idx_compensation_cleanup "
+                    "ON compensation_task (tenant_id, status, updated_at)",
+                ):
+                    cur.execute(index_sql)
+            ensure_migration_control_schema(self._conn, self._lock)
 
     def append_event(self, event: SessionEvent, fencing_token: int | None = None) -> int:
-        with self._lock, self._conn.transaction():
-            with self._conn.cursor() as cur:
-                self._assert_fencing(cur, event.tenant_id, event.session_id, fencing_token)
-                cur.execute(
-                    (
-                        "SELECT seq FROM message_event WHERE tenant_id=%s AND session_id=%s "
-                        "AND idempotency_key=%s AND event_type=%s"
-                    ),
-                    (event.tenant_id, event.session_id, event.idempotency_key, event.event_type),
-                )
-                duplicate = cur.fetchone()
-                if duplicate:
-                    return int(duplicate[0])
-                cur.execute(
-                    "INSERT INTO session_state (tenant_id,session_id) VALUES (%s,%s) ON CONFLICT DO NOTHING",
-                    (event.tenant_id, event.session_id),
-                )
-                cur.execute(
-                    "SELECT latest_event_seq FROM session_state WHERE tenant_id=%s AND session_id=%s FOR UPDATE",
-                    (event.tenant_id, event.session_id),
-                )
-                seq = int(cur.fetchone()[0]) + 1
-                cur.execute(
-                    "INSERT INTO message_event VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-                    (
-                        event.tenant_id,
-                        event.event_id,
-                        event.session_id,
-                        seq,
-                        event.idempotency_key,
-                        event.event_type,
-                        json.dumps(event.payload),
-                        event.trace_id,
-                        event.created_at,
-                    ),
-                )
-                cur.execute(
-                    (
-                        "INSERT INTO session_state (tenant_id, session_id, latest_event_seq) "
-                        "VALUES (%s,%s,%s) ON CONFLICT (tenant_id,session_id) "
-                        "DO UPDATE SET latest_event_seq=EXCLUDED.latest_event_seq"
-                    ),
-                    (event.tenant_id, event.session_id, seq),
-                )
-                return seq
+        with self._lock, self._conn.transaction(), self._conn.cursor() as cur:
+            self._assert_fencing(cur, event.tenant_id, event.session_id, fencing_token)
+            cur.execute(
+                (
+                    "SELECT seq FROM message_event WHERE tenant_id=%s AND session_id=%s "
+                    "AND idempotency_key=%s AND event_type=%s"
+                ),
+                (event.tenant_id, event.session_id, event.idempotency_key, event.event_type),
+            )
+            duplicate = cur.fetchone()
+            if duplicate:
+                return int(duplicate[0])
+            cur.execute(
+                "INSERT INTO session_state (tenant_id,session_id) VALUES (%s,%s) ON CONFLICT DO NOTHING",
+                (event.tenant_id, event.session_id),
+            )
+            cur.execute(
+                "SELECT latest_event_seq FROM session_state WHERE tenant_id=%s AND session_id=%s FOR UPDATE",
+                (event.tenant_id, event.session_id),
+            )
+            seq = int(cur.fetchone()[0]) + 1
+            cur.execute(
+                "INSERT INTO message_event VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                (
+                    event.tenant_id,
+                    event.event_id,
+                    event.session_id,
+                    seq,
+                    event.idempotency_key,
+                    event.event_type,
+                    json.dumps(event.payload),
+                    event.trace_id,
+                    event.created_at,
+                ),
+            )
+            cur.execute(
+                (
+                    "INSERT INTO session_state (tenant_id, session_id, latest_event_seq) "
+                    "VALUES (%s,%s,%s) ON CONFLICT (tenant_id,session_id) "
+                    "DO UPDATE SET latest_event_seq=EXCLUDED.latest_event_seq"
+                ),
+                (event.tenant_id, event.session_id, seq),
+            )
+            return seq
 
     def load_events(self, tenant_id: str, session_id: str, after_seq: int = 0) -> list[SessionEvent]:
         with self._conn.cursor() as cur:
@@ -292,17 +347,16 @@ class PostgresStorage(PostgresSessionLockMixin):
         state: dict[str, Any],
         fencing_token: int | None = None,
     ) -> bool:
-        with self._lock, self._conn.transaction():
-            with self._conn.cursor() as cur:
-                self._assert_fencing(cur, tenant_id, session_id, fencing_token)
-                cur.execute(
-                    (
-                        "UPDATE session_state SET state_version=%s,state_json=%s "
-                        "WHERE tenant_id=%s AND session_id=%s AND state_version=%s"
-                    ),
-                    (expected_version + 1, json.dumps(state), tenant_id, session_id, expected_version),
-                )
-                return cur.rowcount == 1
+        with self._lock, self._conn.transaction(), self._conn.cursor() as cur:
+            self._assert_fencing(cur, tenant_id, session_id, fencing_token)
+            cur.execute(
+                (
+                    "UPDATE session_state SET state_version=%s,state_json=%s "
+                    "WHERE tenant_id=%s AND session_id=%s AND state_version=%s"
+                ),
+                (expected_version + 1, json.dumps(state), tenant_id, session_id, expected_version),
+            )
+            return cur.rowcount == 1
 
     @staticmethod
     def _assert_fencing(cur, tenant_id: str, session_id: str, fencing_token: int | None) -> None:
@@ -327,10 +381,9 @@ class PostgresStorage(PostgresSessionLockMixin):
         state: dict[str, Any],
         state_version: int,
     ) -> None:
-        with self._lock, self._conn.transaction():
-            with self._conn.cursor() as cur:
-                cur.execute(
-                    """
+        with self._lock, self._conn.transaction(), self._conn.cursor() as cur:
+            cur.execute(
+                """
                     INSERT INTO session_state (
                       tenant_id, session_id, state_version, latest_event_seq, state_json
                     ) VALUES (
@@ -345,77 +398,76 @@ class PostgresStorage(PostgresSessionLockMixin):
                       state_version = EXCLUDED.state_version,
                       state_json = EXCLUDED.state_json
                     """,
-                    (
-                        tenant_id,
-                        session_id,
-                        int(state_version),
-                        tenant_id,
-                        session_id,
-                        json.dumps(state),
-                    ),
-                )
+                (
+                    tenant_id,
+                    session_id,
+                    int(state_version),
+                    tenant_id,
+                    session_id,
+                    json.dumps(state),
+                ),
+            )
 
     def put(self, value: MemoryItem | Summary) -> None:
-        with self._lock, self._conn.transaction():
-            with self._conn.cursor() as cur:
-                if isinstance(value, Summary):
-                    cur.execute(
-                        """
+        with self._lock, self._conn.transaction(), self._conn.cursor() as cur:
+            if isinstance(value, Summary):
+                cur.execute(
+                    """
                         INSERT INTO session_state (tenant_id, session_id)
                         VALUES (%s, %s)
                         ON CONFLICT (tenant_id, session_id) DO NOTHING
                         """,
-                        (value.tenant_id, value.session_id),
-                    )
-                    cur.execute(
-                        """
+                    (value.tenant_id, value.session_id),
+                )
+                cur.execute(
+                    """
                         SELECT state_version
                         FROM session_state
                         WHERE tenant_id=%s AND session_id=%s
                         FOR UPDATE
                         """,
-                        (value.tenant_id, value.session_id),
-                    )
-                    cur.execute(
-                        (
-                            "SELECT COALESCE(MAX(summary_version),0),"
-                            "COALESCE(MAX(source_event_seq),0) FROM summary "
-                            "WHERE tenant_id=%s AND session_id=%s"
-                        ),
-                        (value.tenant_id, value.session_id),
-                    )
-                    version, source = cur.fetchone()
-                    if int(source) > value.source_event_seq:
-                        return
-                    cur.execute(
-                        "INSERT INTO summary VALUES (%s,%s,%s,%s,%s,%s)",
-                        (
-                            value.tenant_id,
-                            value.session_id,
-                            int(version) + 1,
-                            value.source_event_seq,
-                            value.content,
-                            value.created_at,
-                        ),
-                    )
-                else:
-                    cur.execute(
-                        (
-                            "INSERT INTO memory VALUES (%s,%s,%s,%s,%s,%s,%s) "
-                            "ON CONFLICT (tenant_id,memory_id) DO UPDATE SET "
-                            "content=EXCLUDED.content,version=EXCLUDED.version,"
-                            "metadata_json=EXCLUDED.metadata_json"
-                        ),
-                        (
-                            value.tenant_id,
-                            value.memory_id,
-                            value.scope_key,
-                            value.content,
-                            value.version,
-                            json.dumps(value.metadata),
-                            value.created_at,
-                        ),
-                    )
+                    (value.tenant_id, value.session_id),
+                )
+                cur.execute(
+                    (
+                        "SELECT COALESCE(MAX(summary_version),0),"
+                        "COALESCE(MAX(source_event_seq),0) FROM summary "
+                        "WHERE tenant_id=%s AND session_id=%s"
+                    ),
+                    (value.tenant_id, value.session_id),
+                )
+                version, source = cur.fetchone()
+                if int(source) > value.source_event_seq:
+                    return
+                cur.execute(
+                    "INSERT INTO summary VALUES (%s,%s,%s,%s,%s,%s)",
+                    (
+                        value.tenant_id,
+                        value.session_id,
+                        int(version) + 1,
+                        value.source_event_seq,
+                        value.content,
+                        value.created_at,
+                    ),
+                )
+            else:
+                cur.execute(
+                    (
+                        "INSERT INTO memory VALUES (%s,%s,%s,%s,%s,%s,%s) "
+                        "ON CONFLICT (tenant_id,memory_id) DO UPDATE SET "
+                        "content=EXCLUDED.content,version=EXCLUDED.version,"
+                        "metadata_json=EXCLUDED.metadata_json"
+                    ),
+                    (
+                        value.tenant_id,
+                        value.memory_id,
+                        value.scope_key,
+                        value.content,
+                        value.version,
+                        json.dumps(value.metadata),
+                        value.created_at,
+                    ),
+                )
 
     def search(
         self,
@@ -783,6 +835,25 @@ class PostgresStorage(PostgresSessionLockMixin):
             )
             cur.execute(query, params)
 
+    def _compensation_replay(self, task_id, tenant_id=None):
+        with self._lock, self._conn.transaction(), self._conn.cursor() as cur:
+            query = (
+                """
+                UPDATE compensation_task
+                   SET status='pending', attempt=0, available_at=clock_timestamp(),
+                       last_error=NULL, updated_at=clock_timestamp()
+                 WHERE task_id=%s AND status='dead'
+                """
+                + (" AND tenant_id=%s" if tenant_id is not None else "")
+                + " RETURNING *"
+            )
+            params = (task_id, tenant_id) if tenant_id is not None else (task_id,)
+            cur.execute(query, params)
+            row = cur.fetchone()
+            if row is None:
+                raise ValueError("compensation task is missing or is not dead")
+            return self._compensation_from_row(row)
+
     @staticmethod
     def _compensation_from_row(row):
         payload = _json_object(row[3])
@@ -834,6 +905,9 @@ class _PostgresCompensationStore:
             tenant_id=tenant_id,
         )
 
+    def replay(self, task_id, tenant_id=None):
+        return self.storage._compensation_replay(task_id, tenant_id=tenant_id)
+
 
 _POSTGRES_TENANT_METHODS = {
     "acquire_session_lock": _tenant_from_first_argument,
@@ -869,6 +943,7 @@ _POSTGRES_TENANT_METHODS = {
     "_compensation_claim": _tenant_from_optional_keyword(1),
     "_compensation_complete": _tenant_from_optional_keyword(1),
     "_compensation_fail": _tenant_from_optional_keyword(3),
+    "_compensation_replay": _tenant_from_optional_keyword(1),
 }
 for _method_name, _tenant_getter in _POSTGRES_TENANT_METHODS.items():
     method = rls_tenant_method(_tenant_getter)(getattr(PostgresStorage, _method_name))

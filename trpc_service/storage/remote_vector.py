@@ -15,6 +15,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from trpc_service.security.secrets import SecretManager
+from trpc_service.security.ssrf import validate_outbound_url
 from trpc_service.storage.vector_store import KnowledgeChunk
 
 
@@ -45,12 +46,12 @@ class RemoteVectorStore:
     ) -> None:
         if not base_url:
             raise ValueError("remote vector backend requires vector_url")
-        self.base_url = base_url.rstrip("/")
+        self.base_url = validate_outbound_url(base_url).rstrip("/")
         self.token = token
         self.provider = provider.lower()
         self.dimension = dimension
         self.collection_prefix = collection_prefix
-        self.embedding_url = embedding_url.rstrip("/")
+        self.embedding_url = validate_outbound_url(embedding_url).rstrip("/") if embedding_url else ""
         self.embedding_model = embedding_model
         self.embedding_token = embedding_token
         self.timeout = timeout
@@ -95,7 +96,7 @@ class RemoteVectorStore:
     @staticmethod
     def _point_id(chunk: KnowledgeChunk) -> int:
         """Qdrant accepts UUIDs or uint64 IDs; preserve the original ID in payload."""
-        digest = hashlib.sha256(f"{chunk.tenant_id}:{chunk.collection}:{chunk.chunk_id}".encode("utf-8")).digest()
+        digest = hashlib.sha256(f"{chunk.tenant_id}:{chunk.collection}:{chunk.chunk_id}".encode()).digest()
         return int.from_bytes(digest[:8], "big", signed=False)
 
     def _ensure_collection(self, collection: str) -> None:

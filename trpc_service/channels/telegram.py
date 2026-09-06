@@ -1,4 +1,7 @@
+import hmac
+
 from trpc_service.channels.base import (
+    ChannelCapabilities,
     ChannelVerificationError,
     OutboundMessage,
     SendResult,
@@ -6,17 +9,29 @@ from trpc_service.channels.base import (
     parse_attachments,
 )
 from trpc_service.channels.media import attachment_kind, post_multipart_json, prepare_attachment_file
-from trpc_service.channels.simple import SimpleJsonChannelAdapter
 from trpc_service.channels.sdk import run_async
+from trpc_service.channels.simple import SimpleJsonChannelAdapter
 from trpc_service.security.secrets import SecretManager, redact_secret_data, redact_secret_text
 
 
 class TelegramAdapter(SimpleJsonChannelAdapter):
     channel_name = "telegram"
+    capabilities = ChannelCapabilities(max_text_length=4096, supports_media=True, supports_revoke=False)
     message_id_fields = ("message_id", "update_id")
     user_id_fields = ("from_user_id", "from", "user_id")
     group_id_fields = ("chat_id", "group_id")
     text_fields = ("text", "message")
+    _MESSAGE_UPDATE_FIELDS = {
+        "message",
+        "edited_message",
+        "channel_post",
+        "edited_channel_post",
+        "callback_query",
+    }
+
+    def is_noop(self, payload, binding) -> bool:
+        del binding
+        return not any(field in payload for field in self._MESSAGE_UPDATE_FIELDS)
 
     def verify_callback(self, payload, binding):
         expected = None
@@ -26,14 +41,26 @@ class TelegramAdapter(SimpleJsonChannelAdapter):
             except Exception as exc:
                 raise ChannelVerificationError("Telegram webhook secret is unavailable") from exc
         supplied = payload.get("_callback_secret_token", payload.get("secret_token"))
-        if expected and supplied != expected:
+        if expected and not isinstance(supplied, str):
+            raise ChannelVerificationError("invalid Telegram webhook secret")
+        if expected and not hmac.compare_digest(supplied, expected):
             raise ChannelVerificationError("invalid Telegram webhook secret")
 
     def parse_event(self, payload, binding):
         payload = {
             key: value for key, value in payload.items() if key not in {"_callback_secret_token", "secret_token"}
         }
-        message = payload.get("message", payload)
+        callback_query = payload.get("callback_query")
+        message = (
+            payload.get("message")
+            or payload.get("edited_message")
+            or payload.get("channel_post")
+            or payload.get("edited_channel_post")
+            or (callback_query.get("message") if isinstance(callback_query, dict) else None)
+            or payload
+        )
+        if not isinstance(message, dict):
+            message = payload
         sender = message.get("from", {})
         chat = message.get("chat", {})
         attachments = parse_attachments(payload.get("attachments") or message.get("attachments"))
@@ -106,9 +133,19 @@ class TelegramAdapter(SimpleJsonChannelAdapter):
             {
                 **payload,
                 "message_id": message.get("message_id", payload.get("update_id", "")),
-                "from_user_id": sender.get("id", payload.get("from_user_id", "")),
+                "from_user_id": sender.get(
+                    "id",
+                    (callback_query.get("from", {}).get("id") if isinstance(callback_query, dict) else None)
+                    or payload.get("from_user_id", ""),
+                ),
                 "chat_id": chat.get("id", payload.get("chat_id", "")),
-                "text": message.get("text", payload.get("text", "")),
+                "text": message.get(
+                    "text",
+                    message.get(
+                        "caption",
+                        callback_query.get("data", "") if isinstance(callback_query, dict) else payload.get("text", ""),
+                    ),
+                ),
                 "attachments": [
                     {
                         "kind": item.kind,

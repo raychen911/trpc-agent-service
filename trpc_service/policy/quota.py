@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import os
 from collections import defaultdict, deque
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from threading import RLock
 from time import time
-import os
 
 from trpc_service.tenant.models import QuotaPolicy
 
@@ -64,7 +64,7 @@ class QuotaEnforcer:
             self._reserve_redis(tenant_id, policy, persisted_usage, requested_tokens, requested_cost)
             return
         now = time()
-        today = datetime.now(timezone.utc).date().isoformat()
+        today = datetime.now(UTC).date().isoformat()
         with self._lock:
             requests = self._requests[tenant_id]
             while requests and now - requests[0] >= 1.0:
@@ -94,7 +94,7 @@ class QuotaEnforcer:
         cost -= reserved_cost
         if tokens == 0 and abs(cost) < 1e-12:
             return
-        today = datetime.now(timezone.utc).date().isoformat()
+        today = datetime.now(UTC).date().isoformat()
         if self._redis is not None:
             key = f"{self._prefix}:quota:usage:{tenant_id}:{today}"
             self._redis.hincrby(key, "tokens", int(tokens))
@@ -109,7 +109,7 @@ class QuotaEnforcer:
         """Release a reservation when execution never reached final accounting."""
         if reserved_tokens == 0 and abs(reserved_cost) < 1e-12:
             return
-        today = datetime.now(timezone.utc).date().isoformat()
+        today = datetime.now(UTC).date().isoformat()
         if self._redis is not None:
             key = f"{self._prefix}:quota:usage:{tenant_id}:{today}"
             script = """
@@ -139,7 +139,7 @@ class QuotaEnforcer:
     ) -> None:
         second = int(time())
         qps_key = f"{self._prefix}:quota:qps:{tenant_id}:{second}"
-        usage_key = f"{self._prefix}:quota:usage:{tenant_id}:{datetime.now(timezone.utc).date().isoformat()}"
+        usage_key = f"{self._prefix}:quota:usage:{tenant_id}:{datetime.now(UTC).date().isoformat()}"
         script = """
         local qps = tonumber(redis.call('GET', KEYS[1]) or '0')
         local usage_tokens = tonumber(redis.call('HGET', KEYS[2], 'tokens') or ARGV[5])

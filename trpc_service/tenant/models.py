@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from urllib.parse import parse_qsl, urlsplit
 
 try:
@@ -19,7 +19,7 @@ from typing import Any
 
 
 def utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _public_config_value(value: Any) -> Any:
@@ -80,7 +80,7 @@ class ModelConfig:
     cost_per_1k_tokens: float = 0.0
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "ModelConfig":
+    def from_dict(cls, data: dict[str, Any]) -> ModelConfig:
         return cls(
             provider=str(data["provider"]),
             model=str(data["model"]),
@@ -100,14 +100,25 @@ class ToolPolicy:
     allowlist: list[str] = field(default_factory=list)
     denylist: list[str] = field(default_factory=list)
     approval_rules: list[str] = field(default_factory=list)
+    risk_levels: dict[str, str] = field(default_factory=dict)
+    require_confirmation_for_risk: list[str] = field(default_factory=lambda: ["high", "critical"])
+    max_calls_per_request: int = 16
+    max_side_effect_calls_per_request: int = 4
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any] | None) -> "ToolPolicy":
+    def from_dict(cls, data: dict[str, Any] | None) -> ToolPolicy:
         data = data or {}
         return cls(
             allowlist=list(data.get("allowlist", [])),
             denylist=list(data.get("denylist", [])),
             approval_rules=list(data.get("approval_rules", [])),
+            risk_levels={str(key): str(value).lower() for key, value in dict(data.get("risk_levels", {})).items()},
+            require_confirmation_for_risk=[
+                str(value).lower()
+                for value in data.get("require_confirmation_for_risk", ["high", "critical"])
+            ],
+            max_calls_per_request=int(data.get("max_calls_per_request", 16)),
+            max_side_effect_calls_per_request=int(data.get("max_side_effect_calls_per_request", 4)),
         )
 
 
@@ -118,7 +129,7 @@ class QuotaPolicy:
     daily_cost_limit: float = 100.0
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any] | None) -> "QuotaPolicy":
+    def from_dict(cls, data: dict[str, Any] | None) -> QuotaPolicy:
         data = data or {}
         return cls(
             qps_limit=int(data.get("qps_limit", 20)),
@@ -133,7 +144,7 @@ class AuditPolicy:
     redact_rules: list[str] = field(default_factory=lambda: ["token", "authorization", "phone", "email"])
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any] | None) -> "AuditPolicy":
+    def from_dict(cls, data: dict[str, Any] | None) -> AuditPolicy:
         data = data or {}
         return cls(
             retention_days=int(data.get("retention_days", 180)),
@@ -149,7 +160,7 @@ class GrayReleasePolicy:
     session_overrides: dict[str, int] = field(default_factory=dict)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any] | None) -> "GrayReleasePolicy":
+    def from_dict(cls, data: dict[str, Any] | None) -> GrayReleasePolicy:
         data = data or {}
         candidate = data.get("candidate_version")
         return cls(
@@ -189,7 +200,7 @@ class StorageProfile:
     object_secret_key_ref: str = ""
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any] | None) -> "StorageProfile":
+    def from_dict(cls, data: dict[str, Any] | None) -> StorageProfile:
         data = data or {}
         return cls(
             session_backend=str(data.get("session_backend", "memory")).lower(),
@@ -288,7 +299,7 @@ class AgentApp:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "AgentApp":
+    def from_dict(cls, data: dict[str, Any]) -> AgentApp:
         return cls(
             agent_app_id=str(data["agent_app_id"]),
             agent_name=str(data.get("agent_name", data["agent_app_id"])),
@@ -329,7 +340,7 @@ class ChannelBinding:
         return str(resolved) if resolved not in (None, "") else external_user_id
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "ChannelBinding":
+    def from_dict(cls, data: dict[str, Any]) -> ChannelBinding:
         return cls(
             tenant_id=str(data["tenant_id"]),
             binding_id=str(data["binding_id"]),
@@ -359,7 +370,7 @@ class TenantConfig:
     updated_at: datetime = field(default_factory=utc_now)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "TenantConfig":
+    def from_dict(cls, data: dict[str, Any]) -> TenantConfig:
         tenant_id = str(data["tenant_id"])
         created_at = data.get("created_at", utc_now())
         updated_at = data.get("updated_at", utc_now())
@@ -427,6 +438,12 @@ class TenantConfig:
             binding["config"] = _public_config_value(binding.get("config", {}))
         return data
 
+    def immutable_snapshot(self):
+        """Return a strict frozen representation for publication and audit."""
+        from trpc_service.tenant.immutable import ImmutableTenantConfig
+
+        return ImmutableTenantConfig.from_config(self)
+
 
 @dataclass(frozen=True, slots=True)
 class TenantContext:
@@ -482,6 +499,9 @@ def default_demo_config() -> TenantConfig:
             approval_rules=["send_external_message"],
         ),
     )
+    default_channels = ["feishu", "telegram"]
+    if os.getenv("ENABLE_LEGACY_WECOM", "0").lower() in {"1", "true", "yes", "on"}:
+        default_channels.append("wecom")
     bindings = [
         ChannelBinding(
             tenant_id="tenant_demo",
@@ -491,8 +511,17 @@ def default_demo_config() -> TenantConfig:
             agent_app_id="app_support",
             token_ref=f"secret://tenant_demo/{channel}/token",
             secret_ref=f"secret://tenant_demo/{channel}/secret",
+            config=(
+                {
+                    "app_id": os.getenv("FEISHU_APP_ID", ""),
+                    "app_secret_ref": os.getenv("FEISHU_APP_SECRET_REF", ""),
+                    "encrypt_key_ref": os.getenv("FEISHU_ENCRYPT_KEY_REF", ""),
+                }
+                if channel == "feishu"
+                else {}
+            ),
         )
-        for channel in ("wecom", "wechat_customer_service", "wechat_official_account", "telegram")
+        for channel in default_channels
     ]
     bindings.append(
         ChannelBinding(
@@ -503,6 +532,23 @@ def default_demo_config() -> TenantConfig:
             agent_app_id="app_support",
         )
     )
+    ai_bot_account_id = os.getenv("WECOM_AI_BOT_ACCOUNT_ID", "").strip()
+    if ai_bot_account_id:
+        ai_bot_secret_ref = os.getenv(
+            "WECOM_AI_BOT_SECRET_REF",
+            "secret://tenant_demo/wecom_ai_bot/bot-secret",
+        )
+        bindings.append(
+            ChannelBinding(
+                tenant_id="tenant_demo",
+                binding_id=f"wecom_ai_bot:{ai_bot_account_id}",
+                channel="wecom_ai_bot",
+                account_id=ai_bot_account_id,
+                agent_app_id="app_support",
+                secret_ref=ai_bot_secret_ref,
+                config={"bot_secret_ref": ai_bot_secret_ref},
+            )
+        )
     return TenantConfig(
         tenant_id="tenant_demo",
         apps=[app],

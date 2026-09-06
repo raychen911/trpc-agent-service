@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, replace
 import os
-from time import monotonic
+from dataclasses import asdict, replace
+from datetime import timedelta
+from time import monotonic, sleep
 from uuid import uuid4
 
 from trpc_service.agent.model_client import ModelResponse, ResponsesModelClient
@@ -14,18 +15,36 @@ from trpc_service.gateway.session_id import (
     session_id_for_message,
 )
 from trpc_service.gateway.worker_queue import WorkerQueue
-from trpc_service.policy.tenant_filter import PolicyDenied, TenantPolicy
 from trpc_service.policy.approval import approval_id, approval_token, verify_approval_token
 from trpc_service.policy.quota import QuotaEnforcer, QuotaExceeded
-from trpc_service.storage.base import AuditRecord, MemoryItem, SessionEvent, Summary
+from trpc_service.policy.tenant_filter import PolicyDenied, TenantPolicy
+from trpc_service.security.secrets import SecretManager
+from trpc_service.storage.base import AuditRecord, MemoryItem, SessionEvent, Summary, now_utc
 from trpc_service.storage.factory import StorageBundle
 from trpc_service.storage.locking import (
     SessionLease,
+    SessionLeaseHeartbeat,
     renew_session_lease,
     session_lease,
     validate_session_lease,
 )
 from trpc_service.storage.manager import TenantStorageManager
+from trpc_service.storage.retry import retry_delay_seconds
+from trpc_service.storage.tool_governance import (
+    ApprovalStatus,
+    ToolExecutionStatus,
+    arguments_hash,
+)
+from trpc_service.telemetry.metrics import (
+    observe_cost,
+    observe_error,
+    observe_model_latency,
+    observe_request,
+    observe_tokens,
+    observe_tool,
+    observe_tool_latency,
+)
+from trpc_service.telemetry.tracing import TraceRecorder
 from trpc_service.tenant.models import (
     AgentEvent,
     RunRequest,
@@ -34,22 +53,76 @@ from trpc_service.tenant.models import (
     UserInput,
 )
 from trpc_service.tenant.service import TenantService
-from trpc_service.security.secrets import SecretManager
-from trpc_service.telemetry.tracing import TraceRecorder
-from trpc_service.telemetry.metrics import (
-    observe_cost,
-    observe_model_latency,
-    observe_request,
-    observe_tokens,
-    observe_tool,
-    observe_tool_latency,
-    observe_error,
-)
 from trpc_service.tool.runtime import ToolRegistry, ToolResult
 
 
 class GatewayError(RuntimeError):
     pass
+
+
+class _SessionMailboxV2Adapter:
+    """Keep the gateway's synchronous mailbox contract over session v2."""
+
+    def __init__(self, store) -> None:
+        self.store = store
+
+    def enqueue(self, tenant_id, session_id, message_id, dedupe_key, payload):
+        del dedupe_key
+        return self.store.accept(
+            tenant_id,
+            session_id,
+            message_id,
+            priority=int(payload.get("priority", 0)),
+            trace_id=str(payload.get("trace_id") or message_id),
+        )
+
+    def claim_next(self, tenant_id, session_id, owner, lease_seconds=None):
+        result = self.store.claim_session(
+            tenant_id,
+            session_id,
+            owner,
+            lease_seconds or int(os.getenv("MAILBOX_LEASE_SECONDS", "180")),
+        )
+        return result.lease if result.claimed else None
+
+    def has_unresolved_message(self, tenant_id, session_id, message_id):
+        return self.store.has_unresolved_message(tenant_id, session_id, message_id)
+
+    def complete(self, lease):
+        return self.store.commit(lease)
+
+    def fail(self, lease, error, retry_after_seconds=0):
+        failure_count = lease.retry_count + 1
+        try:
+            max_attempts = int(os.getenv("SESSION_MAILBOX_MAX_ATTEMPTS", "5"))
+        except ValueError as exc:
+            raise GatewayError("SESSION_MAILBOX_MAX_ATTEMPTS must be an integer") from exc
+        if max_attempts < 1:
+            raise GatewayError("SESSION_MAILBOX_MAX_ATTEMPTS must be positive")
+        if failure_count >= max_attempts:
+            return self.store.dead_letter(lease, error)
+        delay = retry_after_seconds or retry_delay_seconds(
+            failure_count,
+            identity=f"{lease.tenant_id}:{lease.session_id}:{lease.message_id}",
+            base_env="SESSION_MAILBOX_RETRY_BASE_SECONDS",
+            cap_env="SESSION_MAILBOX_RETRY_MAX_SECONDS",
+            default_base=2,
+            default_cap=120,
+        )
+        retry_at = (
+            now_utc() + timedelta(seconds=max(0, delay))
+            if delay
+            else None
+        )
+        return self.store.retry(lease, retry_at=retry_at)
+
+
+def _mailbox_failure_is_terminal(result, lease) -> bool:
+    return bool(
+        result is not None
+        and hasattr(result, "resolved_sequence")
+        and int(result.resolved_sequence) >= int(lease.sequence)
+    )
 
 
 def _max_tool_rounds() -> int:
@@ -136,6 +209,9 @@ class AgentWorker:
             context.tenant_id,
             context.session_id or "",
         ) as lease:
+            if isinstance(lease, SessionLease):
+                with SessionLeaseHeartbeat(storage.session, lease):
+                    return self._run_unlocked(request, config, storage, lease)
             return self._run_unlocked(request, config, storage, lease)
 
     def _run_unlocked(
@@ -463,6 +539,7 @@ class AgentWorker:
             return [], ""
         context_parts = []
         events = []
+        governance = getattr(storage, "tool_governance", None)
         prior_events = storage.session.load_events(
             request.tenant_context.tenant_id,
             request.tenant_context.session_id or "",
@@ -470,11 +547,36 @@ class AgentWorker:
         )
         for index, call in enumerate(calls):
             name = str(call.get("name", ""))
+            execution = None
+            tool_key = ""
             raw_arguments = call.get("arguments", {})
             if not isinstance(raw_arguments, dict):
                 raise GatewayError(f"tool {name or '<unknown>'} arguments must be an object")
             arguments = dict(raw_arguments)
+            side_effect = bool(call.get("side_effect", name != "search_knowledge"))
             tool_key = str(call.get("_tool_key") or f"{request.idempotency_key}:tool:{index}")
+            if governance is not None:
+                try:
+                    governance.reserve_call(
+                        request.tenant_context.tenant_id,
+                        request.idempotency_key,
+                        tool_key,
+                        side_effect,
+                        app.tool_policy.max_calls_per_request,
+                        app.tool_policy.max_side_effect_calls_per_request,
+                    )
+                except RuntimeError as exc:
+                    raise PolicyDenied(str(exc)) from exc
+            else:
+                policy.check_tool_budget(
+                    index + 1,
+                    int(
+                        sum(
+                            bool(item.get("side_effect", str(item.get("name", "")) != "search_knowledge"))
+                            for item in calls[: index + 1]
+                        )
+                    ),
+                )
             tool_started = monotonic()
             try:
                 requires_approval = policy.requires_tool_approval(name)
@@ -484,10 +586,28 @@ class AgentWorker:
                     name,
                     sorted(arguments),
                 )
+                approval_state = None
+                if governance is not None and requires_approval:
+                    approval_state = governance.create_or_get(
+                        request.tenant_context.tenant_id,
+                        approval,
+                        request.tenant_context.session_id or "",
+                        request.idempotency_key,
+                        name,
+                        arguments_hash(arguments),
+                    )
                 approved = False
                 if requires_approval:
-                    approval_requested = any(
-                        event.event_type == "tool_approval_requested" and event.payload.get("approval_id") == approval
+                    approval_requested = (
+                        approval_state is not None
+                        and approval_state.status in {
+                            ApprovalStatus.PENDING,
+                            ApprovalStatus.APPROVED,
+                            ApprovalStatus.CONSUMED,
+                        }
+                    ) or any(
+                        event.event_type == "tool_approval_requested"
+                        and event.payload.get("approval_id") == approval
                         for event in prior_events
                     )
                     approved = (
@@ -499,6 +619,18 @@ class AgentWorker:
                         )
                         and str(call.get("approval_id", approval)) == approval
                     )
+                    if approved and governance is not None:
+                        try:
+                            governance.consume(
+                                request.tenant_context.tenant_id,
+                                approval,
+                                request.idempotency_key,
+                                arguments_hash(arguments),
+                            )
+                        except (KeyError, RuntimeError) as exc:
+                            approved = False
+                            if approval_state is not None and approval_state.status == ApprovalStatus.AMBIGUOUS:
+                                raise PolicyDenied("approval is ambiguous") from exc
                     if not approved:
                         lease = self._checkpoint_lease(storage, lease)
                         storage.session.append_event(
@@ -511,6 +643,12 @@ class AgentWorker:
                                     "approval_id": approval,
                                     "tool_name": name,
                                     "arguments_keys": sorted(arguments),
+                                    "risk": policy.tool_risk(name),
+                                    "expires_at": (
+                                        approval_state.expires_at.isoformat()
+                                        if approval_state is not None
+                                        else None
+                                    ),
                                 },
                                 trace_id=request.tenant_context.trace_id,
                                 idempotency_key=tool_key,
@@ -595,6 +733,55 @@ class AgentWorker:
                     and not bool(call.get("idempotent", False))
                 ):
                     raise GatewayError(f"tool {name} requires idempotency confirmation after worker recovery")
+                if governance is not None and hasattr(governance, "begin_execution"):
+                    execution_id = str(uuid4())
+                    execution = governance.begin_execution(
+                        request.tenant_context.tenant_id,
+                        execution_id,
+                        request.idempotency_key,
+                        request.tenant_context.session_id or "",
+                        name,
+                        tool_key,
+                        arguments_hash(arguments),
+                        side_effect,
+                        self._fencing_token(lease),
+                    )
+                    if execution.status == ToolExecutionStatus.AMBIGUOUS:
+                        raise PolicyDenied("tool execution identity is ambiguous")
+                    if execution.status == ToolExecutionStatus.SUCCEEDED:
+                        stored = execution.result or {}
+                        result = ToolResult(
+                            name,
+                            str(stored.get("content", "")),
+                            dict(stored.get("metadata", {})),
+                        )
+                        context_parts.append(result.content)
+                        events.append(
+                            AgentEvent(
+                                "tool_call",
+                                result.content,
+                                {
+                                    "tool_name": result.name,
+                                    "metadata": result.metadata,
+                                    "replayed": True,
+                                    "ledger_replay": True,
+                                    "call_id": call.get("call_id", ""),
+                                },
+                            )
+                        )
+                        continue
+                    if execution.status == ToolExecutionStatus.RUNNING and execution.attempt > 1:
+                        raise GatewayError(
+                            f"tool {name} execution is already running after recovery; "
+                            "manual reconciliation is required"
+                        )
+                    if (
+                        execution.status == ToolExecutionStatus.RUNNING
+                        and execution.execution_id != execution_id
+                    ):
+                        raise GatewayError(
+                            f"tool {name} execution is already owned by another worker"
+                        )
                 lease = self._checkpoint_lease(storage, lease)
                 storage.session.append_event(
                     SessionEvent(
@@ -605,7 +792,8 @@ class AgentWorker:
                         payload={
                             "tool_name": name,
                             "arguments_keys": sorted(arguments),
-                            "side_effect": bool(call.get("side_effect", name != "search_knowledge")),
+                            "side_effect": side_effect,
+                            "risk": policy.tool_risk(name),
                         },
                         trace_id=request.tenant_context.trace_id,
                         idempotency_key=tool_key,
@@ -638,6 +826,13 @@ class AgentWorker:
                             )
                 if result.content:
                     context_parts.append(result.content)
+                if governance is not None and execution is not None:
+                    governance.complete_execution(
+                        request.tenant_context.tenant_id,
+                        tool_key,
+                        {"content": result.content, "metadata": result.metadata},
+                        self._fencing_token(lease),
+                    )
                 events.append(
                     AgentEvent(
                         "tool_call",
@@ -687,6 +882,17 @@ class AgentWorker:
                     )
                 )
             except Exception as exc:
+                if governance is not None and execution is not None:
+                    try:
+                        governance.fail_execution(
+                            request.tenant_context.tenant_id,
+                            tool_key,
+                            type(exc).__name__,
+                            str(exc),
+                            self._fencing_token(lease),
+                        )
+                    except Exception:
+                        pass
                 observe_tool(request.tenant_context.tenant_id, name, "error")
                 observe_error(
                     request.tenant_context.tenant_id,
@@ -851,7 +1057,8 @@ class AgentGateway:
 
     @staticmethod
     def _durable_inbox_enabled() -> bool:
-        return os.getenv("DURABLE_INBOX_OUTBOX", "0").strip().lower() in {"1", "true", "yes"}
+        default = "0" if os.getenv("TRPC_AGENT_RUNTIME_MODE", "trpc").strip().lower() == "local" else "1"
+        return os.getenv("DURABLE_INBOX_OUTBOX", default).strip().lower() in {"1", "true", "yes", "on"}
 
     @staticmethod
     def _inbox_payload(message: InboundMessage) -> dict:
@@ -892,10 +1099,21 @@ class AgentGateway:
             message.external_message_id,
         )
         durable = getattr(storage, "inbox_outbox", None) if self._durable_inbox_enabled() else None
+        mailbox = getattr(storage, "mailbox", None) if durable is not None else None
+        mailbox_v2 = getattr(storage, "session_mailbox_v2", None) if durable is not None else None
+        if (
+            mailbox_v2 is not None
+            and os.getenv("SESSION_MAILBOX_V2_ENABLED", "1").strip().lower()
+            in {"1", "true", "yes", "on"}
+        ):
+            mailbox = _SessionMailboxV2Adapter(mailbox_v2)
         if self._durable_inbox_enabled() and durable is None:
             raise GatewayError("durable Inbox/Outbox is enabled but the storage backend does not support it")
+        if durable is not None and mailbox is None:
+            raise GatewayError("durable Inbox/Outbox requires an ordered mailbox")
         inbox_owner = f"gateway:{uuid4()}"
         inbox_claimed = False
+        mailbox_record = None
         if durable is not None:
             inbox_record, inbox_claimed = durable.accept_inbox(
                 config.tenant_id,
@@ -916,6 +1134,76 @@ class AgentGateway:
                     )
                 if inbox_record.status == "processing":
                     raise GatewayError("message is already being processed")
+                if inbox_record.status == "dead":
+                    raise GatewayError("message is dead-lettered and requires operator review")
+            mailbox.enqueue(
+                config.tenant_id,
+                session_id,
+                inbox_record.message_id,
+                idempotency_key,
+                self._inbox_payload(message),
+            )
+            if (
+                hasattr(mailbox, "has_unresolved_message")
+                and not mailbox.has_unresolved_message(
+                    config.tenant_id, session_id, inbox_record.message_id
+                )
+            ):
+                durable.dead_inbox(
+                    config.tenant_id,
+                    idempotency_key,
+                    inbox_owner,
+                    "session mailbox message is already terminal",
+                )
+                inbox_claimed = False
+                raise GatewayError("message is already terminal in the session mailbox")
+            if os.getenv("SESSION_READY_ASYNC", "0").strip().lower() in {"1", "true", "yes", "on"}:
+                # The independent v2 consumer will claim and execute this
+                # mailbox item after the ready outbox notice is published.
+                # Reserve the response idempotency record before handing the
+                # Inbox lease to the worker.  The async worker completes this
+                # record after execution; without the reservation its fenced
+                # completion would fail with a missing-record KeyError.
+                storage.idempotency.start(
+                    config.tenant_id,
+                    idempotency_key,
+                    trace_id,
+                    lease_seconds=int(os.getenv("IDEMPOTENCY_LEASE_SECONDS", "180")),
+                )
+                release = getattr(durable, "release_inbox", None)
+                if release is None:
+                    raise GatewayError("async session-ready requires inbox ownership handoff support")
+                release(config.tenant_id, idempotency_key, inbox_owner)
+                inbox_claimed = False
+                response_ref = f"{message.channel}:{message.external_message_id}:queued"
+                return (
+                    session_id,
+                    [AgentEvent("message_end", "", {"queued": True, "durable": True})],
+                    response_ref,
+                )
+            order_deadline = monotonic() + max(
+                0.0,
+                float(os.getenv("MAILBOX_ORDER_WAIT_SECONDS", "30")),
+            )
+            while mailbox_record is None:
+                mailbox_record = mailbox.claim_next(
+                    config.tenant_id,
+                    session_id,
+                    inbox_owner,
+                    lease_seconds=int(os.getenv("MAILBOX_LEASE_SECONDS", "180")),
+                )
+                if mailbox_record is not None or monotonic() >= order_deadline:
+                    break
+                sleep(0.05)
+            if mailbox_record is None:
+                durable.fail_inbox(
+                    config.tenant_id,
+                    idempotency_key,
+                    inbox_owner,
+                    "mailbox order wait timeout",
+                )
+                inbox_claimed = False
+                raise GatewayError("message is queued behind an active session mailbox lease")
         with self.telemetry.span(
             "gateway.route",
             TenantContext(
@@ -948,6 +1236,10 @@ class AgentGateway:
                             "events": [{"event_type": "message_end", "content": str(result.get("text", ""))}],
                         },
                     )
+                    inbox_claimed = False
+                if mailbox_record is not None:
+                    mailbox.complete(mailbox_record)
+                    mailbox_record = None
                 return session_id, [AgentEvent("message_end", str(result.get("text", "")))], record.response_ref or ""
             if record.status.value == "processing" and record.trace_id != trace_id:
                 raise GatewayError("message is already being processed")
@@ -1002,6 +1294,9 @@ class AgentGateway:
                         },
                     )
                     inbox_claimed = False
+                if mailbox_record is not None:
+                    mailbox.complete(mailbox_record)
+                    mailbox_record = None
                 observe_request(config.tenant_id, message.channel, "revoked")
                 return session_id, [AgentEvent("message_revoked", "", {"revoked": True})], response_ref
 
@@ -1017,8 +1312,20 @@ class AgentGateway:
                     requested_cost=estimated_cost,
                 )
             except QuotaExceeded:
+                mailbox_terminal = False
+                if mailbox_record is not None:
+                    mailbox_result = mailbox.fail(mailbox_record, "quota_exceeded")
+                    mailbox_terminal = _mailbox_failure_is_terminal(
+                        mailbox_result, mailbox_record
+                    )
+                    mailbox_record = None
                 if durable is not None and inbox_claimed:
-                    durable.fail_inbox(
+                    update_inbox = (
+                        durable.dead_inbox
+                        if mailbox_terminal and hasattr(durable, "dead_inbox")
+                        else durable.fail_inbox
+                    )
+                    update_inbox(
                         config.tenant_id,
                         idempotency_key,
                         inbox_owner,
@@ -1091,20 +1398,35 @@ class AgentGateway:
                     "idempotency_key": idempotency_key,
                     "agent_name": config.app(binding.agent_app_id).agent_name,
                 }
+                if mailbox_record is not None:
+                    mailbox.complete(mailbox_record)
+                    mailbox_record = None
                 if durable is not None and inbox_claimed:
-                    durable.enqueue_outbox(
-                        config.tenant_id,
-                        "agent.response",
-                        session_id,
-                        durable_result,
-                        event_id=f"{idempotency_key}:agent-response",
-                    )
-                    durable.complete_inbox(
-                        config.tenant_id,
-                        idempotency_key,
-                        inbox_owner,
-                        durable_result,
-                    )
+                    complete_and_enqueue = getattr(durable, "complete_inbox_and_enqueue_outbox", None)
+                    if complete_and_enqueue is not None:
+                        complete_and_enqueue(
+                            config.tenant_id,
+                            idempotency_key,
+                            inbox_owner,
+                            durable_result,
+                            "agent.response",
+                            session_id,
+                            f"{idempotency_key}:agent-response",
+                        )
+                    else:
+                        durable.enqueue_outbox(
+                            config.tenant_id,
+                            "agent.response",
+                            session_id,
+                            durable_result,
+                            event_id=f"{idempotency_key}:agent-response",
+                        )
+                        durable.complete_inbox(
+                            config.tenant_id,
+                            idempotency_key,
+                            inbox_owner,
+                            durable_result,
+                        )
                     inbox_claimed = False
                 storage.idempotency.complete(
                     config.tenant_id,
@@ -1138,8 +1460,24 @@ class AgentGateway:
                 observe_request(config.tenant_id, message.channel, "success")
                 return session_id, events, response_ref
             except Exception as exc:
+                mailbox_terminal = False
+                if mailbox_record is not None:
+                    try:
+                        mailbox_result = mailbox.fail(
+                            mailbox_record, type(exc).__name__
+                        )
+                        mailbox_terminal = _mailbox_failure_is_terminal(
+                            mailbox_result, mailbox_record
+                        )
+                    except Exception:
+                        pass
                 if durable is not None and inbox_claimed:
-                    durable.fail_inbox(
+                    update_inbox = (
+                        durable.dead_inbox
+                        if mailbox_terminal and hasattr(durable, "dead_inbox")
+                        else durable.fail_inbox
+                    )
+                    update_inbox(
                         config.tenant_id,
                         idempotency_key,
                         inbox_owner,

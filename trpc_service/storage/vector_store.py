@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from dataclasses import asdict
 import json
+from dataclasses import asdict, dataclass, field
 from math import sqrt
 from pathlib import Path
 from threading import RLock

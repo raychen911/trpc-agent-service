@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
-import base64
-import os
-import hashlib
+
 from trpc_service.security.identifiers import filesystem_component
 
 
@@ -38,6 +40,10 @@ class FileObjectStore:
         tenant_dir.mkdir(parents=True, exist_ok=True)
         path = tenant_dir / filesystem_component(object_id, "object_id")
         path.write_bytes(content)
+        # Keep content type beside the payload so migrations from metadata-
+        # preserving stores (for example Redis/S3) do not lose it.
+        metadata_path = tenant_dir / f"{filesystem_component(object_id, 'object_id')}.meta.json"
+        metadata_path.write_text(json.dumps({"content_type": content_type}), encoding="utf-8")
         return StoredObject(
             tenant_id=tenant_id,
             object_id=object_id,
@@ -54,11 +60,20 @@ class FileObjectStore:
         tenant_dir = self.root / filesystem_component(tenant_id, "tenant_id")
         if not tenant_dir.exists():
             return []
-        return [
-            StoredObject(tenant_id, path.name, str(path), "application/octet-stream", path.stat().st_size)
-            for path in sorted(tenant_dir.iterdir())
-            if path.is_file()
-        ]
+        result = []
+        for path in sorted(tenant_dir.iterdir()):
+            if not path.is_file() or path.name.endswith(".meta.json"):
+                continue
+            metadata_path = path.with_name(f"{path.name}.meta.json")
+            content_type = "application/octet-stream"
+            if metadata_path.is_file():
+                try:
+                    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                    content_type = str(metadata.get("content_type") or content_type)
+                except (OSError, ValueError, TypeError):
+                    pass
+            result.append(StoredObject(tenant_id, path.name, str(path), content_type, path.stat().st_size))
+        return result
 
 
 class RedisObjectStore:

@@ -3,72 +3,116 @@
 ## 系统架构图
 
 ```mermaid
-flowchart LR
-  IM[企业微信 / 微信公众号 / 微信客服 / Telegram] --> CA[Channel Adapter]
-  CA --> GW[Agent Gateway]
-  ADM[Admin API] --> CFG[Tenant Repository]
+flowchart TB
+  subgraph ING[接入层]
+    direction LR
+    IM[企业微信 / 飞书 / Telegram] --> CA[Channel Adapter]
+    CA --> GW[Agent Gateway]
+    ADM[Admin API] --> CFG[Tenant Repository]
+  end
+
+  subgraph RUN[执行与治理层]
+    direction LR
+    RQ[(Redis Run Queue)] --> W[Agent Worker Pool]
+    W --> F[Tenant Filter]
+    F --> R[SDK Runner / Model]
+    R --> T[Tool / MCP / Knowledge]
+  end
+
+  subgraph DATA[共享状态与存储层]
+    direction LR
+    ST[Storage Adapter] --> RD[(Redis)]
+    ST --> SQL[(PostgreSQL / SQLite)]
+    ST --> VEC[(Vector Store)]
+    ST --> OBJ[(Object Store)]
+    CW[Compensation Worker] --> ST
+  end
+
+  subgraph OUTBOUND[出站与可靠性]
+    direction LR
+    OUT[IM Outbound Delivery] --> DLQ[(Retry / DLQ)]
+  end
+
+  subgraph OBS[可观测性]
+    TEL[OpenTelemetry Collector / Metrics]
+  end
+
   GW --> CFG
-  GW --> RQ[(Redis Run Queue)]
-  RQ --> W[Agent Worker Pool]
-  W --> F[Tenant Filter]
-  W --> R[SDK Runner / Model]
-  R --> T[Tool / MCP / Knowledge]
-  W --> ST[Storage Adapter]
-  CW[Compensation Worker] --> ST
-  ST --> RD[(Redis)]
-  ST --> SQL[(PostgreSQL / SQLite)]
-  ST --> VEC[(Vector Store)]
-  ST --> OBJ[(Object Store)]
-  GW --> OUT[IM Outbound Delivery]
-  OUT --> DLQ[(Retry / DLQ)]
-  CA -. trace_id .-> TEL[OpenTelemetry / Metrics]
+  GW --> RQ
+  W --> ST
+  GW --> OUT
+  CA -. trace_id .-> TEL
   GW -. trace_id .-> TEL
   W -. trace_id .-> TEL
+
+  classDef ingress fill:#e8f1ff,stroke:#2563eb,color:#0f172a,stroke-width:1px
+  classDef platform fill:#ecfdf5,stroke:#059669,color:#0f172a,stroke-width:1px
+  classDef storage fill:#fff7ed,stroke:#ea580c,color:#0f172a,stroke-width:1px
+  classDef delivery fill:#fdf2f8,stroke:#db2777,color:#0f172a,stroke-width:1px
+  classDef observe fill:#f5f3ff,stroke:#7c3aed,color:#0f172a,stroke-width:1px
+  class IM,CA,ADM ingress
+  class GW,CFG,RQ,W,F,R,T,CW platform
+  class ST,RD,SQL,VEC,OBJ storage
+  class OUT,DLQ delivery
+  class TEL observe
 ```
 
 ## 组件协作
 
-`Channel Adapter` 负责企业微信、微信公众号、微信客服、Telegram 和 Web UI 的验签、解密、解析、媒体下载、用户映射和出站投递。微信生态优先用 `wechatpy`，Telegram 优先用 `python-telegram-bot`。
+`Channel Adapter` 负责企业微信、飞书、Telegram 和 Web UI 的验签、解密、解析、媒体下载、用户映射和出站投递。企业微信集成优先用 `wechatpy`，Telegram 优先用 `python-telegram-bot`，飞书优先用 `lark-oapi`（官方 SDK），在 SDK 不可用时降级到 HTTP API。
 
-`Agent Gateway` 接收 `InboundMessage`，按 `channel + account_id` 查 `ChannelBinding`，得到 `tenant_id` 与 `agent_app_id`，生成 `session_id`、`idempotency_key` 和 `trace_id`，预留配额后写入 Redis 队列。`Agent Worker` 加载配置、Session、Memory、Summary，执行 Filter、tRPC-Agent-Python Runner、模型和 Tool/MCP/Knowledge，并写回结果。
+`Agent Gateway` 接收 `InboundMessage`，按 `channel + account_id` 查询 `ChannelBinding` 得到 `tenant_id` 与 `agent_app_id`，生成 `session_id`、`idempotency_key` 和 `trace_id`，预留配额后写入 Redis 队列。`Agent Worker` 加载租户配置、Session、Memory 和 Summary，执行租户 Filter、tRPC-Agent-Python Runner、模型调用和 Tool/MCP/Knowledge 调用，并写回结果。
 
-`Storage Adapter` 屏蔽 InMemory、Redis、SQL、向量库、对象存储和外部 Memory 差异。`Admin API` 管理租户、Agent App、通道绑定、配置版本、发布、灰度和回滚。`Telemetry Collector` 用 `trace_id` 串联 callback、Gateway、Runner、模型、工具、存储和回复。
+`Storage Adapter` 抽象 InMemory、Redis、SQL、向量库、对象存储和外部 Memory 服务的差异。`Admin API` 管理租户、Agent 应用、通道绑定、配置版本、发布、回滚和灰度发布。`Telemetry Collector` 通过 `trace_id` 串联从 IM 回调到 Gateway、Runner、模型、工具、存储直到 IM 回复的完整链路。
 
-## 复用与新增
+## 框架复用与平台扩展
 
-可复用 tRPC-Agent-Python 的 Runner、Session、Memory、Summary、Knowledge、Tool/MCP、Filter、模型 Provider、Agent Event、FastAPI/Web 和 Telemetry。平台层新增 `tenant/` 配置版本与灰度、`gateway/` 路由与队列、`channels/` IM Adapter、`storage/` 多后端与迁移、`policy/`/`security/` 治理脱敏、`admin/` RBAC 和 `deployment/`。框架层负责 Agent 语义，平台层负责租户边界、IM 协议、审计、成本和运维。
+**可复用的 tRPC-Agent-Python 能力**：Runner、Session、Memory、Summary、Knowledge、Tool/MCP、Filter、模型 Provider、Agent Event、FastAPI/Web 和 Telemetry。
 
-运行时边界需要特别说明：平台 `StorageBundle` 是 Session event、state、Memory、Summary、Artifact、Knowledge、Audit 和幂等记录的唯一权威存储。tRPC-Agent-Python Runner 仍然复用 SDK 的 SessionService 接口，但运行时使用的是每次调用创建的临时 InMemory SessionService，且 `include_previous_history=False`；平台已经从共享后端加载并脱敏后的历史会话会显式传入本次 Prompt。这样 Worker 仍可使用 SDK Runner、Tool 和模型编排能力，同时不会在 SDK Redis/SQL 中额外生成一份无法和平台事件对账的 Session。租户的 Redis/SQL Secret Ref 只由 `Storage Adapter` 解析并连接，不再由 SDK 运行时自行读取进程级默认连接串。
+**平台层新增模块**：`tenant/` 配置版本与灰度发布、`gateway/` 路由与队列管理、`channels/` IM 适配器、`storage/` 多后端支持与迁移、`policy/`/`security/` 治理与脱敏、`admin/` RBAC、`deployment/` 生产部署清单。框架层负责 Agent 语义，平台层负责租户边界、IM 协议、审计、成本和运维。
+
+**运行时边界说明**：平台 `StorageBundle` 是 Session 事件/状态、Memory、Summary、Artifact、Knowledge、Audit 和幂等记录的唯一权威存储。tRPC-Agent-Python Runner 仍然复用 SDK 的 SessionService 接口，但运行时使用的是每次调用创建的临时 InMemory SessionService，且设置 `include_previous_history=False`；平台已从共享后端加载并脱敏历史会话后显式传入当前 Prompt。这样 Worker 仍可利用 SDK Runner、Tool 和模型编排能力，同时避免在 SDK Redis/SQL 中额外生成一份无法与平台事件对账的 Session 记录。租户的 Redis/SQL Secret Ref 只由 `Storage Adapter` 解析并连接，不再由 SDK 运行时自行读取进程级默认连接串。
 
 ## 租户模型与隔离
 
-租户配置以不可变版本保存，发布和回滚只切换 active version。最小模型包含 `tenant_id`、应用配置、模型配置、工具权限、IM 通道配置、数据后端配置、审计策略和配额策略。应用配置描述 Agent App、提示词和状态；模型配置保存 provider、model、base_url、timeout、cost 和 `api_key_ref`；工具策略保存 allowlist、denylist、审批和用户权限；通道配置保存 webhook、token/secret 引用、账号和 Agent 绑定；后端配置决定 Session、Memory、Summary、Artifact、Knowledge、Audit Log 的存储。
+租户配置以不可变版本保存，发布和回滚操作只切换 active version 指针。最小模型包含 `tenant_id`、Agent 应用配置、模型配置、工具权限、IM 通道配置、存储后端配置、审计策略和配额策略。应用配置定义应用 ID、提示词和状态；模型配置保存 provider、model、base_url、timeout、cost 和 `api_key_ref`；工具策略保存白名单、黑名单、审批要求和用户权限；通道配置保存 webhook URL、token/secret 引用、账号 ID 和 Agent 绑定；后端配置决定 Session、Memory、Summary、Artifact、Knowledge 和 Audit Log 的存储位置。
 
-隔离规则是：所有存储接口强制传入 `tenant_id`；Redis Key 使用租户前缀；SQL 使用复合主键；向量库使用租户 collection；对象存储使用租户路径；工具执行前经过租户 Filter；日志、Trace、Audit 和错误统一脱敏 Authorization、Token、Secret、手机号、邮箱；配置只保存 `secret://tenant/name/key` 或 `env://NAME`。
+**隔离规则**：所有存储接口强制传入 `tenant_id`；Redis Key 使用租户前缀；SQL 使用复合主键；向量库使用租户作用域的 collection；对象存储使用租户路径；工具执行前经过租户 Filter；日志、Trace、Audit 和错误统一脱敏 Authorization 头、Token、Secret、手机号和邮箱；配置只保存 `secret://tenant/name/key` 或 `env://NAME` 引用。
 
 ## 路由与水平扩展
 
-外部回调不能覆盖租户。Gateway 只信任平台侧 `ChannelBinding`：`channel + account_id -> tenant_id + agent_app_id`。单聊 `session_id` 由 `tenant_id + channel + account_id + user_id + agent_app_id` hash 得到；群聊使用 `group_id/conversation_id` 替代 user 维度，所以跨群、跨租户、跨账号会落到不同 session。
+外部回调不能覆盖租户分配。Gateway 仅信任平台侧 `ChannelBinding`：`channel + account_id -> tenant_id + agent_app_id`。单聊 `session_id` 通过哈希 `tenant_id + channel + account_id + user_id + agent_app_id` 生成；群聊使用 `group_id/conversation_id` 替代 user 维度，确保跨群、跨租户、跨账号的 session 完全隔离。
 
-系统不需要 sticky session。Gateway、Worker、Outbound Worker 不依赖进程内上下文；Session event/state、Memory、Summary、幂等、配额、审计和队列都在共享后端。负载均衡器可把请求发给任意 Gateway，Redis 队列可把任务交给任意健康 Worker。InMemory 仅用于单进程演示。
+**无需 sticky session**：Gateway、Worker 和 Outbound Worker 不依赖进程内上下文。Session 事件/状态、Memory、Summary、幂等记录、配额、审计日志和队列均存储在共享后端。负载均衡器可将请求路由到任意 Gateway；Redis 队列可将任务分派给任意健康 Worker。InMemory 模式仅用于单进程演示。
 
-## 数据一致性与多后端
+## 数据一致性与多后端支持
 
-Session 采用 append-only event + state CAS：Worker 先追加 user/assistant/tool event，再以 `state_version` 乐观锁更新 `session_state.latest_event_seq`。Summary 写入携带 `source_event_seq`，旧摘要不能覆盖新摘要。Memory 写入共享后端后，其他节点下次读取可见；向量索引或外部 Memory 可能有刷新延迟，因此以权威 SQL/Memory 服务保存原文，以向量库作为检索索引。
+Session 采用 append-only 事件 + 状态 CAS：Worker 先追加 user/assistant/tool 事件，再通过 `state_version` 乐观锁更新 `session_state.latest_event_seq`。Summary 写入携带 `source_event_seq` 防止旧摘要覆盖新消息。Memory 写入共享后端后，其他节点在下次读取时可见；向量索引或外部 Memory 服务可能存在刷新延迟，因此权威 SQL/Memory 服务存储原文，向量库作为检索索引。
 
-Redis 适合队列、幂等、锁、热 Session 和配额计数，低延迟但要管理 TTL、内存和 HA。PostgreSQL 适合配置、事件、Memory、Summary、Audit 和补偿任务，事务强一致但要规划连接池、索引和分区。向量库存 Knowledge embedding，通常最终一致。对象存储放图片、文件、长文本 Artifact 和迁移包，SQL 保存 metadata。外部 Memory 服务降低运维但增加网络、限流和合规风险。
+**后端特性**：
+- **Redis**：队列、幂等、锁、热 Session、配额计数器。低延迟但需管理 TTL、内存和高可用。
+- **PostgreSQL**：配置、事件、Memory、Summary、Audit、补偿任务。事务强一致性但需规划连接池、索引和分区。
+- **向量库**：Knowledge embedding，通常最终一致。
+- **对象存储**：图片、文件、长文本 Artifact、迁移包。SQL 存储元数据。
+- **外部 Memory 服务**：降低运维负担但增加网络延迟、限流和合规风险。
 
 ## 治理、监控与恢复
 
-Tenant Filter 执行工具白名单、脱敏、预算限制、危险工具二次确认和 IM 用户权限校验。指标包括请求量、模型耗时、工具耗时、IM 投递成功率、错误率、token 消耗、租户成本和 Session 后端延迟。审计字段包含 `tenant_id`、`channel`、`user_id`、`session_id`、`agent_name`、`tool_name`、`decision`、`latency`、`error_type`、`cost`、`trace_id`。
+**租户 Filter**：执行工具白名单/黑名单、脱敏敏感数据、执行预算限制、危险工具需要审批、校验 IM 用户权限。
 
-重复 IM 投递命中 completed 幂等记录时直接复用结果。Worker 崩溃依赖队列 visibility timeout 重放；模型超时和 429 使用退避、重试和熔断；工具失败写审计和指标；Memory、Summary、Audit 派生写入失败进入 `compensation_task`，由补偿 Worker 重放。灰度发布按 `tenant_id + session_id` 稳定 hash 分流，也支持 session override；回滚只切换租户 active version。
+**监控指标**：请求量、模型延迟、工具执行时长、IM 投递成功率、错误率、token 消耗、租户成本、Session 后端延迟。
+
+**审计字段**：`tenant_id`、`channel`、`user_id`、`session_id`、`agent_name`、`tool_name`、`decision`、`latency`、`error_type`、`cost`、`trace_id`。
+
+**可靠性保障**：重复 IM 投递命中已完成的幂等记录时直接复用结果。Worker 崩溃依赖队列 visibility timeout 进行重放；模型超时和 429 使用退避、重试和熔断；工具失败写入审计和指标；Memory、Summary、Audit 派生写入失败时进入 `compensation_task`，由补偿 Worker 重放。灰度发布使用 `tenant_id + session_id` 的稳定哈希进行流量分流，支持 session 级覆盖；回滚仅切换租户 active version。
 
 ## 部署方案
 
-最小部署使用 Docker Compose：Gateway、两个 Worker、Compensation Worker、Outbound Worker、Redis、PostgreSQL，可选 OpenTelemetry Collector。生产推荐 Kubernetes：Gateway 按 HTTP 并发扩容，Worker 按队列深度扩容，补偿进程独立扩容；Redis/PostgreSQL 高可用；Knowledge 用远端向量库；Artifact 用对象存储；Ingress 配 TLS，密钥交给 ExternalSecret/Vault/KMS。仓库的 `platform.yaml` 现在包含一个可替换 exporter 的 OTEL Collector Deployment/Service，应用通过 `http://otel-collector:4318` 上报；生产应将 debug exporter 替换为 OTLP、Jaeger、Tempo 或云厂商 exporter，并将外部 egress 的 `0.0.0.0/0` 收紧为实际 CIDR。
+**最小部署（Docker Compose）**：Gateway、2 个 Worker、补偿 Worker、出站 Worker、Redis、PostgreSQL，可选 OpenTelemetry Collector。
 
-生产网络策略按 Gateway、Worker、补偿 Worker、出站 Worker、Collector、Redis 和 PostgreSQL 分开选择 Pod，并显式限制共享存储的入站来源，允许 DNS、Collector 与必要的外部 HTTPS。Redis、PostgreSQL、模型、IM、向量库和对象存储如果在集群外，必须把模板中的宽泛外部 CIDR 替换为企业批准的地址段；NetworkPolicy 只解决网络边界，不能替代 Secret Manager、数据库 ACL 和应用层租户鉴权。
+**生产部署（Kubernetes）**：Gateway 根据 HTTP 并发扩容，Worker 根据队列深度扩容，补偿 Worker 独立扩容；Redis/PostgreSQL 高可用；Knowledge 使用外部向量库；Artifact 使用对象存储；Ingress 配置 TLS；密钥从 ExternalSecret/Vault/KMS 获取。仓库的 `platform.yaml` 包含一个可替换 exporter 的 OTEL Collector Deployment/Service；应用通过 `http://otel-collector:4318` 上报。生产环境应将 debug exporter 替换为 OTLP、Jaeger、Tempo 或云厂商 exporter，并将外部 egress 的 `0.0.0.0/0` 收紧为实际 CIDR。
+
+**网络策略**：生产网络策略应按 Gateway、Worker、补偿 Worker、出站 Worker、Collector、Redis 和 PostgreSQL 通过 Pod 选择器分段，显式限制共享存储的入站来源，允许 DNS、Collector 和必要的外部 HTTPS。如果 Redis、PostgreSQL、模型提供商、IM 平台、向量库或对象存储在集群外，必须将模板中宽泛的外部 CIDR 替换为企业批准的地址段。NetworkPolicy 只解决网络边界问题，不能替代 Secret Manager、数据库 ACL 和应用层租户鉴权。
 
 ## 请求生命周期与配置版本
 
@@ -80,7 +124,7 @@ Tenant Filter 执行工具白名单、脱敏、预算限制、危险工具二次
 
 ## IM 协议边界
 
-企业微信和微信公众号都可能通过 XML、Token、AES 加密回调传递消息，但企业微信应用出站需要企业凭据和 Agent ID，公众号出站通常使用 OpenID 和客服消息能力；Telegram 则使用 Bot Token、Webhook Secret、chat_id 和 message_id。Adapter 只负责协议和平台限制，Worker 只接触统一的 `InboundMessage`，避免平台字段进入 Agent 逻辑。回调入口快速完成验签、解密、绑定解析和幂等登记，耗时的 Agent 执行放入 Worker 队列。长文本按账号限制切片，媒体先进入 Artifact Store，回复失败进入指数退避和死信队列；不支持的文件类型必须返回明确失败，不能伪装成已送达。
+企业微信和飞书可能通过 XML/JSON、Token、签名或 AES 加密回调传递消息，Telegram 则使用 Bot Token、Webhook Secret、chat_id 和 message_id。Adapter 只负责协议和平台限制，Worker 只接触统一的 `InboundMessage`，避免平台字段进入 Agent 逻辑。回调入口快速完成验签、解密、绑定解析和幂等登记，耗时的 Agent 执行放入 Worker 队列。长文本按账号限制切片，媒体先进入 Artifact Store，回复失败进入指数退避和死信队列；不支持的文件类型必须返回明确失败，不能伪装成已送达。
 
 ## 容量、成本与安全边界
 

@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Protocol
 
+from trpc_service.security.secrets import redact_secret_data, redact_secret_text
+
 
 def now_utc() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class IdempotencyStatus(StrEnum):
@@ -51,7 +53,7 @@ class MemoryItem:
     created_at: datetime = field(default_factory=now_utc)
 
     @classmethod
-    def from_dict(cls, value: dict[str, Any]) -> "MemoryItem":
+    def from_dict(cls, value: dict[str, Any]) -> MemoryItem:
         item = dict(value)
         if isinstance(item.get("created_at"), str):
             item["created_at"] = datetime.fromisoformat(item["created_at"])
@@ -68,7 +70,7 @@ class Summary:
     created_at: datetime = field(default_factory=now_utc)
 
     @classmethod
-    def from_dict(cls, value: dict[str, Any]) -> "Summary":
+    def from_dict(cls, value: dict[str, Any]) -> Summary:
         item = dict(value)
         if isinstance(item.get("created_at"), str):
             item["created_at"] = datetime.fromisoformat(item["created_at"])
@@ -93,8 +95,14 @@ class AuditRecord:
     metadata: dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=now_utc)
 
+    def __post_init__(self) -> None:
+        """Keep provider errors and metadata safe before any backend persists them."""
+        self.error_type = redact_secret_text(self.error_type) if self.error_type else None
+        sanitized = redact_secret_data(self.metadata)
+        self.metadata = sanitized if isinstance(sanitized, dict) else {}
+
     @classmethod
-    def from_dict(cls, value: dict[str, Any]) -> "AuditRecord":
+    def from_dict(cls, value: dict[str, Any]) -> AuditRecord:
         item = dict(value)
         if isinstance(item.get("created_at"), str):
             item["created_at"] = datetime.fromisoformat(item["created_at"])
@@ -126,6 +134,30 @@ class CompensationTask:
     attempt: int = 0
     available_at: datetime = field(default_factory=now_utc)
     last_error: str | None = None
+    created_at: datetime = field(default_factory=now_utc)
+    updated_at: datetime = field(default_factory=now_utc)
+
+
+@dataclass(slots=True)
+class ToolExecution:
+    """Durable execution ledger entry for one idempotent tool call."""
+
+    tenant_id: str
+    execution_id: str
+    request_id: str
+    session_id: str
+    tool_name: str
+    call_key: str
+    arguments_hash: str
+    side_effect: bool = False
+    status: str = "running"
+    attempt: int = 1
+    fencing_token: int | None = None
+    result: dict[str, Any] | None = None
+    error_type: str | None = None
+    error_message: str | None = None
+    started_at: datetime = field(default_factory=now_utc)
+    completed_at: datetime | None = None
     created_at: datetime = field(default_factory=now_utc)
     updated_at: datetime = field(default_factory=now_utc)
 
@@ -251,3 +283,5 @@ class StorageAdapter(Protocol):
     artifacts: ArtifactStore
     knowledge: KnowledgeStore
     inbox_outbox: Any
+    mailbox: Any
+    tool_governance: Any

@@ -4,14 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from trpc_service.security.secrets import SecretManager
+from trpc_service.storage.external_memory import ExternalMemoryStore
 from trpc_service.storage.in_memory import InMemoryStorage
 from trpc_service.storage.object_store import FileObjectStore, RedisObjectStore, S3ObjectStore
 from trpc_service.storage.redis_store import RedisStorage
+from trpc_service.storage.remote_vector import RemoteVectorStore, resolve_secret
 from trpc_service.storage.sql_store import SQLiteStorage
 from trpc_service.storage.vector_store import LocalVectorStore
-from trpc_service.storage.external_memory import ExternalMemoryStore
-from trpc_service.storage.remote_vector import RemoteVectorStore, resolve_secret
-from trpc_service.security.secrets import SecretManager
 from trpc_service.tenant.models import StorageProfile
 
 
@@ -23,6 +23,9 @@ class StorageBundle:
         summary_backend=None,
         audit_backend=None,
         inbox_outbox=None,
+        mailbox=None,
+        tool_governance=None,
+        migration_control=None,
         knowledge: LocalVectorStore | None = None,
         objects: FileObjectStore | None = None,
         extra_backends: list[object] | None = None,
@@ -39,6 +42,22 @@ class StorageBundle:
 
             self.compensation = InMemoryCompensationStore()
         self.inbox_outbox = inbox_outbox or getattr(structured, "inbox_outbox", None)
+        self.mailbox = mailbox or getattr(structured, "mailbox", None)
+        # Durable Inbox/Outbox and the ordered session mailbox may live on a
+        # different structured backend than the primary session backend (for
+        # example Redis sessions with PostgreSQL coordination state).  Resolve
+        # the mailbox from the first backend that provides it instead of only
+        # inspecting ``structured``.
+        self.session_mailbox_v2 = next(
+            (
+                getattr(backend, "session_mailbox_v2", None)
+                for backend in (structured, memory_backend, summary_backend, audit_backend)
+                if getattr(backend, "session_mailbox_v2", None) is not None
+            ),
+            None,
+        )
+        self.tool_governance = tool_governance or getattr(structured, "tool_governance", None)
+        self.migration_control = migration_control or getattr(structured, "migration_control", None)
         self.knowledge = knowledge or LocalVectorStore()
         self.objects = objects or FileObjectStore()
         self.artifacts = self.objects
@@ -174,6 +193,30 @@ def create_storage(profile: StorageProfile | None = None, data_dir: str | Path =
                 getattr(backend, "inbox_outbox", None)
                 for backend in (session_structured, memory_structured, summary_structured, audit_structured)
                 if getattr(backend, "inbox_outbox", None) is not None
+            ),
+            None,
+        ),
+        mailbox=next(
+            (
+                getattr(backend, "mailbox", None)
+                for backend in (session_structured, memory_structured, summary_structured, audit_structured)
+                if getattr(backend, "mailbox", None) is not None
+            ),
+            None,
+        ),
+        tool_governance=next(
+            (
+                getattr(backend, "tool_governance", None)
+                for backend in (session_structured, memory_structured, summary_structured, audit_structured)
+                if getattr(backend, "tool_governance", None) is not None
+            ),
+            None,
+        ),
+        migration_control=next(
+            (
+                getattr(backend, "migration_control", None)
+                for backend in (session_structured, memory_structured, summary_structured, audit_structured)
+                if getattr(backend, "migration_control", None) is not None
             ),
             None,
         ),

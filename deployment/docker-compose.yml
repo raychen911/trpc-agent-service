@@ -1,5 +1,6 @@
 services:
   gateway:
+    image: ${TRPC_IMAGE:-trpc-agent-service:local}
     build:
       context: ..
     command: uvicorn trpc_service.web.app:app --host 0.0.0.0 --port 8000
@@ -18,7 +19,7 @@ services:
       POSTGRES_DSN: ${POSTGRES_DSN:?set POSTGRES_DSN in .env}
       TENANT_DB_DSN: ${TENANT_DB_DSN:?set TENANT_DB_DSN in .env}
       POSTGRES_RLS_ENABLED: ${POSTGRES_RLS_ENABLED:-0}
-      POSTGRES_AUTO_CREATE_SCHEMA: ${POSTGRES_AUTO_CREATE_SCHEMA:-1}
+      POSTGRES_AUTO_CREATE_SCHEMA: ${POSTGRES_AUTO_CREATE_SCHEMA:-0}
       POSTGRES_RLS_APP_ROLE: ${POSTGRES_RLS_APP_ROLE:-trpc_agent_app}
       POSTGRES_RLS_ADMIN_ROLE: ${POSTGRES_RLS_ADMIN_ROLE:-trpc_agent_admin}
       WORKER_QUEUE_URL: redis://redis:6379/0
@@ -31,6 +32,7 @@ services:
       OUTBOUND_QUEUE_ENABLED: "1"
       OUTBOUND_QUEUE_CONSUMER: "0"
       ADMIN_API_KEY: ${ADMIN_API_KEY:-}
+      PUBLIC_SURFACE_AUTH_REQUIRED: ${PUBLIC_SURFACE_AUTH_REQUIRED:-1}
       DEFAULT_SESSION_BACKEND: redis
       DEFAULT_MEMORY_BACKEND: postgres
       DEFAULT_SUMMARY_BACKEND: postgres
@@ -41,12 +43,23 @@ services:
       OTEL_SERVICE_NAME: trpc-agent-gateway
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       REQUIRE_SHARED_COORDINATION: "1"
-      DURABLE_INBOX_OUTBOX: ${DURABLE_INBOX_OUTBOX:-0}
+      DURABLE_INBOX_OUTBOX: ${DURABLE_INBOX_OUTBOX:-1}
+      SESSION_READY_ASYNC: ${SESSION_READY_ASYNC:-1}
+      SESSION_READY_STREAM: ${SESSION_READY_STREAM:-trpc-agent:session-ready:stream}
       INBOX_LEASE_SECONDS: ${INBOX_LEASE_SECONDS:-180}
+      MAILBOX_LEASE_SECONDS: ${MAILBOX_LEASE_SECONDS:-180}
+      MAILBOX_ORDER_WAIT_SECONDS: ${MAILBOX_ORDER_WAIT_SECONDS:-30}
+      MAILBOX_MAX_ATTEMPTS: ${MAILBOX_MAX_ATTEMPTS:-10}
+      TOOL_APPROVAL_TTL_SECONDS: ${TOOL_APPROVAL_TTL_SECONDS:-600}
       SESSION_LEASE_TTL_SECONDS: ${SESSION_LEASE_TTL_SECONDS:-120}
       REQUIRE_ETAG: ${REQUIRE_ETAG:-0}
     ports:
       - "${GATEWAY_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/livez', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
     volumes:
       - ../data:/app/data
     depends_on:
@@ -58,6 +71,7 @@ services:
         condition: service_completed_successfully
 
   worker:
+    image: ${TRPC_IMAGE:-trpc-agent-service:local}
     build:
       context: ..
     command: python -m trpc_service._cli worker
@@ -75,11 +89,14 @@ services:
       CPA_MAX_OUTPUT_TOKENS: ${CPA_MAX_OUTPUT_TOKENS:-1024}
       REDIS_URL: redis://redis:6379/0
       POSTGRES_DSN: ${POSTGRES_DSN:?set POSTGRES_DSN in .env}
+      POSTGRES_WORKER_DSN: ${POSTGRES_WORKER_DSN:-}
+      POSTGRES_PROCESS_ROLE: worker
       TENANT_DB_DSN: ${TENANT_DB_DSN:?set TENANT_DB_DSN in .env}
       POSTGRES_RLS_ENABLED: ${POSTGRES_RLS_ENABLED:-0}
-      POSTGRES_AUTO_CREATE_SCHEMA: ${POSTGRES_AUTO_CREATE_SCHEMA:-1}
+      POSTGRES_AUTO_CREATE_SCHEMA: ${POSTGRES_AUTO_CREATE_SCHEMA:-0}
       POSTGRES_RLS_APP_ROLE: ${POSTGRES_RLS_APP_ROLE:-trpc_agent_app}
       POSTGRES_RLS_ADMIN_ROLE: ${POSTGRES_RLS_ADMIN_ROLE:-trpc_agent_admin}
+      POSTGRES_RLS_WORKER_ROLE: ${POSTGRES_RLS_WORKER_ROLE:-trpc_worker}
       WORKER_QUEUE_URL: redis://redis:6379/0
       WORKER_QUEUE_TRANSPORT: ${WORKER_QUEUE_TRANSPORT:-list}
       WORKER_STREAM_GROUP: ${WORKER_STREAM_GROUP:-workers}
@@ -96,8 +113,12 @@ services:
       OTEL_SERVICE_NAME: trpc-agent-worker
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       REQUIRE_SHARED_COORDINATION: "1"
-      DURABLE_INBOX_OUTBOX: ${DURABLE_INBOX_OUTBOX:-0}
+      DURABLE_INBOX_OUTBOX: ${DURABLE_INBOX_OUTBOX:-1}
       INBOX_LEASE_SECONDS: ${INBOX_LEASE_SECONDS:-180}
+      MAILBOX_LEASE_SECONDS: ${MAILBOX_LEASE_SECONDS:-180}
+      MAILBOX_ORDER_WAIT_SECONDS: ${MAILBOX_ORDER_WAIT_SECONDS:-30}
+      MAILBOX_MAX_ATTEMPTS: ${MAILBOX_MAX_ATTEMPTS:-10}
+      TOOL_APPROVAL_TTL_SECONDS: ${TOOL_APPROVAL_TTL_SECONDS:-600}
       SESSION_LEASE_TTL_SECONDS: ${SESSION_LEASE_TTL_SECONDS:-120}
     volumes:
       - ../data:/app/data
@@ -113,6 +134,7 @@ services:
         condition: service_completed_successfully
 
   compensation-worker:
+    image: ${TRPC_IMAGE:-trpc-agent-service:local}
     build:
       context: ..
     command: python -m trpc_service._cli compensate --limit 100 --interval 5
@@ -132,7 +154,7 @@ services:
       POSTGRES_DSN: ${POSTGRES_DSN:?set POSTGRES_DSN in .env}
       TENANT_DB_DSN: ${TENANT_DB_DSN:?set TENANT_DB_DSN in .env}
       POSTGRES_RLS_ENABLED: ${POSTGRES_RLS_ENABLED:-0}
-      POSTGRES_AUTO_CREATE_SCHEMA: ${POSTGRES_AUTO_CREATE_SCHEMA:-1}
+      POSTGRES_AUTO_CREATE_SCHEMA: ${POSTGRES_AUTO_CREATE_SCHEMA:-0}
       POSTGRES_RLS_APP_ROLE: ${POSTGRES_RLS_APP_ROLE:-trpc_agent_app}
       POSTGRES_RLS_ADMIN_ROLE: ${POSTGRES_RLS_ADMIN_ROLE:-trpc_agent_admin}
       DEFAULT_SESSION_BACKEND: redis
@@ -159,6 +181,7 @@ services:
         condition: service_completed_successfully
 
   outbound-worker:
+    image: ${TRPC_IMAGE:-trpc-agent-service:local}
     build:
       context: ..
     command: python -m trpc_service._cli outbound
@@ -178,7 +201,7 @@ services:
       POSTGRES_DSN: ${POSTGRES_DSN:?set POSTGRES_DSN in .env}
       TENANT_DB_DSN: ${TENANT_DB_DSN:?set TENANT_DB_DSN in .env}
       POSTGRES_RLS_ENABLED: ${POSTGRES_RLS_ENABLED:-0}
-      POSTGRES_AUTO_CREATE_SCHEMA: ${POSTGRES_AUTO_CREATE_SCHEMA:-1}
+      POSTGRES_AUTO_CREATE_SCHEMA: ${POSTGRES_AUTO_CREATE_SCHEMA:-0}
       POSTGRES_RLS_APP_ROLE: ${POSTGRES_RLS_APP_ROLE:-trpc_agent_app}
       POSTGRES_RLS_ADMIN_ROLE: ${POSTGRES_RLS_ADMIN_ROLE:-trpc_agent_admin}
       DEFAULT_SESSION_BACKEND: redis
@@ -201,6 +224,7 @@ services:
         condition: service_completed_successfully
 
   durable-outbox-worker:
+    image: ${TRPC_IMAGE:-trpc-agent-service:local}
     build:
       context: ..
     command: python -m trpc_service._cli durable-outbox --limit 100 --interval 5
@@ -213,7 +237,7 @@ services:
       POSTGRES_DSN: ${POSTGRES_DSN:?set POSTGRES_DSN in .env}
       TENANT_DB_DSN: ${TENANT_DB_DSN:?set TENANT_DB_DSN in .env}
       POSTGRES_RLS_ENABLED: ${POSTGRES_RLS_ENABLED:-0}
-      POSTGRES_AUTO_CREATE_SCHEMA: ${POSTGRES_AUTO_CREATE_SCHEMA:-1}
+      POSTGRES_AUTO_CREATE_SCHEMA: ${POSTGRES_AUTO_CREATE_SCHEMA:-0}
       POSTGRES_RLS_APP_ROLE: ${POSTGRES_RLS_APP_ROLE:-trpc_agent_app}
       POSTGRES_RLS_ADMIN_ROLE: ${POSTGRES_RLS_ADMIN_ROLE:-trpc_agent_admin}
       DEFAULT_SESSION_BACKEND: redis
@@ -225,6 +249,98 @@ services:
       DURABLE_INBOX_OUTBOX: "1"
       SESSION_LEASE_TTL_SECONDS: ${SESSION_LEASE_TTL_SECONDS:-120}
       OTEL_SERVICE_NAME: trpc-agent-durable-outbox
+      REQUIRE_SHARED_COORDINATION: "1"
+    volumes:
+      - ../data:/app/data
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      sql:
+        condition: service_healthy
+      db-preflight:
+        condition: service_completed_successfully
+
+  session-ready-worker:
+    image: ${TRPC_IMAGE:-trpc-agent-service:local}
+    build:
+      context: ..
+    command: python -m trpc_service._cli session-ready-worker
+    environment:
+      PYTHONPATH: /app
+      TRPC_AGENT_RUNTIME_MODE: ${TRPC_AGENT_RUNTIME_MODE:-trpc}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      CPA_BASE_URL: ${CPA_BASE_URL:-}
+      CPA_MODEL: ${CPA_MODEL:-}
+      CPA_API_KEY_ENV: ${CPA_API_KEY_ENV:-OPENAI_API_KEY}
+      CPA_WIRE_API: ${CPA_WIRE_API:-responses}
+      REDIS_URL: redis://redis:6379/0
+      SESSION_READY_REDIS_URL: redis://redis:6379/0
+      SESSION_READY_STREAM: ${SESSION_READY_STREAM:-trpc-agent:session-ready:stream}
+      SESSION_READY_GROUP: ${SESSION_READY_GROUP:-session-workers}
+      SESSION_READY_MAX_ATTEMPTS: ${SESSION_READY_MAX_ATTEMPTS:-5}
+      SESSION_READY_POLL_SECONDS: ${SESSION_READY_POLL_SECONDS:-1}
+      WORKER_STREAM_RECLAIM_INTERVAL_SECONDS: ${WORKER_STREAM_RECLAIM_INTERVAL_SECONDS:-5}
+      WORKER_VISIBILITY_TIMEOUT_SECONDS: ${WORKER_VISIBILITY_TIMEOUT_SECONDS:-15}
+      POSTGRES_DSN: ${POSTGRES_DSN:?set POSTGRES_DSN in .env}
+      POSTGRES_WORKER_DSN: ${POSTGRES_WORKER_DSN:-}
+      POSTGRES_PROCESS_ROLE: worker
+      TENANT_DB_DSN: ${TENANT_DB_DSN:?set TENANT_DB_DSN in .env}
+      POSTGRES_RLS_ENABLED: ${POSTGRES_RLS_ENABLED:-0}
+      POSTGRES_AUTO_CREATE_SCHEMA: ${POSTGRES_AUTO_CREATE_SCHEMA:-0}
+      POSTGRES_RLS_APP_ROLE: ${POSTGRES_RLS_APP_ROLE:-trpc_agent_app}
+      POSTGRES_RLS_ADMIN_ROLE: ${POSTGRES_RLS_ADMIN_ROLE:-trpc_agent_admin}
+      POSTGRES_RLS_WORKER_ROLE: ${POSTGRES_RLS_WORKER_ROLE:-trpc_worker}
+      DEFAULT_SESSION_BACKEND: redis
+      DEFAULT_MEMORY_BACKEND: postgres
+      DEFAULT_SUMMARY_BACKEND: postgres
+      DEFAULT_KNOWLEDGE_BACKEND: postgres
+      DEFAULT_ARTIFACT_BACKEND: object
+      DEFAULT_AUDIT_BACKEND: postgres
+      SYNC_DEMO_DEFAULT_STORAGE: "1"
+      DURABLE_INBOX_OUTBOX: "1"
+      MAILBOX_LEASE_SECONDS: ${MAILBOX_LEASE_SECONDS:-180}
+      SESSION_LEASE_TTL_SECONDS: ${SESSION_LEASE_TTL_SECONDS:-120}
+      OTEL_SERVICE_NAME: trpc-agent-session-ready-worker
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      REQUIRE_SHARED_COORDINATION: "1"
+    volumes:
+      - ../data:/app/data
+    deploy:
+      replicas: 2
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      sql:
+        condition: service_healthy
+      db-preflight:
+        condition: service_completed_successfully
+
+  mailbox-maintenance:
+    image: ${TRPC_IMAGE:-trpc-agent-service:local}
+    build:
+      context: ..
+    command: python -m trpc_service._cli mailbox-maintenance --limit 100 --interval 5
+    environment:
+      PYTHONPATH: /app
+      REDIS_URL: redis://redis:6379/0
+      POSTGRES_DSN: ${POSTGRES_DSN:?set POSTGRES_DSN in .env}
+      TENANT_DB_DSN: ${TENANT_DB_DSN:?set TENANT_DB_DSN in .env}
+      POSTGRES_RLS_ENABLED: ${POSTGRES_RLS_ENABLED:-0}
+      POSTGRES_AUTO_CREATE_SCHEMA: ${POSTGRES_AUTO_CREATE_SCHEMA:-0}
+      POSTGRES_RLS_APP_ROLE: ${POSTGRES_RLS_APP_ROLE:-trpc_agent_app}
+      POSTGRES_RLS_ADMIN_ROLE: ${POSTGRES_RLS_ADMIN_ROLE:-trpc_agent_admin}
+      DEFAULT_SESSION_BACKEND: redis
+      DEFAULT_MEMORY_BACKEND: postgres
+      DEFAULT_SUMMARY_BACKEND: postgres
+      DEFAULT_KNOWLEDGE_BACKEND: postgres
+      DEFAULT_ARTIFACT_BACKEND: object
+      DEFAULT_AUDIT_BACKEND: postgres
+      SYNC_DEMO_DEFAULT_STORAGE: "1"
+      DURABLE_INBOX_OUTBOX: "1"
+      OTEL_SERVICE_NAME: trpc-agent-mailbox-maintenance
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       REQUIRE_SHARED_COORDINATION: "1"
     volumes:
       - ../data:/app/data
@@ -264,6 +380,7 @@ services:
       retries: 20
 
   db-schema-migration:
+    image: ${TRPC_IMAGE:-trpc-agent-service:local}
     build:
       context: ..
     environment:
@@ -273,8 +390,10 @@ services:
       POSTGRES_RLS_ENABLED: ${POSTGRES_RLS_ENABLED:-0}
       POSTGRES_RLS_APP_ROLE: ${POSTGRES_RLS_APP_ROLE:-trpc_agent_app}
       POSTGRES_RLS_ADMIN_ROLE: ${POSTGRES_RLS_ADMIN_ROLE:-trpc_agent_admin}
+      POSTGRES_RLS_WORKER_ROLE: ${POSTGRES_RLS_WORKER_ROLE:-trpc_worker}
       POSTGRES_RLS_APP_PASSWORD: ${POSTGRES_RLS_APP_PASSWORD:-}
       POSTGRES_RLS_ADMIN_PASSWORD: ${POSTGRES_RLS_ADMIN_PASSWORD:-}
+      POSTGRES_RLS_WORKER_PASSWORD: ${POSTGRES_RLS_WORKER_PASSWORD:-}
     command:
       - /bin/sh
       - -ec
@@ -291,7 +410,8 @@ services:
         if [ -z "$$schema_dsn" ]; then
           schema_dsn="$$POSTGRES_DSN"
         fi
-        python -m trpc_service.migrate schema --backend postgres --sql-dsn "$$schema_dsn"
+        trpc-agent-migrate db upgrade --sql-dsn "$$schema_dsn"
+        trpc-agent-migrate db check --sql-dsn "$$schema_dsn"
         case "$${POSTGRES_RLS_ENABLED:-0}" in
           1|true|TRUE|yes|YES|on|ON)
             python -m trpc_service.migrate rls --sql-dsn "$$schema_dsn" \

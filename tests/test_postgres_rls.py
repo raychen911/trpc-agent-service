@@ -10,6 +10,9 @@ from uuid import uuid4
 from trpc_service.storage.postgres_rls import (
     RLS_TABLES,
     PostgresRLSError,
+    _ensure_login_role,
+    _ensure_worker_role,
+    _identifier,
     apply_rls_migration,
     postgres_tenant_context,
     rls_tenant_method,
@@ -31,9 +34,9 @@ class FakeCursor:
         rendered = str(query)
         self.connection.executed.append((rendered, params))
         if "FROM pg_roles" in rendered:
-            self._result = (False, False, True, False, False, False)
+            self._result = self.connection.role_result
         elif "to_regclass" in rendered:
-            self._result = ("public.table",)
+            self._result = (self.connection.regclass,)
         else:
             self._result = None
 
@@ -45,6 +48,8 @@ class FakeConnection:
     def __init__(self):
         self.executed = []
         self.transactions = []
+        self.role_result = (False, False, True, False, False, False)
+        self.regclass = "public.table"
 
     @contextmanager
     def transaction(self):
@@ -126,6 +131,8 @@ class RLSUnitTests(unittest.TestCase):
                 admin_role="admin_role",
                 app_password="app-password",
                 admin_password="admin-password",
+                worker_role="worker_role",
+                worker_password="worker-password",
             )
 
         grant_statements = [
@@ -133,14 +140,60 @@ class RLSUnitTests(unittest.TestCase):
             for query, _ in connection.executed
             if "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE" in query
         ]
-        self.assertEqual(len(grant_statements), 2)
+        self.assertEqual(len(grant_statements), 3)
         self.assertNotIn("tenant_config", grant_statements[0])
         self.assertNotIn("tenant_active", grant_statements[0])
         self.assertIn("tenant_config", grant_statements[1])
+        self.assertIn("tenant_config", grant_statements[2])
         self.assertTrue(
             any("FORCE ROW LEVEL SECURITY" in query for query, _ in connection.executed)
         )
         self.assertEqual(connection.transactions[-1], "commit")
+
+    def test_rls_role_validation_and_identifiers_fail_closed(self):
+        with self.assertRaises(PostgresRLSError):
+            _identifier("bad-role", "application role")
+        with self.assertRaises(PostgresRLSError):
+            _identifier("", "application role")
+
+        connection = FakeConnection()
+        connection.role_result = None
+        with connection.cursor() as cursor:
+            with self.assertRaises(PostgresRLSError):
+                _ensure_login_role(cursor, "app", None)
+            with self.assertRaises(PostgresRLSError):
+                _ensure_worker_role(cursor, "worker", None)
+
+        connection.role_result = (True, False, True, False, False, False)
+        with connection.cursor() as cursor, self.assertRaises(PostgresRLSError):
+            _ensure_login_role(cursor, "app", "password")
+        connection.role_result = (False, False, True, True, False, False)
+        with connection.cursor() as cursor, self.assertRaises(PostgresRLSError):
+            _ensure_worker_role(cursor, "worker", "password")
+        connection.role_result = (False, False, False, False, False, False)
+        with connection.cursor() as cursor:
+            with self.assertRaises(PostgresRLSError):
+                _ensure_login_role(cursor, "app", "password")
+            with self.assertRaises(PostgresRLSError):
+                _ensure_worker_role(cursor, "worker", "password")
+
+    def test_apply_rls_rejects_role_collisions_and_missing_tables(self):
+        connection = FakeConnection()
+        with self.assertRaises(PostgresRLSError):
+            apply_rls_migration(connection, app_role="same", admin_role="same")
+        with self.assertRaises(PostgresRLSError):
+            apply_rls_migration(connection, app_role="app", admin_role="admin", worker_role="app")
+        connection.regclass = None
+        with self.assertRaises(PostgresRLSError):
+            apply_rls_migration(
+                connection,
+                app_role="app",
+                admin_role="admin",
+                worker_role="worker",
+                app_password="a",
+                admin_password="b",
+                worker_password="c",
+            )
 
 
 @contextmanager
@@ -172,8 +225,10 @@ class PostgresRLSIntegrationTests(unittest.TestCase):
         cls.suffix = uuid4().hex[:12]
         cls.app_role = f"trpc_rls_app_{cls.suffix}"
         cls.admin_role = f"trpc_rls_admin_{cls.suffix}"
+        cls.worker_role = f"trpc_rls_worker_{cls.suffix}"
         cls.app_password = f"app-{uuid4().hex}"
         cls.admin_password = f"admin-{uuid4().hex}"
+        cls.worker_password = f"worker-{uuid4().hex}"
 
         from trpc_service.migrate import ensure_postgres_schema
 
@@ -192,6 +247,8 @@ class PostgresRLSIntegrationTests(unittest.TestCase):
             admin_role=cls.admin_role,
             app_password=cls.app_password,
             admin_password=cls.admin_password,
+            worker_role=cls.worker_role,
+            worker_password=cls.worker_password,
         )
 
         base_info = conninfo.conninfo_to_dict(cls.base_dsn)
@@ -200,6 +257,9 @@ class PostgresRLSIntegrationTests(unittest.TestCase):
         )
         cls.admin_dsn = conninfo.make_conninfo(
             **{**base_info, "user": cls.admin_role, "password": cls.admin_password}
+        )
+        cls.worker_dsn = conninfo.make_conninfo(
+            **{**base_info, "user": cls.worker_role, "password": cls.worker_password}
         )
 
     @classmethod
@@ -219,8 +279,10 @@ class PostgresRLSIntegrationTests(unittest.TestCase):
                     cur.execute(f"ALTER TABLE public.{table} DISABLE ROW LEVEL SECURITY")
                 cur.execute(f'DROP OWNED BY "{cls.app_role}"')
                 cur.execute(f'DROP OWNED BY "{cls.admin_role}"')
+                cur.execute(f'DROP OWNED BY "{cls.worker_role}"')
                 cur.execute(f'DROP ROLE IF EXISTS "{cls.app_role}"')
                 cur.execute(f'DROP ROLE IF EXISTS "{cls.admin_role}"')
+                cur.execute(f'DROP ROLE IF EXISTS "{cls.worker_role}"')
 
     def test_app_role_isolation_and_admin_visibility(self):
         from trpc_service.storage.base import MemoryItem
@@ -232,6 +294,7 @@ class PostgresRLSIntegrationTests(unittest.TestCase):
                 "POSTGRES_RLS_ENABLED": "1",
                 "POSTGRES_AUTO_CREATE_SCHEMA": "0",
                 "POSTGRES_RLS_APP_ROLE": self.app_role,
+                "POSTGRES_RLS_WORKER_ROLE": self.worker_role,
             },
             clear=False,
         ):
@@ -251,6 +314,25 @@ class PostgresRLSIntegrationTests(unittest.TestCase):
                     storage.memory.search("", "adapter-content")
             finally:
                 storage.close()
+
+        with patch.dict(
+            os.environ,
+            {
+                "POSTGRES_RLS_ENABLED": "1",
+                "POSTGRES_AUTO_CREATE_SCHEMA": "0",
+                "POSTGRES_PROCESS_ROLE": "worker",
+                "POSTGRES_RLS_WORKER_ROLE": self.worker_role,
+            },
+            clear=False,
+        ):
+            from trpc_service.storage.postgres_rls import validate_worker_role
+            from trpc_service.storage.postgres_store import PostgresStorage
+
+            worker_storage = PostgresStorage(self.worker_dsn)
+            try:
+                validate_worker_role(worker_storage, expected_role_env="POSTGRES_RLS_WORKER_ROLE")
+            finally:
+                worker_storage.close()
 
         with self.psycopg.connect(self.app_dsn) as app:
             app.autocommit = True
@@ -283,27 +365,24 @@ class PostgresRLSIntegrationTests(unittest.TestCase):
                 cur.execute("SELECT count(*) FROM memory")
                 self.assertEqual(cur.fetchone()[0], 0)
 
-            with (
-                self.assertRaises(self.psycopg.errors.InsufficientPrivilege),
-                app.transaction(),
-                app.cursor() as cur,
-            ):
-                cur.execute("SELECT set_config('app.tenant_id', %s, true)", ("tenant-b",))
-                cur.execute(
-                    """
-                    INSERT INTO memory (
-                      tenant_id, memory_id, scope_key, content, version, metadata_json, created_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
-                    """,
-                    (
-                        "tenant-a",
-                        f"{self.suffix}-b",
-                        "session",
-                        "cross-tenant",
-                        1,
-                        "{}",
-                    ),
-                )
+            with self.assertRaises(self.psycopg.errors.InsufficientPrivilege):
+                with app.transaction(), app.cursor() as cur:
+                    cur.execute("SELECT set_config('app.tenant_id', %s, true)", ("tenant-b",))
+                    cur.execute(
+                        """
+                        INSERT INTO memory (
+                          tenant_id, memory_id, scope_key, content, version, metadata_json, created_at
+                        ) VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                        """,
+                        (
+                            "tenant-a",
+                            f"{self.suffix}-b",
+                            "session",
+                            "cross-tenant",
+                            1,
+                            "{}",
+                        ),
+                    )
 
         with self.psycopg.connect(self.admin_dsn) as admin:
             admin.autocommit = True

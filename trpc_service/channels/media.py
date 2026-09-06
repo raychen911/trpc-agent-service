@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import mimetypes
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Iterator
 from urllib.request import Request, urlopen
 from uuid import uuid4
 
 from trpc_service.channels.base import Attachment
+from trpc_service.security.ssrf import validate_outbound_url
 
 
 @dataclass(slots=True)
@@ -45,11 +47,14 @@ def prepare_attachment_file(
     raw: bytes | None = None
     source = attachment.metadata.get("content_base64")
     if source:
-        raw = base64.b64decode(str(source))
+        try:
+            raw = base64.b64decode(str(source), validate=True)
+        except (binascii.Error, ValueError, TypeError):
+            raise ValueError("attachment base64 content is invalid") from None
     elif attachment.url:
         if str(attachment.url).startswith(("http://", "https://")):
             request = Request(
-                attachment.url,
+                validate_outbound_url(attachment.url),
                 headers={"User-Agent": "trpc-agent-service"},
                 method="GET",
             )
@@ -57,6 +62,10 @@ def prepare_attachment_file(
                 raw = response.read(max_bytes + 1)
         else:
             path = Path(str(attachment.url).removeprefix("file://"))
+            if not path.is_file():
+                raise ValueError("attachment file path is invalid")
+            if path.stat().st_size > max_bytes:
+                raise ValueError("attachment exceeds MAX_ATTACHMENT_BYTES")
             raw = path.read_bytes()
     if raw is None:
         yield None
@@ -102,8 +111,8 @@ def post_multipart_json(
     body = bytearray()
 
     def add_text(name: str, value: str) -> None:
-        body.extend(f"--{boundary}\r\n".encode("utf-8"))
-        body.extend(f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode("utf-8"))
+        body.extend(f"--{boundary}\r\n".encode())
+        body.extend(f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode())
         body.extend(value.encode("utf-8"))
         body.extend(b"\r\n")
 
@@ -112,14 +121,14 @@ def post_multipart_json(
 
     file_bytes = file_path.read_bytes()
     mime = content_type or mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
-    body.extend(f"--{boundary}\r\n".encode("utf-8"))
+    body.extend(f"--{boundary}\r\n".encode())
     body.extend(
-        (f'Content-Disposition: form-data; name="{file_field}"; ' f'filename="{file_path.name}"\r\n').encode("utf-8")
+        (f'Content-Disposition: form-data; name="{file_field}"; ' f'filename="{file_path.name}"\r\n').encode()
     )
-    body.extend(f"Content-Type: {mime}\r\n\r\n".encode("utf-8"))
+    body.extend(f"Content-Type: {mime}\r\n\r\n".encode())
     body.extend(file_bytes)
     body.extend(b"\r\n")
-    body.extend(f"--{boundary}--\r\n".encode("utf-8"))
+    body.extend(f"--{boundary}--\r\n".encode())
 
     request = Request(
         url,

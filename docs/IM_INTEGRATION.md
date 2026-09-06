@@ -1,14 +1,19 @@
 # 真实 IM 联调手册
 
-本项目的 Web UI 只用于本地验证 IM 流程，不替代真实 IM Adapter。真实联调建议
-先选择 Telegram + 企业微信，二者分别验证一个国际 IM 和一个企业 IM。
+本项目当前可部署的通道为 **企业微信智能机器人 `wecom_ai_bot`**、**Feishu**、
+**Telegram** 和本地 **Web UI**。Web UI 只用于本地验证 IM 流程,不替代真实 IM
+Adapter。`wechat_official_account` 与 `wechat_customer_service` 已从默认运行时退役,
+仅保留协议兼容性测试代码。真实联调建议先选择 **企业微信智能机器人 wecom_ai_bot**
+与 **Telegram** 或 **Feishu**,分别验证一个企业 IM 和一个国际/飞书 IM。
+
+**企业微信主验收入口是 wecom_ai_bot(智能机器人 API 模式、BotID + BotSecret 长连接),不是 wecom(传统回调/webhook)。**
 
 ## 1. 公网回调地址
 
 平台服务器不能访问本机的 `127.0.0.1`。真实联调必须满足：
 
 - 服务部署在有公网 HTTPS 域名的服务器；或
-- 使用内网穿透，将本机端口映射为公网 HTTPS 地址。
+- 使用内网穿透,将本机端口映射为公网 HTTPS 地址。
 
 Windows 本地启动并允许隧道访问：
 
@@ -32,11 +37,10 @@ https://im.example.com/webhooks/{channel}/{account_id}
 
 ```text
 https://im.example.com/webhooks/telegram/telegram_bot_1
-https://im.example.com/webhooks/wecom/wecom_app_1
-https://im.example.com/webhooks/wechat_official_account/wechat_official_1
+https://im.example.com/webhooks/feishu/feishu_app_1
 ```
 
-微信和企业微信的 GET 回调校验已经实现，POST 消息回调也使用同一 URL。
+Telegram 和 Feishu 使用 HTTP callback/webhook。企业微信智能机器人 wecom_ai_bot 使用长连接,不需要公网 webhook。传统企业微信回调适配器 wecom 默认禁用,不作为主验收路径。
 
 ## 2. 启动前配置密钥
 
@@ -56,14 +60,21 @@ function New-RandomHex([int]$Length = 32) {
 }
 
 $env:ADMIN_API_KEY = "<new-local-admin-key>"
+$env:WECOM_AI_BOT_ENABLED = "1"
+$env:WECOM_AI_BOT_ACCOUNT_ID = "企业微信智能机器人 BotID"
+$env:WECOM_AI_BOT_SECRET_REF = "secret://tenant_demo/wecom_ai_bot/bot-secret"
+$env:SECRET_TENANT_DEMO_WECOM_AI_BOT_BOT_SECRET = "企业微信智能机器人 BotSecret"
 $env:SECRET_TENANT_DEMO_TELEGRAM_TOKEN = "Telegram BotFather token"
 $env:SECRET_TENANT_DEMO_TELEGRAM_WEBHOOK_SECRET = New-RandomHex
-$env:SECRET_TENANT_DEMO_WECOM_TOKEN = "企业微信回调 Token"
-$env:SECRET_TENANT_DEMO_WECOM_AES_KEY = "企业微信 EncodingAESKey"
-$env:SECRET_TENANT_DEMO_WECOM_CORP_SECRET = "企业微信自建应用 Secret"
+$env:SECRET_TENANT_DEMO_FEISHU_APP_ID = "飞书应用 AppID"
+$env:SECRET_TENANT_DEMO_FEISHU_APP_SECRET = "飞书应用 AppSecret"
+$env:SECRET_TENANT_DEMO_FEISHU_ENCRYPT_KEY = "飞书 Encrypt Key"
+$env:SECRET_TENANT_DEMO_FEISHU_VERIFICATION_TOKEN = "飞书 Verification Token"
 ```
 
 不要把真实 token、secret 写入 Git、租户 JSON、日志或截图。
+
+企业微信智能机器人从企业微信工作台 -> 智能机器人 -> API 模式创建后,可以直接获取 BotID 和 BotSecret;不需要配置 webhook,改用长连接模式接收消息。
 
 ## 3. 创建并发布 Telegram 绑定
 
@@ -129,7 +140,11 @@ Telegram webhook -> TelegramAdapter -> Gateway -> Worker -> Session/Memory
 Telegram webhook 的 Header `X-Telegram-Bot-Api-Secret-Token` 会被 Adapter 校验，
 不会写入业务事件。
 
-## 4. 创建并发布企业微信绑定
+## 4. 传统企业微信应用回调（兼容性路径，非默认）
+
+本节只用于验证遗留的企业微信自建应用回调适配器。它不是当前默认运行路径；
+默认企业微信验收使用前面的 `wecom_ai_bot` 长连接。执行本节前必须设置
+`ENABLE_LEGACY_WECOM=1`，否则服务会拒绝 `channel=wecom`。
 
 在企业微信管理后台创建自建应用，准备：
 
@@ -209,9 +224,11 @@ EncodingAESKey:   与 SECRET_TENANT_DEMO_WECOM_AES_KEY 相同
 不要在 `config.webhook_url` 中保存带 `key=` 的真实 URL；租户配置校验会拒绝
 这类明文密钥 URL。
 
-## 5. 微信公众号可选联调
+## 5. 微信公众号兼容性测试（非默认运行路径）
 
-微信公众号使用同一个 webhook 模式。绑定配置需要：
+微信公众号适配器保留用于协议解析和兼容性测试，但已从默认运行时注册表退役。
+本节配置不能作为当前项目的默认复现路径；默认 reviewer 流程请使用
+`wecom_ai_bot`、`feishu`、`telegram` 或 `web`。
 
 ```json
 {
@@ -250,8 +267,7 @@ https://im.example.com/webhooks/wechat_official_account/wechat_official_1
 
 - Telegram：支持 `photo`、`document`、`voice`。服务通过 `file_id` 调用 `getFile`，再下载 `file_path` 对应的文件内容。真实联调必须配置 `token_ref` 指向 Bot Token。
 - 企业微信：支持 `MsgType=image` 的 `PicUrl` / `MediaId`，以及带 `MediaId` 或 `FileId` 的文件类消息。服务优先使用 `media_id` 走 `/cgi-bin/media/get` 下载。
-- 微信公众号：支持 `MsgType=image` 的 `PicUrl` / `MediaId`，其他带 `MediaId` 的消息会作为文件类附件归一化。
-- 微信客服：支持图片类 `MediaId` 入站；出站仍按平台能力限制，图片可发，普通文件会明确失败。
+- 微信公众号和微信客服：遗留适配器支持针对性协议/媒体测试，但不属于默认运行路径。
 - Web UI IM：支持本地上传文件和图片，直接以 `content_base64` 进入同一条 Artifact 持久化链路，用于本地验证附件流程。
 
 租户可配置 `attachment_host_allowlist` 允许普通 HTTPS URL 下载；平台专用的 `file_id` / `media_id` 下载不依赖该 allowlist，但仍受 `MAX_ATTACHMENT_BYTES` 限制。落库后会移除 `content_base64` 和临时 URL，避免把大文件和敏感短链写进 Session event。出站文本按 `max_message_length` 分片、按账号 QPS 限流并进入重试/DLQ。
@@ -259,10 +275,10 @@ https://im.example.com/webhooks/wechat_official_account/wechat_official_1
 出站媒体能力按平台区分：
 
 - Telegram：SDK 和 HTTP 两条路径均支持图片和普通文件，分别调用 `send_photo` 和 `send_document`。
-- 企业微信应用：通过临时素材上传后发送图片或文件；`wechatpy.enterprise` 上传时传入二进制文件对象。
-- 企业微信机器人 webhook：支持图片；不支持原生文件消息，文件会明确失败。
-- 微信公众号：通过临时素材上传后发送图片；客服消息接口不提供原生文件消息，文件会明确失败。
-- 微信客服：通过临时素材上传后发送图片；客服消息接口不提供原生文件消息，文件会明确失败。
+- 传统企业微信应用：通过临时素材上传后发送图片或文件；`wechatpy.enterprise`
+  上传时传入二进制文件对象。
+- 企业微信智能机器人：媒体能力取决于可选 SDK 和提供商协议。
+- 微信公众号和微信客服：仅保留兼容性适配器及针对性测试，不属于默认运行路径。
 
 所有已支持的外部媒体发送都复用 `10 MB` 大小限制、账号限流、指数退避重试和死信记录。平台不支持的原生媒体类型会返回失败并进入重试/DLQ 流程，不会伪装成文本成功。
 
@@ -281,8 +297,7 @@ $env:VALIDATE_SECRETS = "1"
 - `VALIDATE_SECRETS=1` 时会真实解析引用，提前发现环境变量、Vault 或密钥系统缺项。
 - Telegram 必须配置 Bot Token 和 webhook secret。
 - 企业微信必须配置 `corp_id`、`agent_id`、`corp_secret_ref`、回调 `token_ref`、`aes_key_ref`。
-- 微信公众号必须配置 `app_id`、`app_secret_ref`、回调 `token_ref`、`aes_key_ref`。
-- 微信客服必须配置 `access_token_ref` 或 `token_ref`，加密回调场景还应配置 `aes_key_ref`。
+- 微信公众号和微信客服配置只适用于遗留适配器的兼容性测试，不属于默认发布路径。
 
 真实联调不建议承诺代码层面百分百保证。最终通过率还取决于公网 HTTPS、平台后台权限、账号白名单、回调加密模式、平台频率限制和素材接口权限。当前代码已覆盖协议解析、验签、媒体下载、Artifact 落库、幂等、重试、DLQ 和密钥脱敏；剩余风险应通过真实账号 smoke test 消除。
 
@@ -299,7 +314,7 @@ $env:VALIDATE_SECRETS = "1"
 - Worker 完成模型调用并写入 Session / Memory。
 - Adapter 使用 SDK 发送回复。
 - Telegram 发送图片、文件、语音后，Session event 中附件包含 `artifact_id`。
-- 企业微信或微信公众号发送图片后，`MediaId` 能下载并写入 Artifact。
+- 已启用的企业微信智能机器人、飞书或 Telegram 通道发送/接收媒体后，媒体能下载并写入 Artifact；微信公众号和微信客服仅在显式兼容性测试中验证。
 - Web UI 上传图片和文件后，也走同一条 Artifact 持久化链路。
 - `/metrics` 中能看到请求、模型、投递和错误指标。
 - 失败时能在 `data/dead-letter/` 或配置的存储后端看到重试/死信记录。
@@ -307,7 +322,7 @@ $env:VALIDATE_SECRETS = "1"
 
 ## 9. 撤回与失败重试
 
-Adapter 会把企业微信、微信公众号、微信客服、Telegram 或 Web UI 中的 `Event`、`event`、`ChangeType`、`action`、`event_type`、`MsgType` 统一归一化。`revoke`、`withdraw`、`recall`、`delete`、`message_revoke` 会进入撤回分支，`target_message_id`、`revoke_message_id`、`withdraw_message_id`、`MsgId`、`message_id` 会被识别为被撤回消息。
+Adapter 会把已启用通道以及遗留兼容适配器中的 `Event`、`event`、`ChangeType`、`action`、`event_type`、`MsgType` 统一归一化。`revoke`、`withdraw`、`recall`、`delete`、`message_revoke` 会进入撤回分支，`target_message_id`、`revoke_message_id`、`withdraw_message_id`、`MsgId`、`message_id` 会被识别为被撤回消息。
 
 企业微信和微信公众号通常通过 XML/加密 XML 回调携带 `Event` 或 `ChangeType`，Telegram 更常见的是编辑、删除或业务侧模拟事件，Web UI/JSON 调试可直接传 `normalized_event_type=revoke`。撤回不物理删除历史消息和审计，只追加不可变事件，避免合规链路断裂。IM 平台重复投递撤回事件时仍使用 `tenant_id + channel + account_id + external_message_id` 幂等去重。
 

@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import types
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import RLock
 from unittest.mock import patch
@@ -12,18 +13,18 @@ from unittest.mock import patch
 os.environ.setdefault("TRPC_AGENT_NO_AUTO_APP", "1")
 
 from trpc_service.channels.base import InboundMessage
+from trpc_service.gateway.redis_streams import RedisStreamsTransport
 from trpc_service.gateway.router import AgentGateway
+from trpc_service.storage.base import IdempotencyRecord, IdempotencyStatus, SessionEvent
 from trpc_service.storage.durable import (
     DurableOutboxDispatcher,
-    InMemoryInboxOutbox,
     InboxStatus,
+    InMemoryInboxOutbox,
     OutboxStatus,
 )
-from trpc_service.storage.base import SessionEvent
 from trpc_service.storage.in_memory import InMemoryStorage
 from trpc_service.storage.locking import SessionLeaseLost
 from trpc_service.storage.sql_store import SQLiteStorage
-from trpc_service.gateway.redis_streams import RedisStreamsTransport
 from trpc_service.tenant.models import default_demo_config
 from trpc_service.tenant.repository import (
     InMemoryTenantRepository,
@@ -34,6 +35,32 @@ from trpc_service.tenant.service import TenantConfigConflict, TenantService
 
 
 class ReliabilityTests(unittest.TestCase):
+    def test_redis_idempotency_updates_keep_a_ttl(self):
+        from trpc_service.storage.redis_store import RedisStorage
+
+        class FakeRedis:
+            def __init__(self):
+                self.calls = []
+
+            def set(self, *args, **kwargs):
+                self.calls.append((args, kwargs))
+
+        storage = RedisStorage.__new__(RedisStorage)
+        storage.client = FakeRedis()
+        storage.prefix = "test"
+        storage.idempotency_ttl = 123
+        record = IdempotencyRecord(
+            "tenant",
+            "request",
+            IdempotencyStatus.COMPLETED,
+            response_ref="response",
+            result={"ok": True},
+        )
+
+        storage._save_idempotency(record)
+
+        self.assertEqual(storage.client.calls[0][1]["ex"], 123)
+
     def test_postgres_json_readers_accept_driver_return_variants(self):
         from trpc_service.storage.durable import _json_object
 
@@ -91,7 +118,7 @@ class ReliabilityTests(unittest.TestCase):
             first.session_id,
             first.owner,
             first.fencing_token,
-            datetime.now(timezone.utc) - timedelta(seconds=1),
+            datetime.now(UTC) - timedelta(seconds=1),
         )
         second = storage.session.acquire_session_lease("tenant", "session", timeout=0)
         self.assertGreater(second.fencing_token, first.fencing_token)
@@ -108,7 +135,7 @@ class ReliabilityTests(unittest.TestCase):
             first.session_id,
             first.owner,
             first.fencing_token,
-            datetime.now(timezone.utc) - timedelta(seconds=1),
+            datetime.now(UTC) - timedelta(seconds=1),
         )
         second = storage.session.acquire_session_lease("tenant", "session", timeout=0)
         event = SessionEvent(
@@ -491,6 +518,50 @@ class ReliabilityTests(unittest.TestCase):
         outbound._move_to_processing = lambda _timeout: "task-1"
         self.assertTrue(outbound.consume_once(lambda _item: None, timeout=0))
         self.assertIn("malformed outbound payload", outbound.client.dead_letters[0][1])
+
+    def test_durable_webhook_status_records_completion_without_answer_content(self):
+        class FakeRedis:
+            def __init__(self):
+                self.values = {}
+                self.items = []
+
+            def rpush(self, _key, value):
+                self.items.append(value)
+
+            def setex(self, key, _ttl, value):
+                self.values[key] = value
+
+            def get(self, key):
+                return self.values.get(key)
+
+            def lrem(self, *_args):
+                return 1
+
+            def hdel(self, *_args):
+                return 1
+
+            def hget(self, *_args):
+                return None
+
+        from trpc_service.gateway.worker_queue import DurableWebhookQueue
+
+        queue = DurableWebhookQueue.__new__(DurableWebhookQueue)
+        queue.client = FakeRedis()
+        queue.queue_key = "webhook:queue"
+        queue.processing_key = "webhook:processing"
+        queue.processing_meta_key = "webhook:processing-meta"
+        queue.dead_letter_key = "webhook:dead-letter"
+        queue.status_prefix = "webhook:status:"
+        queue.requeue_stale = lambda: 0
+        queue._claim = lambda _timeout: queue.client.items.pop(0)
+        queue._start_heartbeat = lambda _task_id: types.SimpleNamespace(set=lambda: None)
+        task_id = queue.submit("telegram", "account", {"text": "hello"}, None, tenant_id="tenant")
+        self.assertTrue(queue.consume_once(lambda _item: {"ok": True, "answer": "private answer"}, timeout=0))
+        status = queue.status(task_id)
+        self.assertEqual(status["status"], "completed")
+        self.assertEqual(status["tenant_id"], "tenant")
+        self.assertEqual(status["result"]["answer_length"], len("private answer"))
+        self.assertNotIn("private answer", str(status))
 
 
 if __name__ == "__main__":

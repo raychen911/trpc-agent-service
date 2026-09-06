@@ -6,10 +6,10 @@ import hashlib
 import os
 from urllib.parse import parse_qsl, urlsplit
 
+from trpc_service.security.identifiers import validate_identifier
+from trpc_service.security.secrets import SecretManager
 from trpc_service.tenant.models import ChannelBinding, TenantConfig, TenantStatus
 from trpc_service.tenant.repository import TenantRepository, TenantRepositoryConflict
-from trpc_service.security.secrets import SecretManager
-from trpc_service.security.identifiers import validate_identifier
 
 
 class TenantValidationError(ValueError):
@@ -34,6 +34,10 @@ class TenantService:
             raise TenantValidationError(str(exc)) from exc
         if not config.apps:
             raise TenantValidationError("at least one agent app is required")
+        try:
+            config.immutable_snapshot()
+        except (TypeError, ValueError, KeyError) as exc:
+            raise TenantValidationError("tenant configuration is not a strict JSON object") from exc
         app_ids = {app.agent_app_id for app in config.apps}
         if len(app_ids) != len(config.apps):
             raise TenantValidationError("agent_app_id must be unique per tenant")
@@ -51,6 +55,10 @@ class TenantService:
                 raise TenantValidationError(str(exc)) from exc
             if binding.tenant_id != config.tenant_id:
                 raise TenantValidationError("channel binding tenant_id mismatch")
+            if binding.channel in {"wechat_customer_service", "wechat_official_account"}:
+                raise TenantValidationError(
+                    f"channel is retired and no longer supported: {binding.channel}"
+                )
             if binding.agent_app_id not in app_ids:
                 raise TenantValidationError(f"channel binding targets missing app: {binding.agent_app_id}")
             self._reject_plaintext_secrets(binding.config)
@@ -60,7 +68,7 @@ class TenantService:
                     raise TenantValidationError("channel secrets must be stored as secret:// references")
                 if secret_field and os.getenv("VALIDATE_SECRETS", "0") == "1":
                     self.secrets.validate(secret_field)
-        all_active = getattr(self.repository, "all_active", lambda: [])()
+        all_active = getattr(self.repository, "all_active", list)()
         for other in all_active:
             if other.tenant_id == config.tenant_id:
                 continue
@@ -78,6 +86,23 @@ class TenantService:
                 raise TenantValidationError("model provider and model are required")
         if config.quota_policy.qps_limit <= 0:
             raise TenantValidationError("qps_limit must be positive")
+        for app in config.apps:
+            policy = app.tool_policy
+            risk_values = set(policy.risk_levels.values())
+            if not risk_values.issubset({"low", "medium", "high", "critical"}):
+                raise TenantValidationError("tool risk levels must be low, medium, high, or critical")
+            if not set(policy.require_confirmation_for_risk).issubset(
+                {"low", "medium", "high", "critical"}
+            ):
+                raise TenantValidationError("tool confirmation risk levels are invalid")
+            if policy.max_calls_per_request <= 0:
+                raise TenantValidationError("tool max_calls_per_request must be positive")
+            if policy.max_side_effect_calls_per_request < 0:
+                raise TenantValidationError("tool max_side_effect_calls_per_request cannot be negative")
+            if policy.max_side_effect_calls_per_request > policy.max_calls_per_request:
+                raise TenantValidationError(
+                    "tool max_side_effect_calls_per_request cannot exceed max_calls_per_request"
+                )
         for field, value in (
             ("storage_profile.redis_url", config.storage_profile.redis_url),
             ("storage_profile.sql_dsn", config.storage_profile.sql_dsn),
@@ -147,22 +172,18 @@ class TenantService:
         if channel == "telegram":
             self._require(binding.token_ref, "telegram.token_ref")
             self._require(binding.secret_ref, "telegram.secret_ref")
+        elif channel == "feishu":
+            self._require(binding.account_id, "feishu.account_id")
+            self._require(config.get("app_secret_ref"), "feishu.config.app_secret_ref")
+            self._require(binding.token_ref, "feishu.token_ref")
+        elif channel == "wecom_ai_bot":
+            self._require(config.get("bot_secret_ref") or binding.secret_ref, "wecom_ai_bot.bot_secret_ref")
         elif channel == "wecom":
             self._require(config.get("corp_id") or config.get("corpid"), "wecom.config.corp_id")
             self._require(config.get("agent_id"), "wecom.config.agent_id")
             self._require(config.get("corp_secret_ref"), "wecom.config.corp_secret_ref")
             self._require(binding.token_ref, "wecom.token_ref")
             self._require(config.get("aes_key_ref"), "wecom.config.aes_key_ref")
-        elif channel == "wechat_official_account":
-            self._require(config.get("app_id") or config.get("appid"), "wechat_official_account.config.app_id")
-            self._require(config.get("app_secret_ref"), "wechat_official_account.config.app_secret_ref")
-            self._require(binding.token_ref, "wechat_official_account.token_ref")
-            self._require(config.get("aes_key_ref"), "wechat_official_account.config.aes_key_ref")
-        elif channel == "wechat_customer_service":
-            self._require(
-                config.get("access_token_ref") or binding.token_ref,
-                "wechat_customer_service.access_token_ref or token_ref",
-            )
 
     @staticmethod
     def _require(value: object, field: str) -> None:
@@ -244,7 +265,7 @@ class TenantService:
 
     @staticmethod
     def _bucket(tenant_id: str, route_key: str) -> int:
-        digest = hashlib.sha256(f"{tenant_id}:{route_key}".encode("utf-8")).hexdigest()
+        digest = hashlib.sha256(f"{tenant_id}:{route_key}".encode()).hexdigest()
         return int(digest[:8], 16) % 100
 
     def add_channel_binding(

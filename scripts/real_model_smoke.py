@@ -10,8 +10,8 @@ import argparse
 import json
 import os
 import sys
-from time import monotonic
 from pathlib import Path
+from time import monotonic
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 

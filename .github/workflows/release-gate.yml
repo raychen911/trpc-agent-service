@@ -1,0 +1,87 @@
+name: release-gate
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - main
+      - "feature/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  reliability:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: trpc_agent
+          POSTGRES_PASSWORD: ci-migration-password
+          POSTGRES_DB: trpc_agent
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U trpc_agent -d trpc_agent"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.17"
+          enable-cache: true
+      - name: Install locked dependencies
+        run: uv sync --locked --extra dev
+      - name: Run quality gate
+        run: uv run python scripts/quality_gate.py --unittest --output data/ci-release-rehearsal/quality-report.json
+      - name: Build release evidence rehearsal
+        run: |
+          uv run python scripts/release_rehearsal.py \
+            --output data/ci-release-rehearsal \
+            --quality-report data/ci-release-rehearsal/quality-report.json
+      - name: Verify release evidence rehearsal
+        env:
+          TRPC_RELEASE_CONTEXT: data/ci-release-rehearsal/release-context.json
+          TRPC_CANDIDATE_LOCK: data/ci-release-rehearsal/candidate-lock.json
+          TRPC_RELEASE_TRUST_KEY: data/ci-release-rehearsal/release-trust-key.json
+          TRPC_SUPPLY_CHAIN_REPORT: data/ci-release-rehearsal/supply-chain.json
+          TRPC_RELEASE_MANIFEST: data/ci-release-rehearsal/release-manifest.json
+        run: uv run python -c "from scripts.release_gate import _evidence_gate; import json; result = _evidence_gate(False); print(json.dumps(result, indent=2)); raise SystemExit(1 if result['status'] == 'fail' else 0)"
+      - name: Run security and supply-chain gate
+        run: uv run python scripts/security_gate.py
+      - name: Run production release gate
+        run: uv run python scripts/release_gate.py
+      - name: Verify installed CLI entry points
+        run: |
+          uv run trpc-agent --help
+          uv run trpc-agent-migrate --help
+      - name: Verify PostgreSQL migrations
+        env:
+          DATABASE_MIGRATION_TEST_DSN: postgresql://trpc_agent:ci-migration-password@127.0.0.1:5432/trpc_agent
+        run: uv run python scripts/database_migration_gate.py --allow-destructive
+      - name: Build Python distribution
+        run: uv build
+      - name: Validate Kubernetes render
+        uses: azure/setup-kubectl@v4
+      - run: kubectl kustomize deployment/kubernetes >/tmp/trpc-agent-rendered.yaml
+      - run: test -s /tmp/trpc-agent-rendered.yaml
+      - name: Upload release evidence rehearsal
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-evidence-rehearsal
+          path: data/ci-release-rehearsal/
+          if-no-files-found: error

@@ -72,6 +72,8 @@ idempotency_key = hash(tenant_id + channel + account_id + external_message_id)
 
 `trpc_service.migrate` 命令提供导出、导入、导入后校验和切换计划能力。迁移期间必须保留旧配置版本，回滚时只切换 active version 指针。迁移窗口可设置 `MIGRATION_DUAL_WRITE_BACKEND=sql`，由 `TenantStorageManager` 为租户建立主后端与目标后端的同步写入、主读和目标回退；双写任一侧失败会让本次请求失败并由消息幂等键重试，避免“主成功、目标静默丢失”。迁移完成后删除该环境变量，发布新的租户配置版本切换权威后端。
 
+迁移 CLI 的结构化快照命令当前支持 `memory`、`redis`、`sql` 和 `postgres` 后端；不要把 `qdrant`、`s3`、`oss` 或 `minio` 直接作为 `--backend` 参数，否则 CLI 会按设计返回无效选项错误。远端向量库和对象存储通过租户 `StorageProfile` 配置，由对应 Adapter 执行写入、读取和重建：向量库迁移采用“权威文本导出后重新 embedding/upsert，再抽样 top-k 校验”，对象存储迁移采用“按租户前缀复制对象并校验元数据/校验和”。这两类真实供应商迁移需要目标服务、凭据和供应商侧权限，当前仓库提供适配器和策略，不宣称已在外部 Qdrant/S3/OSS/MinIO 上完成实测。
+
 ```bash
 python -m trpc_service.migrate export --tenant tenant_demo --backend redis --redis-url redis://localhost:6379/0 --output tenant_demo.json
 python -m trpc_service.migrate import --backend sql --sql-dsn sqlite:///data/target.sqlite3 --input tenant_demo.json
@@ -109,6 +111,10 @@ Redis 适合低延迟和原子计数，但持久性和查询能力弱于 SQL。P
 
 ## PostgreSQL RLS migration
 
+PostgreSQL Schema 版本由 Alembic 管理，和本文件描述的租户数据后端切换相互独立。
+升级、检查、已有数据库接管和降级保护见
+仓库中的 Alembic 脚本和 `scripts/database_migration_gate.py` 负责升级、检查、已有数据库接管和降级保护。
+
 RLS is a production hardening option, not a requirement for the local demo.
 Run the normal PostgreSQL schema migration with a dedicated schema-owner
 connection first, then run the `rls` migration to create least-privilege
@@ -119,4 +125,4 @@ the runtime DSNs and must never use the schema-owner DSN.
 The RLS policy is a second boundary. Existing explicit `tenant_id` predicates,
 Redis tenant prefixes, object-store paths, vector collection scopes, and
 authorization checks remain required. See
-[POSTGRES_RLS.md](./POSTGRES_RLS.md) for the exact deployment sequence.
+PostgreSQL RLS 的角色、策略和验证由 `tests/test_postgres_rls.py` 覆盖，部署时按数据库迁移脚本执行。

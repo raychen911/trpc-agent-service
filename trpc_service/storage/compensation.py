@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
-from datetime import datetime, timedelta
 import json
 import os
+from copy import deepcopy
+from datetime import datetime, timedelta
 from threading import RLock
 from uuid import uuid4
 
 from trpc_service.security.secrets import redact_secret_text
 from trpc_service.storage.base import CompensationTask, now_utc
+from trpc_service.storage.retry import retry_delay_seconds
 
 
 def _task_from_dict(value: dict) -> CompensationTask:
@@ -101,6 +102,20 @@ class InMemoryCompensationStore:
                 task.available_at = now_utc() + timedelta(seconds=retry_after_seconds)
                 task.updated_at = now_utc()
 
+    def replay(self, task_id, tenant_id=None):
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if task is None or (tenant_id is not None and task.tenant_id != tenant_id):
+                raise KeyError("compensation task was not found")
+            if task.status != "dead":
+                raise ValueError("only dead compensation tasks can be replayed")
+            task.status = "pending"
+            task.attempt = 0
+            task.available_at = now_utc()
+            task.last_error = None
+            task.updated_at = now_utc()
+            return deepcopy(task)
+
 
 def apply_compensation_task(storage, task: CompensationTask) -> None:
     """Apply one task using the same tenant-scoped StorageBundle interfaces."""
@@ -128,9 +143,18 @@ def replay_compensations(storage, limit=20, tenant_id=None) -> int:
         try:
             apply_compensation_task(storage, task)
         except Exception as exc:
+            delay = retry_delay_seconds(
+                task.attempt,
+                identity=task.task_id,
+                base_env="COMPENSATION_RETRY_BASE_SECONDS",
+                cap_env="COMPENSATION_RETRY_MAX_SECONDS",
+                default_base=5,
+                default_cap=300,
+            )
             storage.compensation.fail(
                 task.task_id,
                 f"{type(exc).__name__}: {exc}",
+                retry_after_seconds=delay,
                 tenant_id=task.tenant_id,
             )
         else:
@@ -253,6 +277,26 @@ class RedisCompensationStore:
                     ensure_ascii=False,
                 ),
             )
+
+    def replay(self, task_id, tenant_id=None):
+        raw = self.client.hget(self.data_key, task_id)
+        if not raw:
+            raise KeyError("compensation task was not found")
+        task = _decode_task(raw)
+        if tenant_id is not None and task.tenant_id != tenant_id:
+            raise KeyError("compensation task was not found")
+        if task.status != "dead":
+            raise ValueError("only dead compensation tasks can be replayed")
+        task.status = "pending"
+        task.attempt = 0
+        task.available_at = now_utc()
+        task.last_error = None
+        task.updated_at = now_utc()
+        self.client.hset(self.data_key, task_id, json.dumps(_task_dict(task)))
+        self.client.lrem(self.processing_key, 0, task_id)
+        self.client.hdel(self.processing_meta_key, task_id)
+        self.client.rpush(self.queue_key, task_id)
+        return task
 
     def requeue_stale(self) -> int:
         """Recover compensation tasks abandoned by a crashed process."""

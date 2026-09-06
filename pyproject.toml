@@ -1,0 +1,102 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trpc-agent-service"
+version = "0.1.0"
+description = "Production-oriented multi-tenant tRPC Agent service"
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [{ name = "tRPC Agent Service contributors" }]
+dependencies = [
+  "alembic>=1.16,<2",
+  "fastapi>=0.115",
+  "pydantic>=2.9,<3",
+  "uvicorn[standard]>=0.30",
+  "redis>=5.0",
+  "SQLAlchemy>=2.0,<3",
+  "psycopg[binary]>=3.2",
+  "prometheus-client>=0.20",
+  "opentelemetry-api>=1.26",
+  "opentelemetry-sdk>=1.26",
+  "opentelemetry-exporter-otlp-proto-http>=1.26",
+  "cryptography>=43.0",
+  "httpx>=0.27",
+  "python-telegram-bot>=22.8,<23",
+  "wechatpy>=1.8.18,<1.9",
+  "lark-oapi>=1.3.22",
+  "boto3>=1.35",
+  "PyYAML>=6.0",
+  "trpc-agent-py==1.1.19",
+]
+
+[project.optional-dependencies]
+dev = [
+  "coverage>=7.6,<8",
+  "flake8>=7.1,<8",
+  "pytest>=8.3,<9",
+  "pytest-asyncio>=0.24,<1",
+  "pytest-cov>=6,<8",
+  "mypy>=1.13,<2",
+  "testcontainers>=4,<5",
+  "ruff>=0.6,<1",
+]
+
+[project.scripts]
+trpc-agent = "trpc_service._cli:main"
+trpc-agent-migrate = "trpc_service.migrate:main"
+
+[tool.setuptools.packages.find]
+include = ["trpc_service*"]
+
+[tool.setuptools.package-data]
+"trpc_service.database" = ["script.py.mako", "versions/*.py"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-config --strict-markers"
+markers = [
+  "unit: isolated in-process contract tests",
+  "integration: requires PostgreSQL/Redis or other local infrastructure",
+  "simulation: fault and concurrency state-machine tests",
+  "online: requires explicitly supplied external credentials",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+exclude = [".venv", "build", "dist"]
+
+[tool.ruff.lint]
+# Keep the gate focused on correctness and syntax.  The repository uses
+# deliberate dynamic imports for optional integrations and FastAPI dependency
+# injection, which are incompatible with blanket style rules such as E402,
+# E731, and B008.
+select = ["E4", "E7", "E9", "F"]
+ignore = ["E402", "E701", "E702", "E731", "F841"]
+
+[tool.coverage.run]
+branch = true
+source = ["trpc_service"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+
+[tool.mypy]
+python_version = "3.12"
+# The default developer check is intentionally pragmatic: it catches
+# untyped public APIs and unsafe Optional/Any returns without making the
+# optional provider SDKs or legacy adapters a hard release dependency.
+check_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unused_configs = true
+explicit_package_bases = true
+allow_subclassing_any = true
+exclude = ["migrations"]
+
+[[tool.mypy.overrides]]
+module = ["redis", "psycopg", "boto3", "yaml", "trpc_agent_sdk.*"]
+ignore_missing_imports = true

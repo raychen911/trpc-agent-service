@@ -17,6 +17,7 @@ from threading import RLock
 from time import monotonic, sleep
 from uuid import uuid4
 
+from trpc_service.security.secrets import redact_secret_text
 from trpc_service.storage.base import (
     AuditRecord,
     IdempotencyRecord,
@@ -30,7 +31,9 @@ from trpc_service.storage.base import (
 from trpc_service.storage.compensation import _task_from_dict
 from trpc_service.storage.durable import SQLiteInboxOutbox
 from trpc_service.storage.locking import SessionLease, SessionLeaseLost
-from trpc_service.security.secrets import redact_secret_text
+from trpc_service.storage.mailbox import SQLiteMailboxStore
+from trpc_service.storage.session_mailbox import SQLiteSessionMailboxStore
+from trpc_service.storage.tool_governance import SQLiteToolGovernanceStore
 
 
 def _dt(value: datetime) -> str:
@@ -64,6 +67,9 @@ class SQLiteStorage:
         self.idempotency = self
         self.compensation = _SQLiteCompensationStore(self)
         self.inbox_outbox = SQLiteInboxOutbox(self._conn, self._lock)
+        self.mailbox = SQLiteMailboxStore(self._conn, self._lock)
+        self.session_mailbox_v2 = SQLiteSessionMailboxStore(self._conn, self._lock)
+        self.tool_governance = SQLiteToolGovernanceStore(self._conn, self._lock)
 
     def _init_schema(self) -> None:
         self._conn.executescript(
@@ -669,8 +675,9 @@ class SQLiteStorage:
             )
 
     def _compensation_enqueue(self, tenant_id, operation, payload, task_id=None):
-        from trpc_service.storage.base import CompensationTask
         from uuid import uuid4
+
+        from trpc_service.storage.base import CompensationTask
 
         task = CompensationTask(
             task_id=task_id or str(uuid4()),
@@ -799,6 +806,30 @@ class SQLiteStorage:
                 )
             )
             self._conn.execute(query, params)
+
+    def _compensation_replay(self, task_id, tenant_id=None):
+        now = _dt(now_utc())
+        with self._lock, self._conn:
+            query = (
+                """
+                UPDATE compensation_task
+                   SET status='pending', attempt=0, available_at=?,
+                       last_error=NULL, updated_at=?
+                 WHERE task_id=? AND status='dead'
+                """
+                + (" AND tenant_id=?" if tenant_id is not None else "")
+            )
+            params = (now, now, task_id, tenant_id) if tenant_id is not None else (now, now, task_id)
+            changed = self._conn.execute(query, params).rowcount
+            if changed != 1:
+                raise ValueError("compensation task is missing or is not dead")
+            row = self._conn.execute(
+                "SELECT * FROM compensation_task WHERE task_id=?",
+                (task_id,),
+            ).fetchone()
+            data = dict(row)
+            data["payload"] = json.loads(data.pop("payload_json"))
+            return _task_from_dict(data)
 
     def export_schema(self) -> str:
         rows = self._conn.execute("SELECT sql FROM sqlite_master WHERE type = 'table' ORDER BY name").fetchall()
@@ -960,7 +991,7 @@ class SQLiteStorage:
             if row is None:
                 raise SessionLeaseLost(f"session fencing token rejected: {lease.tenant_id}/{lease.session_id}")
 
-    def __enter__(self) -> "SQLiteStorage":
+    def __enter__(self) -> SQLiteStorage:
         return self
 
     def __exit__(self, exc_type, exc, traceback) -> None:
@@ -989,3 +1020,6 @@ class _SQLiteCompensationStore:
             retry_after_seconds,
             tenant_id=tenant_id,
         )
+
+    def replay(self, task_id, tenant_id=None):
+        return self.storage._compensation_replay(task_id, tenant_id=tenant_id)

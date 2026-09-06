@@ -2,19 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
-from typing import Any
 import os
 import threading
 import time
-from dataclasses import asdict
+from base64 import b64decode
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from pathlib import Path
 from time import monotonic
-from uuid import uuid4
-from base64 import b64decode
+from typing import Any
 from urllib.parse import urlencode, urlparse
-from urllib.request import Request as UrlRequest, urlopen
+from urllib.request import Request as UrlRequest
+from urllib.request import urlopen
+from uuid import uuid4
 
 from trpc_service.admin.auth import AdminAuthenticationError, authenticate, authorize
 from trpc_service.admin.service import AdminService
@@ -25,21 +27,27 @@ from trpc_service.channels.base import (
     ChannelVerificationError,
     OutboundMessage,
     SendResult,
+    WebhookPayloadError,
+    parse_webhook_body,
+    sanitize_event_payload,
 )
 from trpc_service.channels.outbound import build_outbound_messages, split_outbound_messages, visible_answer
 from trpc_service.channels.outbound_queue import OutboundDeliveryQueue
 from trpc_service.channels.reliable import ChannelRateLimiter, persist_dead_letter, send_with_retry
+from trpc_service.channels.wecom_ai_bot import WeComAIBotConnector
 from trpc_service.gateway import AgentGateway
 from trpc_service.gateway.session_id import build_idempotency_key
 from trpc_service.gateway.worker_queue import DurableWebhookQueue, WorkerQueue
 from trpc_service.policy.quota import QuotaEnforcer, QuotaExceeded
 from trpc_service.policy.tenant_filter import PolicyDenied, TenantPolicy
-from trpc_service.storage.factory import create_storage
+from trpc_service.security.secrets import SecretManager, redact_secret_data, redact_secret_text
+from trpc_service.security.ssrf import validate_outbound_url
 from trpc_service.storage.base import AuditRecord
 from trpc_service.storage.compensation import replay_compensations
+from trpc_service.storage.factory import create_storage
 from trpc_service.storage.manager import TenantStorageManager
-from trpc_service.telemetry.tracing import TraceRecorder
 from trpc_service.telemetry.metrics import CONTENT_TYPE_LATEST, generate_latest, observe_delivery, observe_error
+from trpc_service.telemetry.tracing import TraceRecorder
 from trpc_service.tenant.models import TenantConfig, TenantContext
 from trpc_service.tenant.repository import (
     TenantNotFound,
@@ -47,7 +55,6 @@ from trpc_service.tenant.repository import (
     persistent_demo_repository,
 )
 from trpc_service.tenant.service import TenantConfigConflict, TenantService
-from trpc_service.security.secrets import SecretManager
 
 try:
     from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response
@@ -81,6 +88,12 @@ def create_app():
     if FastAPI is None:
         raise RuntimeError("FastAPI is optional. Install requirements.txt to run the HTTP service.")
 
+    previous_app = globals().get("app")
+    if previous_app is not None and not getattr(previous_app.state, "runtime_started", False):
+        previous_close = getattr(previous_app.state, "close_runtime_resources", None)
+        if previous_close is not None:
+            previous_close()
+
     gateway, admin = create_runtime()
     adapters = default_channel_adapters()
     channel_limiter = ChannelRateLimiter()
@@ -88,8 +101,31 @@ def create_app():
     webhook_queue_error = None
     outbound_queue = None
     outbound_queue_error = None
+    wecom_ai_bot_connector = None
+    runtime_closed = False
+    if os.getenv("WECOM_AI_BOT_ENABLED", "0").strip().lower() in {"1", "true", "yes"}:
+        wecom_ai_bot_connector = WeComAIBotConnector()
+        ai_bot_adapter = adapters.get("wecom_ai_bot")
+        if ai_bot_adapter is not None:
+            ai_bot_adapter.connector = wecom_ai_bot_connector
+
+    def get_channel_adapter(channel: str):
+        try:
+            return adapters[channel]
+        except KeyError as exc:
+            if channel == "wecom":
+                raise KeyError(
+                    "wecom is a legacy Enterprise WeChat callback adapter and is disabled by default; "
+                    "use channel=wecom_ai_bot for BotID/BotSecret long-connection acceptance, "
+                    "or set ENABLE_LEGACY_WECOM=1 only for legacy callback validation"
+                ) from exc
+            raise
 
     def close_runtime_resources() -> None:
+        nonlocal runtime_closed
+        if runtime_closed:
+            return
+        runtime_closed = True
         if gateway.storage_manager is not None:
             gateway.storage_manager.close()
         gateway.storage.close()
@@ -129,10 +165,13 @@ def create_app():
 
     @asynccontextmanager
     async def lifespan(app_obj):
+        app_obj.state.runtime_started = True
         app_obj.state.webhook_consumer_stop = threading.Event()
         app_obj.state.webhook_consumer_thread = None
         app_obj.state.compensation_stop = threading.Event()
         app_obj.state.compensation_thread = None
+        app_obj.state.wecom_ai_bot_stop = asyncio.Event()
+        app_obj.state.wecom_ai_bot_tasks = []
         if webhook_queue is not None:
 
             def handle(item: dict[str, Any]) -> None:
@@ -155,6 +194,56 @@ def create_app():
             )
             app_obj.state.webhook_consumer_thread = thread
             thread.start()
+        if wecom_ai_bot_connector is not None:
+            active_tenants = getattr(admin.tenants.repository, "all_active", list)()
+
+            async def ai_bot_sink(inbound, binding) -> None:
+                payload = {
+                    "message_id": inbound.external_message_id,
+                    "from_user_id": inbound.external_user_id,
+                    "chat_id": inbound.group_id,
+                    "text": inbound.text,
+                    "attachments": [
+                        {
+                            "kind": item.kind,
+                            "url": item.url,
+                            "name": item.name,
+                            "content_type": item.content_type,
+                            "metadata": dict(item.metadata),
+                        }
+                        for item in inbound.attachments
+                    ],
+                    "raw_event": dict(inbound.raw_event),
+                }
+                if webhook_queue is not None:
+                    webhook_queue.submit(
+                        binding.channel,
+                        binding.account_id,
+                        payload,
+                        None,
+                        tenant_id=binding.tenant_id,
+                    )
+                    return
+                await asyncio.to_thread(
+                    build_ui_result,
+                    binding.channel,
+                    binding.account_id,
+                    payload,
+                    False,
+                )
+
+            for tenant in active_tenants:
+                for binding in tenant.channel_bindings:
+                    if binding.enabled and binding.channel == "wecom_ai_bot":
+                        app_obj.state.wecom_ai_bot_tasks.append(
+                            asyncio.create_task(
+                                wecom_ai_bot_connector.run(
+                                    binding,
+                                    ai_bot_sink,
+                                    app_obj.state.wecom_ai_bot_stop,
+                                )
+                            )
+                        )
         if outbound_queue is not None and os.getenv("OUTBOUND_QUEUE_CONSUMER", "0").lower() in {"1", "true", "yes"}:
 
             def outbound_loop() -> None:
@@ -199,9 +288,34 @@ def create_app():
         finally:
             app_obj.state.webhook_consumer_stop.set()
             app_obj.state.compensation_stop.set()
+            app_obj.state.wecom_ai_bot_stop.set()
+            for thread_name in (
+                "webhook_consumer_thread",
+                "outbound_consumer_thread",
+                "compensation_thread",
+            ):
+                thread = getattr(app_obj.state, thread_name, None)
+                if thread is not None and thread is not threading.current_thread():
+                    thread.join(timeout=10)
+            for binding_id in tuple(getattr(wecom_ai_bot_connector, "_stop_events", {})):
+                wecom_ai_bot_connector.stop(binding_id)
+            ai_bot_tasks = getattr(app_obj.state, "wecom_ai_bot_tasks", [])
+            if ai_bot_tasks:
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(*ai_bot_tasks, return_exceptions=True),
+                        timeout=10,
+                    )
+                except TimeoutError:
+                    for task in ai_bot_tasks:
+                        task.cancel()
+                    await asyncio.gather(*ai_bot_tasks, return_exceptions=True)
             close_runtime_resources()
+            app_obj.state.runtime_started = False
 
     app = FastAPI(title="tRPC-Agent Multi-Tenant Service", version="0.1.0", lifespan=lifespan)
+    app.state.runtime_started = False
+    app.state.close_runtime_resources = close_runtime_resources
     app.state.gateway = gateway
     app.state.admin = admin
     app.state.webhook_queue = webhook_queue
@@ -214,6 +328,26 @@ def create_app():
     def get_storage_for_tenant(tenant_id: str):
         tenant = gateway.tenants.get_tenant(tenant_id)
         return gateway.storage_manager.get(tenant) if gateway.storage_manager else gateway.storage
+
+    def public_audit_record(record: AuditRecord) -> dict[str, Any]:
+        """Serialize an audit record without allowing provider secrets to escape."""
+        return {
+            "audit_id": record.audit_id,
+            "tenant_id": record.tenant_id,
+            "decision": record.decision,
+            "trace_id": record.trace_id,
+            "channel": record.channel,
+            "user_id": record.user_id,
+            "session_id": record.session_id,
+            "agent_name": record.agent_name,
+            "tool_name": record.tool_name,
+            "latency_ms": record.latency_ms,
+            "error_type": redact_secret_text(record.error_type) if record.error_type else None,
+            "token_usage": record.token_usage,
+            "cost": record.cost,
+            "metadata": redact_secret_data(record.metadata),
+            "created_at": record.created_at.isoformat(),
+        }
 
     def expected_config_version(request: Request) -> int | None:
         raw = request.headers.get("if-match")
@@ -239,7 +373,7 @@ def create_app():
 
     def replay_all_compensations(limit: int = 50) -> dict[str, int]:
         counts: dict[str, int] = {}
-        tenants = getattr(admin.tenants.repository, "all_active", lambda: [])()
+        tenants = getattr(admin.tenants.repository, "all_active", list)()
         for tenant in tenants:
             storage = gateway.storage_manager.get(tenant) if gateway.storage_manager else gateway.storage
             counts[tenant.tenant_id] = replay_compensations(
@@ -371,7 +505,7 @@ def create_app():
             raise ValueError("attachment URL must use http or https")
         if parsed.hostname is None or parsed.hostname.lower() not in allowed_hosts:
             raise ValueError("attachment host is not in the tenant allowlist")
-        request = UrlRequest(url, headers={"User-Agent": "trpc-agent-service"})
+        request = UrlRequest(validate_outbound_url(url), headers={"User-Agent": "trpc-agent-service"})
         with urlopen(request, timeout=15) as response:
             return read_limited_response(response, max_bytes), response_content_type(response, None)
 
@@ -380,13 +514,19 @@ def create_app():
         if not token:
             return None, None, None
         metadata_url = f"https://api.telegram.org/bot{token}/getFile?{urlencode({'file_id': file_id})}"
-        with urlopen(UrlRequest(metadata_url), timeout=15) as response:
+        with urlopen(
+            UrlRequest(validate_outbound_url(metadata_url, trusted_hosts={"api.telegram.org"})),
+            timeout=15,
+        ) as response:
             body = json.loads(response.read(max_bytes + 1).decode("utf-8"))
         if not body.get("ok") or not body.get("result", {}).get("file_path"):
             raise ValueError("Telegram getFile did not return a downloadable file_path")
         file_path = str(body["result"]["file_path"]).lstrip("/")
         file_url = f"https://api.telegram.org/file/bot{token}/{file_path}"
-        with urlopen(UrlRequest(file_url), timeout=15) as response:
+        with urlopen(
+            UrlRequest(validate_outbound_url(file_url, trusted_hosts={"api.telegram.org"})),
+            timeout=15,
+        ) as response:
             content = read_limited_response(response, max_bytes)
             return content, response_content_type(response, None), file_path
 
@@ -399,7 +539,7 @@ def create_app():
             or ("https://qyapi.weixin.qq.com" if binding.channel == "wecom" else "https://api.weixin.qq.com")
         ).rstrip("/")
         query = urlencode({"access_token": token, "media_id": media_id})
-        request = UrlRequest(f"{api_base}/cgi-bin/media/get?{query}")
+        request = UrlRequest(validate_outbound_url(f"{api_base}/cgi-bin/media/get?{query}"))
         with urlopen(request, timeout=15) as response:
             content = read_limited_response(response, max_bytes)
             content_type = response_content_type(response, None)
@@ -434,6 +574,37 @@ def create_app():
                 if content is not None:
                     materialized_from = "telegram_file_id"
                     attachment.metadata["telegram_file_path"] = file_path
+            elif attachment.metadata.get("resource_key") and binding.channel == "feishu":
+                adapter = adapters.get(binding.channel)
+                downloader = getattr(adapter, "download_media", None)
+                if downloader:
+                    content, downloaded_content_type, downloaded_filename = downloader(
+                        binding,
+                        str(attachment.metadata.get("message_id", "")),
+                        str(attachment.metadata["resource_key"]),
+                        resource_type=str(attachment.metadata.get("resource_type", "file")),
+                        max_bytes=max_bytes,
+                    )
+                    if content is not None:
+                        materialized_from = "feishu_resource"
+                        if downloaded_filename and not attachment.name:
+                            attachment.name = downloaded_filename
+            elif (
+                binding.channel == "wecom_ai_bot"
+                and attachment.metadata.get("provider_url")
+                and attachment.metadata.get("aes_key")
+            ):
+                adapter = adapters.get(binding.channel)
+                downloader = getattr(adapter, "download_media", None)
+                if downloader:
+                    content, downloaded_content_type, downloaded_filename = downloader(
+                        attachment,
+                        max_bytes=max_bytes,
+                    )
+                    if content is not None:
+                        materialized_from = "wecom_ai_bot_media"
+                        if downloaded_filename and not attachment.name:
+                            attachment.name = downloaded_filename
             elif attachment.metadata.get("media_id") and binding.channel in {
                 "wecom",
                 "wechat_official_account",
@@ -465,12 +636,14 @@ def create_app():
                 }
             )
             attachment.metadata.pop("content_base64", None)
+            attachment.metadata.pop("provider_url", None)
+            attachment.metadata.pop("aes_key", None)
             attachment.url = None
 
     def build_ui_result(channel: str, account_id: str, payload: dict[str, Any], verify: bool = True) -> dict[str, Any]:
         binding = gateway.tenants.resolve_binding(channel, account_id)
-        adapter = adapters[channel]
-        if verify:
+        adapter = get_channel_adapter(channel)
+        if verify and not payload.get("callback_verified"):
             adapter.verify_callback(payload, binding)
         inbound = adapter.parse_event(payload, binding)
         internal_user_id = binding.resolve_user_id(inbound.external_user_id)
@@ -498,6 +671,17 @@ def create_app():
                 trace_id=trace_id,
                 traceparent=callback_traceparent,
             )
+        if any(event.metadata.get("queued") for event in events):
+            return {
+                "ok": True,
+                "accepted": True,
+                "durable": True,
+                "queued": True,
+                "session_id": session_id,
+                "response_ref": response_ref,
+                "answer": "",
+                "reply": {"queued": True},
+            }
         outbound_messages = build_outbound_messages(
             events,
             channel=channel,
@@ -525,18 +709,21 @@ def create_app():
             internal_user_id,
             callback_traceparent,
         )
-        max_length = int(binding.config.get("max_message_length", 4096))
+        configured_max_length = int(binding.config.get("max_message_length", 4096))
+        max_length = min(configured_max_length, int(adapter.capabilities.max_text_length))
+        if max_length <= 0:
+            raise ValueError("channel max_message_length must be positive")
         rate_limit = int(binding.config.get("send_qps_limit", 20))
-        parts = split_outbound_messages(outbound_messages, max_length)
-        answer_text = visible_answer(outbound_messages)
-        results: list[SendResult] = []
-        delivery_started = monotonic()
         delivery_key = build_idempotency_key(
             binding.tenant_id,
             channel,
             account_id,
             inbound.external_message_id,
         )
+        parts = split_outbound_messages(outbound_messages, max_length, idempotency_key=delivery_key)
+        answer_text = visible_answer(outbound_messages)
+        results: list[SendResult] = []
+        delivery_started = monotonic()
         with gateway.telemetry.span("im.reply", context):
             if not storage.idempotency.claim_delivery(
                 binding.tenant_id,
@@ -554,7 +741,11 @@ def create_app():
                     "answer": (existing.result or {}).get("text", "") if existing else "",
                     "reply": (existing.result or {}).get("reply", {}) if existing else {},
                 }
-            if outbound_queue is not None and channel != "web":
+            if (
+                outbound_queue is not None
+                and channel != "web"
+                and not AgentGateway._durable_inbox_enabled()
+            ):
                 try:
                     task_id = outbound_queue.enqueue(
                         {
@@ -671,8 +862,10 @@ def create_app():
     def validate_webhook_payload(channel: str, account_id: str, payload: dict[str, Any]):
         """Validate a callback before it can enter the durable queue."""
         binding = gateway.tenants.resolve_binding(channel, account_id)
-        adapter = adapters[channel]
+        adapter = get_channel_adapter(channel)
         adapter.verify_callback(payload, binding)
+        if getattr(adapter, "is_noop", lambda *_: False)(payload, binding):
+            return binding
         inbound = adapter.parse_event(payload, binding)
         TenantPolicy(gateway.tenants.get_tenant(binding.tenant_id), binding.agent_app_id).check_im_user(
             binding,
@@ -686,6 +879,19 @@ def create_app():
             return authenticate(request.headers.get("X-Admin-API-Key"), request.headers.get("Authorization"))
         except AdminAuthenticationError as exc:
             raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+    def public_surface_principal(request: Request):
+        """Protect operational/demo surfaces when the process is not local-only."""
+
+        configured = os.getenv("PUBLIC_SURFACE_AUTH_REQUIRED")
+        if configured is None:
+            runtime_mode = os.getenv("TRPC_AGENT_RUNTIME_MODE", "trpc").strip().lower()
+            required = runtime_mode not in {"local", "test", "demo"}
+        else:
+            required = configured.strip().lower() in {"1", "true", "yes", "on"}
+        if not required:
+            return None
+        return principal(request)
 
     @app.get("/health")
     def health(response: Response) -> dict[str, Any]:
@@ -707,7 +913,7 @@ def create_app():
 
         def load_active_tenants() -> None:
             nonlocal active_tenants
-            active_tenants = list(getattr(repository, "all_active", lambda: [])())
+            active_tenants = list(getattr(repository, "all_active", list)())
 
         check("tenant_repository", load_active_tenants)
         if gateway.worker_queue is not None:
@@ -737,14 +943,24 @@ def create_app():
             "errors": errors,
         }
 
+    @app.get("/livez")
+    def livez() -> dict[str, str]:
+        """Process liveness must not depend on external services."""
+        return {"status": "ok"}
+
+    @app.get("/readyz")
+    def readyz(response: Response) -> dict[str, Any]:
+        """Readiness uses the same dependency checks as the public health view."""
+        return health(response)
+
     @app.get("/metrics")
-    def metrics():
+    def metrics(_current=Depends(public_surface_principal)):
         from fastapi.responses import Response
 
         return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
     @app.get("/ui", response_class=HTMLResponse)
-    def ui() -> str:
+    def ui(_current=Depends(public_surface_principal)) -> str:
         return HTMLResponse(
             content=Path(__file__).with_name("ui.html").read_text(encoding="utf-8"),
             headers={
@@ -754,7 +970,7 @@ def create_app():
         )
 
     @app.post("/ui/api/chat")
-    async def ui_chat(payload: dict[str, Any]) -> dict[str, Any]:
+    async def ui_chat(payload: dict[str, Any], current=Depends(public_surface_principal)) -> dict[str, Any]:
         channel = payload.get("channel", "web")
         account_id = payload.get("account_id", "web_demo")
         inbound_payload = {
@@ -765,8 +981,13 @@ def create_app():
         }
         if payload.get("group_id"):
             inbound_payload["chat_id"] = payload["group_id"]
-        result = build_ui_result(channel, account_id, inbound_payload, verify=False)
         binding = gateway.tenants.resolve_binding(channel, account_id)
+        if current is not None:
+            try:
+                authorize(current, binding.tenant_id, {"viewer", "operator"})
+            except AdminAuthenticationError as exc:
+                raise HTTPException(status_code=403, detail=str(exc)) from exc
+        result = build_ui_result(channel, account_id, inbound_payload, verify=False)
         app_config = gateway.tenants.get_tenant(binding.tenant_id).app(binding.agent_app_id)
         use_cli = os.getenv("CPA_USE_CODEX_CLI", "0").strip().lower() in {"1", "true", "yes"}
         try:
@@ -1004,6 +1225,37 @@ def create_app():
         except KeyError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    @app.get("/admin/v1/tenants/{tenant_id}/audit")
+    def tenant_audit(
+        tenant_id: str,
+        limit: int = 100,
+        decision: str | None = None,
+        current=Depends(principal),
+    ) -> dict[str, Any]:
+        """Provide a bounded, tenant-authorized audit view for operators."""
+        try:
+            authorize(current, tenant_id, {"viewer", "operator"})
+            if limit < 1 or limit > 500:
+                raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
+            storage = get_storage_for_tenant(tenant_id)
+            records = storage.audit.list_by_tenant(tenant_id, limit=500)
+            if decision:
+                records = [record for record in records if record.decision == decision]
+            records = records[:limit]
+            return {
+                "tenant_id": tenant_id,
+                "count": len(records),
+                "items": [public_audit_record(record) for record in records],
+            }
+        except AdminAuthenticationError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except TenantNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except HTTPException:
+            raise
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @app.post("/admin/v1/tenants/{tenant_id}/compensations/replay")
     def replay_tenant_compensations(
         tenant_id: str, payload: dict[str, Any] | None = None, current=Depends(principal)
@@ -1029,7 +1281,7 @@ def create_app():
     async def verify_webhook(channel: str, account_id: str, request: Request):
         try:
             binding = gateway.tenants.resolve_binding(channel, account_id)
-            adapter = adapters[channel]
+            adapter = get_channel_adapter(channel)
             payload = {key: value for key, value in request.query_params.items()}
             handshake = getattr(adapter, "verify_handshake", None)
             if not handshake:
@@ -1047,35 +1299,52 @@ def create_app():
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except Exception as exc:
+        except ValueError as exc:
             raise HTTPException(status_code=400, detail="webhook verification failed") from exc
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="webhook processing failed") from exc
 
     @app.post("/webhooks/{channel}/{account_id}", operation_id="receive_webhook_callback")
     async def receive_webhook(
         channel: str, account_id: str, request: Request, background_tasks: BackgroundTasks
     ) -> dict[str, Any]:
         try:
+            max_body = int(os.getenv("WEBHOOK_MAX_BODY_BYTES", str(1024 * 1024)))
+            content_length = request.headers.get("content-length")
+            if content_length:
+                try:
+                    if int(content_length) < 0 or int(content_length) > max_body:
+                        raise WebhookPayloadError("webhook body exceeds configured limit")
+                except ValueError:
+                    raise WebhookPayloadError("content-length header is invalid") from None
             body = await request.body()
             content_type = request.headers.get("content-type", "")
-            if "json" in content_type or not body:
-                payload = await request.json() if body else {}
-            else:
-                payload = {"raw_body": body.decode("utf-8")}
-                if "xml" in content_type:
-                    from xml.etree import ElementTree
-
-                    root = ElementTree.fromstring(payload["raw_body"])
-                    payload.update({child.tag: child.text or "" for child in root})
-            payload.update({key: value for key, value in request.query_params.items()})
+            payload = parse_webhook_body(body, content_type)
+            payload = {**{key: value for key, value in request.query_params.items()}, **payload}
             if channel == "telegram":
                 payload["_callback_secret_token"] = request.headers.get(
                     "X-Telegram-Bot-Api-Secret-Token",
                     "",
                 )
-            validate_webhook_payload(channel, account_id, payload)
+            if channel == "feishu":
+                payload["_raw_body"] = body.decode("utf-8")
+                payload["_headers"] = dict(request.headers)
+            adapter = get_channel_adapter(channel)
+            binding = validate_webhook_payload(channel, account_id, payload)
+            if getattr(adapter, "is_noop", lambda *_: False)(payload, binding):
+                return getattr(adapter, "webhook_ack", lambda *_: {"ok": True})(payload, binding)
+            # Verification has completed; only this sanitized form may cross
+            # the process boundary into a durable queue.
+            payload = sanitize_event_payload({**payload, "callback_verified": True})
             traceparent = request.headers.get("traceparent")
             if webhook_queue is not None:
-                task_id = webhook_queue.submit(channel, account_id, payload, traceparent)
+                task_id = webhook_queue.submit(
+                    channel,
+                    account_id,
+                    payload,
+                    traceparent,
+                    tenant_id=binding.tenant_id,
+                )
                 return {
                     "ok": True,
                     "accepted": True,
@@ -1090,6 +1359,8 @@ def create_app():
             raise HTTPException(status_code=429, detail=str(exc)) from exc
         except ChannelVerificationError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except WebhookPayloadError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         except PolicyDenied as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         except TenantNotFound as exc:
@@ -1098,8 +1369,24 @@ def create_app():
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail="webhook processing failed") from exc
+
+    @app.get("/admin/v1/webhook-tasks/{task_id}")
+    def webhook_task_status(task_id: str, current=Depends(principal)) -> dict[str, Any]:
+        """Expose bounded asynchronous webhook state for acceptance probes."""
+
+        if webhook_queue is None:
+            raise HTTPException(status_code=503, detail="durable webhook queue is unavailable")
+        status = webhook_queue.status(task_id)
+        if status is None:
+            raise HTTPException(status_code=404, detail="webhook task was not found")
+        tenant_id = str(status.get("tenant_id") or "")
+        if not tenant_id:
+            raise HTTPException(status_code=404, detail="webhook task has no tenant binding")
+        try:
+            authorize(current, tenant_id, {"viewer", "operator"})
+        except AdminAuthenticationError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        return status
 
     return app
 

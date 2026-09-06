@@ -1,5 +1,2 @@
--r requirements.txt
-flake8>=7.1,<8
-ruff>=0.6,<1
-coverage>=7.6,<8
-pytest>=8.3,<9
+# Compatibility entry point for pip users. Prefer `uv sync --extra dev`.
+-e .[dev]

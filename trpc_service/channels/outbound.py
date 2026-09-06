@@ -9,7 +9,6 @@ from trpc_service.channels.base import Attachment, OutboundMessage
 from trpc_service.channels.reliable import split_text
 from trpc_service.tenant.models import AgentEvent
 
-
 TEXT_EVENT_TYPES = {"message_end", "message", "answer"}
 STREAM_EVENT_TYPES = {"stream_delta", "message_delta", "delta"}
 CARD_EVENT_TYPES = {"card", "message_card", "approval_required"}
@@ -117,18 +116,28 @@ def build_outbound_messages(
     ]
 
 
-def split_outbound_messages(messages: list[OutboundMessage], max_length: int) -> list[OutboundMessage]:
+def split_outbound_messages(
+    messages: list[OutboundMessage], max_length: int, *, idempotency_key: str | None = None
+) -> list[OutboundMessage]:
     """Split long text while preserving message type and attachment metadata."""
+    if max_length <= 0:
+        raise ValueError("max_length must be positive")
     split_messages: list[OutboundMessage] = []
-    for message in messages:
+    for message_index, message in enumerate(messages):
         parts = split_text(message.text, max_length)
         part_count = len(parts)
         for index, part in enumerate(parts):
+            message_idempotency_key = str(
+                idempotency_key
+                or message.metadata.get("idempotency_key")
+                or f"{message.channel}:{message.account_id}:{message.session_id}:message:{message_index}"
+            )
             metadata = {
                 **message.metadata,
                 "message_type": message.metadata.get("message_type", "text"),
                 "part_index": index,
                 "part_count": part_count,
+                "idempotency_key": f"{message_idempotency_key}:part:{index}",
             }
             split_messages.append(
                 replace(

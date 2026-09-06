@@ -1,19 +1,18 @@
-import base64
 import asyncio
-import tempfile
-import unittest
+import base64
 import json
-import threading
-import sys
-import types
 import os
-import socket
+import sys
+import tempfile
+import threading
+import types
+import unittest
 from datetime import timedelta
+from hashlib import sha1
 from pathlib import Path
 from unittest.mock import patch
-from urllib.request import Request
 from urllib.error import HTTPError
-from hashlib import sha1
+from urllib.request import Request
 
 for key in (
     "WORKER_QUEUE_URL",
@@ -36,64 +35,76 @@ for key in (
     "DEFAULT_AUDIT_BACKEND",
     "SYNC_DEMO_DEFAULT_STORAGE",
     "REQUIRE_SHARED_COORDINATION",
+    "OPENAI_API_KEY",
+    "CPA_BASE_URL",
+    "CPA_API_KEY_ENV",
+    "CPA_API_KEY_REF",
+    "CPA_WIRE_API",
+    "CPA_TIMEOUT_MS",
+    "CPA_MAX_OUTPUT_TOKENS",
+    "CPA_MAX_RETRIES",
+    "CPA_USE_CODEX_CLI",
+    "CPA_CODEX_EXECUTABLE",
+    "CPA_CODEX_TIMEOUT_MS",
+    "CPA_CODEX_CWD",
+    "ENABLE_LEGACY_WECOM",
 ):
     os.environ.pop(key, None)
-os.environ.setdefault("CPA_MODEL", "test-model")
+os.environ["CPA_MODEL"] = "test-model"
 # The test suite intentionally exercises the no-credential demo runtime.
 # Production defaults remain fail-fast tRPC-Agent-Python mode.
 os.environ.setdefault("TRPC_AGENT_RUNTIME_MODE", "local")
 
+from trpc_service.admin.auth import AdminAuthenticationError, AdminPrincipal, authenticate, authorize
+from trpc_service.agent import RuntimeBridgeSpec, build_runtime_worker
 from trpc_service.agent.model_client import (
     ModelResponse,
     ModelToolCall,
     ResponsesModelClient,
     extract_response_text,
 )
-from trpc_service.admin.auth import AdminAuthenticationError, AdminPrincipal, authenticate, authorize
 from trpc_service.channels import InboundMessage, default_channel_adapters
-from trpc_service.channels.base import OutboundMessage
-from trpc_service.channels.base import Attachment
-from trpc_service.channels.telegram import TelegramAdapter
-from trpc_service.channels.wecom import WeComAdapter
-from trpc_service.channels.wechat_customer_service import WeChatCustomerServiceAdapter
-from trpc_service.channels.wechat_official_account import WeChatOfficialAccountAdapter
-from trpc_service.gateway.router import AgentWorker
-from trpc_service.gateway import AgentGateway, build_idempotency_key, build_session_id
-from trpc_service.policy.quota import QuotaEnforcer, QuotaExceeded
-from trpc_service.storage.factory import create_storage
-from trpc_service.storage.base import MemoryItem, Summary
-from trpc_service.storage.compensation import replay_compensations
-from trpc_service.storage.remote_vector import RemoteVectorStore
-from trpc_service.storage.vector_store import KnowledgeChunk
-from trpc_service.telemetry.tracing import TraceRecorder
-from trpc_service.agent import RuntimeBridgeSpec, build_runtime_worker
-from trpc_service.tenant.models import (
-    AgentEvent,
-    ChannelBinding,
-    ModelConfig,
-    StorageProfile,
-    TenantContext,
-    ToolPolicy,
-    RunRequest,
-    UserInput,
-    QuotaPolicy,
-    default_demo_config,
-)
-from trpc_service.tenant.repository import InMemoryTenantRepository
-from trpc_service.tenant.repository import SQLiteTenantRepository
-from trpc_service.tenant.service import TenantService, TenantValidationError
-from trpc_service.tool.runtime import ToolRegistry
-from trpc_service.channels.reliable import send_with_retry
-from trpc_service.channels.outbound_queue import OutboundDeliveryQueue
+from trpc_service.channels.base import Attachment, OutboundMessage
+from trpc_service.channels.feishu import FeishuAdapter
 from trpc_service.channels.outbound import (
     build_outbound_messages,
     split_outbound_messages,
     visible_answer,
 )
-from trpc_service.web.app import create_runtime
+from trpc_service.channels.outbound_queue import OutboundDeliveryQueue
+from trpc_service.channels.reliable import send_with_retry
+from trpc_service.channels.telegram import TelegramAdapter
+from trpc_service.channels.wechat_customer_service import WeChatCustomerServiceAdapter
+from trpc_service.channels.wechat_official_account import WeChatOfficialAccountAdapter
+from trpc_service.channels.wecom import WeComAdapter
+from trpc_service.channels.wecom_ai_bot import parse_wecom_ai_bot_frame
+from trpc_service.gateway import AgentGateway, build_idempotency_key, build_session_id
+from trpc_service.gateway.router import AgentWorker
 from trpc_service.migrate import cutover_plan, export_tenant, import_tenant, verify_tenant
+from trpc_service.policy.quota import QuotaEnforcer, QuotaExceeded
 from trpc_service.security.secrets import redact_secret_data, redact_secret_text
-from trpc_service.tool.runtime import ToolResult
+from trpc_service.storage.base import MemoryItem, Summary
+from trpc_service.storage.compensation import replay_compensations
+from trpc_service.storage.factory import create_storage
+from trpc_service.storage.remote_vector import RemoteVectorStore
+from trpc_service.storage.vector_store import KnowledgeChunk
+from trpc_service.telemetry.tracing import TraceRecorder
+from trpc_service.tenant.models import (
+    AgentEvent,
+    ChannelBinding,
+    ModelConfig,
+    QuotaPolicy,
+    RunRequest,
+    StorageProfile,
+    TenantContext,
+    ToolPolicy,
+    UserInput,
+    default_demo_config,
+)
+from trpc_service.tenant.repository import InMemoryTenantRepository, SQLiteTenantRepository
+from trpc_service.tenant.service import TenantService, TenantValidationError
+from trpc_service.tool.runtime import ToolRegistry, ToolResult
+from trpc_service.web.app import create_runtime
 from trpc_service.workspace.policy import WorkspacePolicy
 
 
@@ -230,8 +241,101 @@ class PlatformTests(unittest.TestCase):
         adapters = default_channel_adapters()
         self.assertEqual(
             set(adapters),
-            {"web", "wecom", "wechat_customer_service", "wechat_official_account", "telegram"},
+            {"web", "wecom_ai_bot", "feishu", "telegram"},
         )
+
+    def test_legacy_wecom_registry_requires_explicit_opt_in(self):
+        with patch.dict("os.environ", {"ENABLE_LEGACY_WECOM": "1"}, clear=False):
+            adapters = default_channel_adapters()
+        self.assertIn("wecom", adapters)
+        self.assertIsInstance(adapters["wecom"], WeComAdapter)
+
+    def test_wecom_ai_bot_frame_parsing(self):
+        binding = ChannelBinding(
+            tenant_id="tenant_demo",
+            binding_id="wecom-ai:account",
+            channel="wecom_ai_bot",
+            account_id="bot-id",
+            agent_app_id="app_support",
+        )
+        inbound = parse_wecom_ai_bot_frame(
+            {
+                "body": {
+                    "msgid": "msg-1",
+                    "from": {"userid": "user-1"},
+                    "chattype": "group",
+                    "chatid": "chat-1",
+                    "msgtype": "text",
+                    "text": {"content": "@bot hello"},
+                    "aibotid": "bot-id",
+                    "atuserlist": ["bot-id"],
+                }
+            },
+            binding,
+        )
+        self.assertEqual(inbound.external_message_id, "msg-1")
+        self.assertEqual(inbound.group_id, "chat-1")
+        self.assertEqual(inbound.text, "hello")
+
+    def test_feishu_callback_parsing_and_challenge(self):
+        binding = ChannelBinding(
+            tenant_id="tenant_demo",
+            binding_id="feishu:account",
+            channel="feishu",
+            account_id="cli_test",
+            agent_app_id="app_support",
+            token_ref="secret://tenant_demo/feishu/token",
+            config={"app_id": "cli_test"},
+        )
+        payload = {
+            "_raw_body": json.dumps(
+                {
+                    "schema": "2.0",
+                    "header": {
+                        "event_id": "event-1",
+                        "event_type": "im.message.receive_v1",
+                        "app_id": "cli_test",
+                        "token": "verify-token",
+                    },
+                    "event": {
+                        "sender": {
+                            "sender_id": {"open_id": "ou_user"},
+                            "sender_type": "user",
+                        },
+                        "message": {
+                            "message_id": "om_1",
+                            "chat_id": "oc_group",
+                            "chat_type": "group",
+                            "message_type": "text",
+                            "content": json.dumps({"text": "@_user_1 hello"}),
+                            "mentions": [{"key": "@_user_1"}],
+                        },
+                    },
+                }
+            ),
+            "_headers": {},
+        }
+        with patch.dict("os.environ", {"SECRET_TENANT_DEMO_FEISHU_TOKEN": "verify-token"}, clear=False):
+            adapter = FeishuAdapter()
+            adapter.verify_callback(payload, binding)
+            inbound = adapter.parse_event(payload, binding)
+        self.assertEqual(inbound.external_message_id, "om_1")
+        self.assertEqual(inbound.external_user_id, "ou_user")
+        self.assertEqual(inbound.group_id, "oc_group")
+        self.assertEqual(inbound.text, "hello")
+
+        challenge_payload = {
+            "_raw_body": json.dumps(
+                {
+                    "header": {"event_type": "url_verification", "token": "verify-token"},
+                    "challenge": "challenge-1",
+                }
+            ),
+            "_headers": {},
+        }
+        with patch.dict("os.environ", {"SECRET_TENANT_DEMO_FEISHU_TOKEN": "verify-token"}, clear=False):
+            adapter.verify_callback(challenge_payload, binding)
+            self.assertEqual(adapter.webhook_ack(challenge_payload, binding), {"challenge": "challenge-1"})
 
     def test_gateway_package_imports_in_a_clean_interpreter(self):
         import subprocess
@@ -328,7 +432,7 @@ class PlatformTests(unittest.TestCase):
         )
         with patch(
             "trpc_service.agent.model_client.urlopen",
-            side_effect=socket.timeout("timed out with token=test-secret"),
+            side_effect=TimeoutError("timed out with token=test-secret"),
         ):
             with self.assertRaisesRegex(Exception, "connection failed") as raised:
                 client.generate_with_usage(
@@ -497,8 +601,9 @@ class PlatformTests(unittest.TestCase):
         storage.close()
 
     def test_sdk_runtime_builds_sdk_function_tools_for_allowed_tools(self):
-        from trpc_service.agent.trpc_runtime import TrpcAgentWorker
         from trpc_agent_sdk.tools import FunctionTool
+
+        from trpc_service.agent.trpc_runtime import TrpcAgentWorker
 
         worker = TrpcAgentWorker(create_storage(), TraceRecorder())
 
@@ -1172,9 +1277,8 @@ class PlatformTests(unittest.TestCase):
                 )
             },
             clear=False,
-        ):
-            with patch("trpc_service.channels.wecom._post_json", fake_post_json):
-                result = WeComAdapter().send(message, binding)
+        ), patch("trpc_service.channels.wecom._post_json", fake_post_json):
+            result = WeComAdapter().send(message, binding)
         self.assertTrue(result.ok)
         self.assertEqual(captured["url"], "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=robot-secret")
         self.assertEqual(captured["payload"]["msgtype"], "text")
@@ -1982,14 +2086,16 @@ class PlatformTests(unittest.TestCase):
         self.assertNotIn("telegram-token", encoded)
         self.assertTrue(any("getFile" in url for url in requested_urls))
 
-    def test_wechat_media_id_attachment_is_downloaded_to_artifact(self):
+    def test_feishu_resource_attachment_is_downloaded_to_artifact(self):
         try:
             from fastapi.testclient import TestClient
         except (ImportError, RuntimeError):
             self.skipTest("FastAPI TestClient dependency is unavailable")
 
         class FakeResponse:
-            headers = {"Content-Type": "image/jpeg"}
+            def __init__(self, body, content_type):
+                self.body = body
+                self.headers = {"Content-Type": content_type}
 
             def __enter__(self):
                 return self
@@ -1998,35 +2104,74 @@ class PlatformTests(unittest.TestCase):
                 return False
 
             def read(self, *_args):
-                return b"wechat-image"
+                return self.body
 
         captured = []
 
         def fake_urlopen(request, timeout):
             del timeout
-            captured.append(request.full_url if hasattr(request, "full_url") else str(request))
-            return FakeResponse()
+            url = request.full_url if hasattr(request, "full_url") else str(request)
+            captured.append(url)
+            if url.endswith("/open-apis/auth/v3/tenant_access_token/internal"):
+                return FakeResponse(
+                    json.dumps({"code": 0, "tenant_access_token": "tenant-token", "expire": 3600}).encode(),
+                    "application/json",
+                )
+            if "/resources/" in url:
+                return FakeResponse(b"feishu-image", "image/jpeg")
+            if "/open-apis/im/v1/messages" in url:
+                return FakeResponse(
+                    json.dumps({"code": 0, "data": {"message_id": "reply-1"}}).encode(),
+                    "application/json",
+                )
+            raise AssertionError(url)
 
         with tempfile.TemporaryDirectory() as directory, patch.dict(
             "os.environ",
             {
                 "TENANT_DB_PATH": str(Path(directory) / "tenant.sqlite3"),
-                "SECRET_TENANT_DEMO_WECHAT_OFFICIAL_ACCOUNT_TOKEN": "wechat-access-token",
+                "SECRET_TENANT_DEMO_FEISHU_TOKEN": "verify-token",
+                "FEISHU_APP_SECRET_REF": "secret://tenant_demo/feishu/app-secret",
+                "SECRET_TENANT_DEMO_FEISHU_APP_SECRET": "app-secret",
             },
             clear=False,
-        ), patch("trpc_service.web.app.urlopen", fake_urlopen):
+        ), patch("trpc_service.channels.feishu.urlopen", fake_urlopen):
             from trpc_service.web.app import create_app
 
             application = create_app()
             tenant = application.state.gateway.tenants.get_tenant("tenant_demo")
+            for binding in tenant.channel_bindings:
+                if binding.channel == "feishu":
+                    binding.config.update(
+                        {
+                            "app_id": "corp_account_1",
+                            "app_secret_ref": "secret://tenant_demo/feishu/app-secret",
+                        }
+                    )
             with TestClient(application) as client:
                 resp = client.post(
-                    "/webhooks/wechat_official_account/corp_account_1",
+                    "/webhooks/feishu/corp_account_1",
                     json={
-                        "MsgId": "wx-media",
-                        "FromUserName": "openid",
-                        "MsgType": "image",
-                        "MediaId": "media-id",
+                        "schema": "2.0",
+                        "header": {
+                            "event_id": "event-media",
+                            "event_type": "im.message.receive_v1",
+                            "app_id": "corp_account_1",
+                            "token": "verify-token",
+                        },
+                        "event": {
+                            "sender": {
+                                "sender_id": {"open_id": "ou_user"},
+                                "sender_type": "user",
+                            },
+                            "message": {
+                                "message_id": "om-media",
+                                "chat_id": "oc-chat",
+                                "chat_type": "p2p",
+                                "message_type": "image",
+                                "content": json.dumps({"image_key": "img-key"}),
+                            },
+                        },
                     },
                 )
                 self.assertEqual(resp.status_code, 200)
@@ -2036,18 +2181,19 @@ class PlatformTests(unittest.TestCase):
                 session_id = build_session_id(
                     tenant.tenant_id,
                     "app_support",
-                    "wechat_official_account",
+                    "feishu",
                     "corp_account_1",
-                    "openid",
+                    "ou_user",
                 )
                 events = storage.session.load_events(tenant.tenant_id, session_id)
                 user_event = next(event for event in events if event.event_type == "user_message")
                 attachment = user_event.payload["metadata"]["attachments"][0]
         encoded = json.dumps(attachment, ensure_ascii=False)
         self.assertIn("artifact_id", attachment["metadata"])
-        self.assertEqual(attachment["metadata"]["materialized_from"], "wechat_media_id")
-        self.assertNotIn("wechat-access-token", encoded)
-        self.assertTrue(any("/cgi-bin/media/get" in url for url in captured))
+        self.assertEqual(attachment["metadata"]["materialized_from"], "feishu_resource")
+        self.assertNotIn("app-secret", encoded)
+        self.assertTrue(any("/open-apis/auth/v3/tenant_access_token/internal" in url for url in captured))
+        self.assertTrue(any("/resources/img-key" in url for url in captured))
 
     def test_strict_channel_config_requires_real_im_credentials(self):
         repository = InMemoryTenantRepository()
@@ -2273,8 +2419,9 @@ class PlatformTests(unittest.TestCase):
             TenantService(InMemoryTenantRepository()).validate(config)
 
     def test_sdk_session_service_is_ephemeral_platform_context(self):
-        from trpc_service.agent.trpc_runtime import _build_session_service
         from trpc_agent_sdk.sessions import InMemorySessionService
+
+        from trpc_service.agent.trpc_runtime import _build_session_service
 
         profile = StorageProfile(
             session_backend="redis",

@@ -1,8 +1,9 @@
-from hashlib import sha1
 import hmac
+from hashlib import sha1
 from xml.etree import ElementTree
 
 from trpc_service.channels.base import (
+    ChannelCapabilities,
     ChannelVerificationError,
     SendResult,
     normalize_attachment,
@@ -10,9 +11,8 @@ from trpc_service.channels.base import (
 )
 from trpc_service.channels.media import attachment_kind, post_multipart_json, prepare_attachment_file
 from trpc_service.channels.simple import SimpleJsonChannelAdapter
-from trpc_service.security.secrets import SecretManager
-from trpc_service.security.secrets import redact_secret_data, redact_secret_text
 from trpc_service.channels.wechat_crypto import decrypt_message, verify_handshake
+from trpc_service.security.secrets import SecretManager, redact_secret_data, redact_secret_text
 
 
 def _wechat_json(url: str, payload: dict | None = None) -> dict:
@@ -31,6 +31,7 @@ def _wechat_json(url: str, payload: dict | None = None) -> dict:
 
 class WeChatOfficialAccountAdapter(SimpleJsonChannelAdapter):
     channel_name = "wechat_official_account"
+    capabilities = ChannelCapabilities(max_text_length=2048, supports_media=True, supports_cards=False)
     message_id_fields = ("MsgId", "message_id", "msg_id")
     user_id_fields = ("FromUserName", "openid", "user_id")
     group_id_fields = ("group_id",)

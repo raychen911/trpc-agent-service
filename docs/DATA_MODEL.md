@@ -36,23 +36,28 @@
       "tool_policy": {
         "allowlist": ["search_knowledge", "create_ticket"],
         "denylist": ["shell_exec"],
-        "approval_rules": ["send_external_message", "refund_order"]
+        "approval_rules": ["send_external_message", "refund_order"],
+        "risk_levels": {"create_ticket": "medium", "refund_order": "critical"},
+        "require_confirmation_for_risk": ["high", "critical"],
+        "max_calls_per_request": 16,
+        "max_side_effect_calls_per_request": 4
       }
     }
   ],
   "channel_bindings": [
     {
-      "binding_id": "bind_wecom_support",
-      "channel": "wecom",
-      "account_id": "corp_account_1",
+      "binding_id": "bind_wecom_ai_bot_support",
+      "channel": "wecom_ai_bot",
+      "account_id": "corp_bot_1",
       "agent_app_id": "app_support",
-      "webhook_path": "/webhooks/wecom/corp_account_1",
-      "token_ref": "secret://tenant_demo/wecom/token",
-      "secret_ref": "secret://tenant_demo/wecom/aes_key",
+      "webhook_path": null,
+      "token_ref": null,
+      "secret_ref": "secret://tenant_demo/wecom_ai_bot/bot_secret",
       "config": {
+        "bot_id_ref": "secret://tenant_demo/wecom_ai_bot/bot_id",
         "identity_mapping": {
           "external_to_internal": {
-            "wx-user-openid": "user-1001"
+            "wecom-bot-user-id": "user-1001"
           }
         }
       },

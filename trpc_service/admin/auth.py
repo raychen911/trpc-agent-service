@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-import hmac
 import base64
 import binascii
+import hmac
 import json
 import math
 import os
 import time
+from dataclasses import dataclass
 from threading import RLock
 from urllib.request import Request, urlopen
-from dataclasses import dataclass
 
 
 class AdminAuthenticationError(PermissionError):

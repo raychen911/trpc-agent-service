@@ -6,57 +6,74 @@
 
 `trpc-agent-service` 是一个基于 tRPC-Agent-Python 思路实现的多租户、节点化 Agent 部署平台。项目包含租户配置与隔离、无状态 Gateway / Worker、IM Channel Adapter、多后端 Storage Adapter、治理审计、可观测性和部署配置。
 
+## Reviewer 推荐复现顺序
+
+1. 使用 `uv.lock` 创建 Python 3.12 开发环境。
+2. 运行完整测试、编译检查和 `flake8`。
+3. 运行本地 Web UI，验证 Gateway、Worker、Session、Memory、Tool、Audit 和回复链路。
+4. 使用 Docker Compose 复现 Redis、PostgreSQL、远程 Worker、补偿 Worker 和出站 Worker。
+5. 只有具备外部凭据时，才运行真实模型、PostgreSQL RLS 或真实 IM 联调。
+
+题目要求到代码、测试和证据的映射见 [ACCEPTANCE.md](./ACCEPTANCE.md)；复现命令直接使用仓库根目录的 `scripts/`、`tests/` 和 `data/` 证据文件。
+
 ## 文档索引
 
 建议按下面顺序阅读：
 
 1. [ARCHITECTURE.md](./ARCHITECTURE.md) - 总体架构、租户模型、请求路由、隔离机制、一致性取舍和部署方案。
-2. [SEQUENCE.md](./SEQUENCE.md) - 企业微信消息到 Agent 回复的完整时序链路，展示 `trace_id` 如何贯穿全链路。
-3. [DATA_MODEL.md](./DATA_MODEL.md) - 租户配置、核心表结构和 Session、Memory、Summary、Artifact、Knowledge、Audit 的统一数据访问抽象。
-4. [MIGRATION.md](./MIGRATION.md) - 多节点并发写、幂等、补偿、Redis 到 SQL 和向量库迁移策略。
-5. [IM_INTEGRATION.md](./IM_INTEGRATION.md) - 企业微信、微信公众号、微信客服、Telegram 和 Web UI 的 Webhook、验签、媒体和真实联调说明。
-6. [CAPACITY.md](./CAPACITY.md) - 容量估算、监控指标、最小部署和生产部署建议。
-7. [RISKS.md](./RISKS.md) - 生产风险清单及缓解措施。
-8. [IMPLEMENTATION.md](./IMPLEMENTATION.md) - 本分支实现边界、运行方式、IM SDK 接入和模型配置说明。
-9. [IMPLEMENTATION_REVIEW.md](./IMPLEMENTATION_REVIEW.md) - 对题目要求、难点、验收标准和实测证据的逐项实现审查。
-10. [POSTGRES_RLS.md](./POSTGRES_RLS.md) - PostgreSQL RLS 双层租户隔离、角色、迁移和验证。
+2. [ACCEPTANCE.md](./ACCEPTANCE.md) - 题目要求到代码、测试和证据文件的逐项映射。
+3. [SEQUENCE.md](./SEQUENCE.md) - 企业微信智能机器人消息到 Agent 回复的完整时序链路，展示 `trace_id` 如何贯穿全链路。
+4. [DATA_MODEL.md](./DATA_MODEL.md) - 租户配置、核心表结构和 Session、Memory、Summary、Artifact、Knowledge、Audit 的统一数据访问抽象。
+5. [MIGRATION.md](./MIGRATION.md) - 多节点并发写、幂等、补偿、Redis 到 SQL 和向量库迁移策略。
+6. [IM_INTEGRATION.md](./IM_INTEGRATION.md) - 企业微信智能机器人、飞书、Telegram 和 Web UI 的接入、验签、媒体和真实联调说明。
+7. [CAPACITY.md](./CAPACITY.md) - 容量估算、监控指标、最小部署和生产部署建议。
+8. [RISKS.md](./RISKS.md) - 生产风险清单及缓解措施。
+9. [IMPLEMENTATION.md](./IMPLEMENTATION.md) - 本分支实现边界、运行方式、IM SDK 接入和模型配置说明。
+10. [OPERATIONS.md](./OPERATIONS.md) - 探针、指标、告警、审计查询和日常运维。
 
 ## 本地复现
 
 ### 环境要求
 
 - Python 3.12 或更高版本。
-- 安装项目依赖。Windows 建议明确使用 Python 3.12：
+- 推荐使用项目虚拟环境，并安装开发依赖。
+
+Windows、Linux 或 macOS：
 
 ```bash
-py -3.12 -m pip install -r requirements.txt
+uv sync --locked --extra dev --python 3.12
 ```
 
-Linux 或 macOS：
+没有安装 `uv` 时可运行 `python -m pip install -r requirements-dev.txt`。依赖以 `pyproject.toml` 为唯一声明来源，并由 `uv.lock` 固定解析结果。
+
+检查环境：
 
 ```bash
-python3.12 -m pip install -r requirements.txt
+uv run python -m pip check
+uv run python scripts/quality_gate.py
 ```
 
-### 运行单元测试
+### 运行完整测试
 
 ```bash
-python -m unittest discover -s tests -p "test_*.py" -v
+python -m pytest -q
 ```
+
+跳过项是显式要求真实外部服务或凭据的测试，不代表本地核心测试失败。`scripts/release_gate.py` 内部使用 unittest，pytest 还会收集函数式测试，因此两者的测试数量统计可能不同。
 
 ### 启动本地 Web UI
 
 Windows：
 
 ```powershell
-.\start-web-ui.ps1
+.\start-web-ui.ps1 --runtime-mode local --port 18001
 ```
 
 Linux 或 macOS：
 
 ```bash
 chmod +x start.sh stop.sh
-./start.sh
+TRPC_AGENT_RUNTIME_MODE=local PORT=18001 ./start.sh
 ```
 
 启动后访问：
@@ -79,6 +96,21 @@ http://127.0.0.1:18001/ui
 
 Web UI 是本地 IM 流程自测入口，可验证消息路由、Session、Memory、工具调用、审计和回复链路；它不替代真实 IM 平台联调。
 
+### 本地 API 验证
+
+本地脚本默认监听 `18001`：
+
+```bash
+curl -i http://127.0.0.1:18001/health
+curl -i http://127.0.0.1:18001/metrics
+curl -i http://127.0.0.1:18001/ui
+curl -X POST http://127.0.0.1:18001/ui/api/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"hello","user_id":"reviewer-user"}'
+```
+
+Compose Gateway 默认监听 `8000`。验证 Compose 时将上面地址中的端口替换为 `8000`；本地 Web UI 与 Compose Gateway 是两条不同的启动路径。
+
 ## Docker 复现
 
 Docker Compose 部署入口位于：
@@ -87,8 +119,7 @@ Docker Compose 部署入口位于：
 deployment/docker-compose.yml
 ```
 
-首次复现请先在仓库根目录生成本地 `.env`。`.env` 已被 Git 忽略，
-不会提交真实密钥。Windows PowerShell：
+首次复现请先在仓库根目录生成本地 `.env`。`.env` 已被 Git 忽略，不会提交真实密钥。Windows PowerShell：
 
 ```powershell
 Copy-Item .env.example .env
@@ -122,8 +153,10 @@ TRPC_AGENT_RUNTIME_MODE=local
 然后启动：
 
 ```bash
-docker compose -f deployment/docker-compose.yml up --build --scale worker=2
+docker compose --env-file .env -f deployment/docker-compose.yml up --build --scale worker=2
 ```
+
+`--env-file .env` 必须显式指定。Compose 默认从 `deployment/` 目录解析 `.env`，而这里生成的 `.env` 位于仓库根目录。
 
 启动后验证：
 
@@ -135,37 +168,19 @@ curl -X POST http://127.0.0.1:8000/ui/api/chat \
   -d '{"text":"hello","user_id":"reviewer-user"}'
 ```
 
-Windows PowerShell 可将最后三条命令替换为：
+Compose 默认使用 Redis 提供队列、幂等和热 Session，使用 PostgreSQL 持久化租户配置、Memory、Summary、Audit 和补偿任务。Gateway 设置 `WORKER_REMOTE=1` 后通过 Redis 将请求交给无状态 Worker；普通 Compose 不自动应用 `deploy.replicas`，因此复现两 Worker 时必须显式指定 `--scale worker=2`。`DURABLE_INBOX_OUTBOX=0` 仅用于本地演示；多节点、生产或可靠性验收必须设置 `DURABLE_INBOX_OUTBOX=1`。
 
-```powershell
-Invoke-RestMethod http://127.0.0.1:8000/health
-Invoke-WebRequest http://127.0.0.1:8000/ui
-Invoke-RestMethod http://127.0.0.1:8000/ui/api/chat `
-  -Method Post -ContentType 'application/json' `
-  -Body '{"text":"hello","user_id":"reviewer-user"}'
-```
-
-Compose 默认使用 Redis 提供队列、幂等和热 Session，使用 PostgreSQL 持久化租户配置、Memory、Summary、Audit 和补偿任务。Gateway 设置 `WORKER_REMOTE=1` 后通过 Redis 将请求交给无状态 Worker；普通 Compose 不自动应用 `deploy.replicas`，因此复现两 Worker 时必须显式指定 `--scale worker=2`。`DURABLE_INBOX_OUTBOX=0` 仅用于本地演示；多节点、生产或可靠性验收必须在 `.env` 中设置 `DURABLE_INBOX_OUTBOX=1`，启用共享 Inbox/Outbox 和崩溃恢复。详细部署与容量说明见 [CAPACITY.md](./CAPACITY.md)。
-
-Compose 启动前会先运行一次 `db-preflight`，使用应用实际的
-`POSTGRES_DSN` 登录 PostgreSQL。认证成功后才会启动 Gateway、Worker 和后台
-Worker；认证失败会阻止应用进入重启循环，并且不会删除数据卷或打印密码。
-注意 PostgreSQL 官方镜像的 `POSTGRES_PASSWORD` 只在
-`postgres_data` 首次初始化时生效，修改 `.env` 不会修改复用旧卷中的数据库
-密码。复用旧卷时应使用旧密码，或按运维流程执行受控密码轮换并同步更新
-`POSTGRES_DSN`。只有可丢弃的本地数据才允许执行：
+Compose 启动前会先运行一次 `db-preflight`，使用应用实际的 `POSTGRES_DSN` 登录 PostgreSQL。认证成功后才会启动 Gateway、Worker 和后台 Worker；认证失败会阻止应用进入重启循环，并且不会删除数据卷或打印密码。只有可丢弃的本地数据才允许执行：
 
 ```bash
-docker compose -f deployment/docker-compose.yml down -v
+docker compose --env-file .env -f deployment/docker-compose.yml down -v
 ```
 
-Compose 容器内的 DSN 主机名必须使用 `sql` 和 `redis`，不能使用
-`localhost`。无真实模型凭据的本地 Compose 演示可显式设置
-`TRPC_AGENT_RUNTIME_MODE=local`；生产默认保持 `trpc` 并配置租户模型凭据。
+Compose 容器内的 DSN 主机名必须使用 `sql` 和 `redis`，不能使用 `localhost`。无真实模型凭据的本地 Compose 演示可显式设置 `TRPC_AGENT_RUNTIME_MODE=local`；生产默认保持 `trpc` 并配置租户模型凭据。
 
 ## 真实 IM 联调
 
-真实企业微信、微信公众号、微信客服或 Telegram 联调需要公网 HTTPS 地址、平台账号、Webhook、Token、Secret 和应用权限。具体绑定、验签、媒体消息和验收步骤见 [IM_INTEGRATION.md](./IM_INTEGRATION.md)。
+真实企业微信、飞书或 Telegram 联调需要公网 HTTPS 地址或长连接网络、平台账号、Webhook、Token、Secret 和应用权限。具体绑定、验签、媒体消息和验收步骤见 [IM_INTEGRATION.md](./IM_INTEGRATION.md)。
 
 联调 Redis、PostgreSQL、对象存储、远端向量库或外部 Memory 前，可以运行不打印密钥的健康检查：
 
@@ -173,6 +188,8 @@ Compose 容器内的 DSN 主机名必须使用 `sql` 和 `redis`，不能使用
 python scripts/validate_integrations.py
 ```
 
+Kubernetes 生产模板的 External Secrets、TLS、镜像摘要、外部 Redis/PostgreSQL、向量库和对象存储前置条件，以及本地 `dev-local` 复现方式，见 [deployment/kubernetes/README.md](../deployment/kubernetes/README.md)。生产模板在未准备这些依赖时会被 Kubernetes 拒绝或保持未就绪，这是预期的前置检查结果；不要把生产模板直接当作无依赖的本地 Compose 替代品。
+
 ## 验收对照
 
-题目要求与本地实现的逐项对照、Redis/PostgreSQL 故障注入、Kubernetes 部署验证、fallback 吞吐基准和真实模型小并发压测的实测摘要见 [IMPLEMENTATION_REVIEW.md](./IMPLEMENTATION_REVIEW.md)。架构、时序、数据模型、数据同步、IM 接入、治理监控、故障恢复和风险清单均可从上述文档中追溯。
+题目要求与本地实现的逐项对照见 [ACCEPTANCE.md](./ACCEPTANCE.md)。本地实测可按其中命令复现，结果保存在仓库 `data/` 目录；架构、时序、数据模型、数据同步、IM 接入、治理监控、故障恢复和风险清单均可从上述文档中追溯。

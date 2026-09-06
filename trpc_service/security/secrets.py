@@ -18,16 +18,12 @@ class SecretResolutionError(RuntimeError):
 
 
 _SECRET_KEY_PATTERN = re.compile(
-    (
-        r"(?i)(?:authorization|access[_ -]?token|api[_ -]?key|token|secret|password|"
-        r"passwd|corp[_ -]?secret|app[_ -]?secret)"
-    )
+    r"(?i)(?:authorization|access[_ -]?token|api[_ -]?key|token|secret|password|"
+    r"passwd|corp[_ -]?secret|app[_ -]?secret)"
 )
 _SECRET_ASSIGNMENT_PATTERN = re.compile(
-    (
-        r"(?i)(\b(?:authorization|access[_ -]?token|api[_ -]?key|token|secret|password|"
-        r"passwd|corp[_ -]?secret|app[_ -]?secret)\b\s*[:=]\s*)([\"']?)([^\s,;&}\"']+)"
-    )
+    r"(?i)(\b(?:authorization|access[_ -]?token|api[_ -]?key|token|secret|password|"
+    r"passwd|corp[_ -]?secret|app[_ -]?secret)\b\s*[:=]\s*)([\"']?)([^\s,;&}\"']+)"
 )
 _BEARER_PATTERN = re.compile(r"(?i)(\bBearer\s+)([^\s,;]+)")
 _URL_QUERY_SECRET_PATTERN = re.compile(r"(?i)([?&](?:access[_-]?token|api[_-]?key|token|secret|password)=)([^&#\s]+)")

@@ -1,18 +1,25 @@
-"""Minimal trace recorder with an OpenTelemetry-compatible span shape."""
+"""Minimal trace recorder with an OpenTelemetry-compatible span shape.
+
+增强功能：
+- 支持更细粒度的 span（Tool 执行、Storage 操作、IM 投递）
+- 记录关键中间状态
+- 支持 span 属性扩展
+"""
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
+from collections.abc import Iterator
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from time import monotonic
-from contextvars import ContextVar
-from typing import Iterator
 
-from trpc_service.tenant.models import TenantContext
-from trpc_service.telemetry.metrics import observe_session_backend_latency
 from trpc_service.security.secrets import redact_secret_text
+from trpc_service.telemetry.metrics import observe_session_backend_latency
+from trpc_service.tenant.models import TenantContext
 
 logger = logging.getLogger("trpc_service.telemetry")
 _current_span: ContextVar[object | None] = ContextVar("trpc_current_span", default=None)
@@ -31,17 +38,21 @@ class SpanRecord:
 
 class TraceRecorder:
     def __init__(self) -> None:
+        try:
+            self._max_retained_spans = max(1, int(os.getenv("TRACE_MAX_RETAINED_SPANS", "1000")))
+        except ValueError:
+            self._max_retained_spans = 1000
         self.spans: list[SpanRecord] = []
         self._tracer = None
         self._otel_trace = None
         self._provider = None
         try:
             from opentelemetry import trace
-            from opentelemetry.trace.status import Status, StatusCode
+            from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
             from opentelemetry.sdk.resources import Resource
             from opentelemetry.sdk.trace import TracerProvider
             from opentelemetry.sdk.trace.export import BatchSpanProcessor
-            from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+            from opentelemetry.trace.status import Status, StatusCode
 
             if os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
                 provider = TracerProvider(
@@ -58,7 +69,12 @@ class TraceRecorder:
             pass
 
     @contextmanager
-    def span(self, name: str, context: TenantContext) -> Iterator[SpanRecord]:
+    def span(
+        self,
+        name: str,
+        context: TenantContext,
+        attributes: dict[str, str] | None = None,
+    ) -> Iterator[SpanRecord]:
         span = SpanRecord(
             name=name,
             trace_id=context.trace_id,
@@ -67,11 +83,14 @@ class TraceRecorder:
                 "tenant.id": context.tenant_id,
                 "agent.app.id": context.agent_app_id,
                 "config.version": str(context.config_version),
-                "session.id": context.session_id or "",
+                "session.id": _trace_identifier(context.session_id),
                 "channel": context.channel or "",
-                "user.id": context.user_id or "",
+                "user.id": _trace_identifier(context.user_id),
             },
         )
+        if attributes:
+            for key, value in attributes.items():
+                span.attributes[str(key)] = redact_secret_text(str(value))
         started = monotonic()
         parent = _current_span.get()
         otel_span = None
@@ -121,6 +140,8 @@ class TraceRecorder:
                 otel_scope.__exit__(None, None, None)
             _current_span.reset(token)
             self.spans.append(span)
+            if len(self.spans) > self._max_retained_spans:
+                del self.spans[: len(self.spans) - self._max_retained_spans]
             if span.name.startswith("storage."):
                 observe_session_backend_latency(
                     context.tenant_id,
@@ -155,3 +176,10 @@ class TraceRecorder:
         shutdown = getattr(self._provider, "shutdown", None)
         if shutdown:
             shutdown()
+
+
+def _trace_identifier(value: str | None) -> str:
+    """Use stable non-reversible identifiers for user and session attributes."""
+    if not value:
+        return ""
+    return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]

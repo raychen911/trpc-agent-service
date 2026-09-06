@@ -5,12 +5,14 @@ from __future__ import annotations
 from typing import Any
 
 from trpc_service.channels.base import (
+    ChannelCapabilities,
     InboundMessage,
     OutboundMessage,
     SendResult,
-    parse_attachments,
     normalize_event_type,
+    parse_attachments,
     revoke_target_message_id,
+    sanitize_event_payload,
     verify_optional_hmac,
 )
 from trpc_service.tenant.models import ChannelBinding
@@ -18,6 +20,7 @@ from trpc_service.tenant.models import ChannelBinding
 
 class SimpleJsonChannelAdapter:
     channel_name = "simple"
+    capabilities = ChannelCapabilities()
     message_id_fields = ("message_id", "MsgId", "update_id")
     user_id_fields = ("user_id", "FromUserName", "from_user_id", "from")
     group_id_fields = ("group_id", "chat_id", "room_id")
@@ -27,11 +30,13 @@ class SimpleJsonChannelAdapter:
         verify_optional_hmac(payload, binding)
 
     def parse_event(self, payload: dict[str, Any], binding: ChannelBinding) -> InboundMessage:
-        raw_event = dict(payload)
-        raw_event["normalized_event_type"] = normalize_event_type(raw_event)
-        target_message_id = revoke_target_message_id(raw_event)
-        if target_message_id:
-            raw_event["target_message_id"] = target_message_id
+        event_type = normalize_event_type(payload)
+        raw_event = sanitize_event_payload(payload)
+        raw_event["normalized_event_type"] = event_type
+        if event_type == "revoke":
+            target_message_id = revoke_target_message_id(payload)
+            if target_message_id:
+                raw_event["target_message_id"] = target_message_id
         external_user_id = self._first(payload, self.user_id_fields, "anonymous")
         return InboundMessage(
             channel=self.channel_name,

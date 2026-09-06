@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from threading import Thread
-from typing import Awaitable, Callable, TypeVar
-
+from typing import TypeVar
 
 T = TypeVar("T")
 

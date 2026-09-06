@@ -6,14 +6,20 @@ import argparse
 import json
 import subprocess
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-
 ROOT = Path(__file__).resolve().parents[1]
-COMPOSE = ["docker", "compose", "-f", str(ROOT / "deployment" / "docker-compose.yml")]
+COMPOSE = [
+    "docker",
+    "compose",
+    "--env-file",
+    str(ROOT / ".env"),
+    "-f",
+    str(ROOT / "deployment" / "docker-compose.yml"),
+]
 
 
 def compose_command(project_name: str | None = None) -> list[str]:
@@ -95,6 +101,16 @@ def inject_service(
 ) -> dict[str, object]:
     result: dict[str, object] = {"service": service}
     result["stop"] = run("stop", service, project_name=project_name)
+    stop_result = result["stop"]
+    if isinstance(stop_result, dict) and stop_result.get("returncode") != 0:
+        result["during_outage"] = {
+            "status": None,
+            "error": "service stop failed; outage was not injected",
+        }
+        result["start"] = {"returncode": 1, "error": "skipped because stop failed"}
+        result["recovery_probe"] = {"ok": False, "error": "service stop failed"}
+        result["after_recovery"] = {"status": None, "error": "service stop failed"}
+        return result
     result["during_outage"] = request(base_url, f"fault injection: {service} stopped")
     result["start"] = run("start", service, project_name=project_name)
     result["recovery_probe"] = wait_for_probe(probe, expected)
@@ -123,7 +139,7 @@ def main() -> int:
     ]
 
     report: dict[str, object] = {
-        "started_at": datetime.now(timezone.utc).isoformat(),
+        "started_at": datetime.now(UTC).isoformat(),
         "base_url": args.base_url,
         "project_name": args.project_name,
         "baseline": request(args.base_url, "fault injection baseline"),
@@ -147,7 +163,7 @@ def main() -> int:
             args.project_name,
         )
     )
-    report["finished_at"] = datetime.now(timezone.utc).isoformat()
+    report["finished_at"] = datetime.now(UTC).isoformat()
     if args.output:
         output = ROOT / args.output
         output.parent.mkdir(parents=True, exist_ok=True)

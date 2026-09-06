@@ -6,8 +6,9 @@ import importlib
 import inspect
 import json
 import os
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 from trpc_service.storage.factory import StorageBundle
 from trpc_service.telemetry.tracing import TraceRecorder
@@ -27,7 +28,7 @@ class RuntimeBridgeSpec:
     settings: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_env(cls) -> "RuntimeBridgeSpec":
+    def from_env(cls) -> RuntimeBridgeSpec:
         settings_raw = os.getenv("TRPC_AGENT_RUNTIME_SETTINGS_JSON", "").strip()
         settings: dict[str, Any] = {}
         if settings_raw:

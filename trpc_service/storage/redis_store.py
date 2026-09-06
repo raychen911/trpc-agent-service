@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime
 from dataclasses import asdict
+from datetime import datetime
 from typing import Any
 
 from trpc_service.storage.base import (
@@ -18,8 +18,8 @@ from trpc_service.storage.base import (
     Summary,
     now_utc,
 )
-from trpc_service.storage.locking import RedisSessionLockMixin, SessionLeaseLost
 from trpc_service.storage.compensation import RedisCompensationStore
+from trpc_service.storage.locking import RedisSessionLockMixin, SessionLeaseLost
 
 
 def _encode(value: Any) -> str:
@@ -65,6 +65,8 @@ class RedisStorage(RedisSessionLockMixin):
             visibility_timeout=int(os.getenv("COMPENSATION_VISIBILITY_TIMEOUT_SECONDS", "180")),
             max_attempts=int(os.getenv("COMPENSATION_MAX_ATTEMPTS", "10")),
         )
+        # 幂等记录 TTL（秒），默认 7 天
+        self.idempotency_ttl = int(os.getenv("IDEMPOTENCY_TTL_SECONDS", str(7 * 24 * 3600)))
 
     def _key(self, kind: str, tenant_id: str, suffix: str = "") -> str:
         value = f"{self.prefix}:{kind}:{tenant_id}"
@@ -117,7 +119,8 @@ class RedisStorage(RedisSessionLockMixin):
         payload['seq'] = seq
         redis.call('RPUSH', KEYS[2], cjson.encode(payload))
         if ARGV[2] ~= '' then
-          redis.call('SET', KEYS[3], tostring(seq))
+          local ttl = tonumber(ARGV[4] or '604800')
+          redis.call('SET', KEYS[3], tostring(seq), 'EX', ttl)
         end
         if redis.call('EXISTS', KEYS[4]) == 0 then
           redis.call('SET', KEYS[4], cjson.encode({state_version = 0, state = {}}))
@@ -135,6 +138,7 @@ class RedisStorage(RedisSessionLockMixin):
             _encode(payload),
             event.idempotency_key or "",
             str(int(fencing_token or 0)),
+            str(self.idempotency_ttl),
         )
         if int(seq) == -1:
             raise SessionLeaseLost(f"session fencing token rejected: {event.tenant_id}/{event.session_id}")
@@ -327,7 +331,7 @@ class RedisStorage(RedisSessionLockMixin):
                     current = self.get(tenant_id, key)
                     if current is None:
                         pipe.multi()
-                        pipe.set(redis_key, payload)
+                        pipe.set(redis_key, payload, ex=self.idempotency_ttl)
                         pipe.execute()
                         return record
                     if current.status == IdempotencyStatus.FAILED or (
@@ -351,6 +355,7 @@ class RedisStorage(RedisSessionLockMixin):
                                     "updated_at": _dt(current.updated_at),
                                 }
                             ),
+                            ex=self.idempotency_ttl,
                         )
                         pipe.execute()
                         return current
@@ -401,6 +406,7 @@ class RedisStorage(RedisSessionLockMixin):
                     "updated_at": _dt(record.updated_at),
                 }
             ),
+            ex=self.idempotency_ttl,
         )
 
     def claim_delivery(self, tenant_id: str, key: str) -> bool:

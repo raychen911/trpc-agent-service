@@ -8,7 +8,7 @@ import statistics
 import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -81,7 +81,7 @@ def main() -> int:
         parser.error("--requests and --concurrency must be positive")
 
     before = metrics(args.base_url)
-    started_at = datetime.now(timezone.utc).isoformat()
+    started_at = datetime.now(UTC).isoformat()
     started = time.perf_counter()
     results: list[dict[str, object]] = []
     with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
@@ -105,7 +105,7 @@ def main() -> int:
 
     report = {
         "started_at": started_at,
-        "finished_at": datetime.now(timezone.utc).isoformat(),
+        "finished_at": datetime.now(UTC).isoformat(),
         "base_url": args.base_url,
         "requests": args.requests,
         "concurrency": args.concurrency,

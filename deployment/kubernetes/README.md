@@ -16,6 +16,11 @@ password, Admin key, model key, or `latest` image tag. Before applying it:
    and the external secret paths with environment-specific values.
 5. Create the `trpc-agent-tls` TLS Secret through the certificate workflow.
 
+The production ConfigMap sets `PUBLIC_SURFACE_AUTH_REQUIRED=1`. The Ingress only
+routes `/webhooks` and the authenticated `/admin` API; `/metrics`, `/ui`, and
+`/ui/api/chat` are not public routes. If Prometheus scrapes `/metrics`, use an
+internal Service path and inject an Admin API authentication header from a Secret.
+
 ```bash
 kubectl apply -f deployment/kubernetes/platform.yaml
 ```

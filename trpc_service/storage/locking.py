@@ -7,8 +7,9 @@ import os
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from threading import RLock
+from datetime import UTC, datetime, timedelta
+from threading import Event, RLock, Thread, current_thread
+from typing import Any, Iterator, Self, cast
 from uuid import uuid4
 
 
@@ -53,7 +54,7 @@ def _new_local_lease(tenant_id: str, session_id: str, owner: str, ttl: float) ->
         session_id=session_id,
         owner=owner,
         fencing_token=token,
-        expires_at=datetime.now(timezone.utc) + timedelta(seconds=max(1.0, ttl)),
+        expires_at=datetime.now(UTC) + timedelta(seconds=max(1.0, ttl)),
     )
 
 
@@ -63,7 +64,7 @@ def session_lease(
     tenant_id: str,
     session_id: str,
     timeout: float | None = None,
-):
+) -> Iterator[SessionLease | str | None]:
     """Acquire a fencing-token lease, falling back to the legacy lock API."""
 
     timeout = float(os.getenv("SESSION_LOCK_TIMEOUT_SECONDS", "30") if timeout is None else timeout)
@@ -117,10 +118,64 @@ def renew_session_lease(store: object, lease: SessionLease | None) -> SessionLea
         return lease
     renew = getattr(store, "renew_session_lease", None)
     if renew:
-        renewed = renew(lease)
+        renewed = cast(SessionLease, renew(lease))
         validate_session_lease(store, renewed)
         return renewed
     return lease
+
+
+class SessionLeaseHeartbeat:
+    """Refresh a session lease while synchronous model/tool work is running.
+
+    The worker path is synchronous, so a daemon thread is used to keep the
+    backend lease alive during an otherwise uninterruptible provider call.
+    Errors are retained and surfaced by ``raise_if_failed`` before commit.
+    """
+
+    def __init__(self, store: object, lease: SessionLease, interval: float | None = None) -> None:
+        self.store = store
+        self.lease = lease
+        ttl = float(os.getenv("SESSION_LEASE_TTL_SECONDS", "120"))
+        self.interval = max(0.1, float(interval if interval is not None else ttl / 3.0))
+        self._stop = Event()
+        self._done = Event()
+        self._error: BaseException | None = None
+        self._thread: Thread | None = None
+
+    def start(self) -> Self:
+        if self._thread is not None:
+            return self
+
+        def beat() -> None:
+            try:
+                while not self._stop.wait(self.interval):
+                    self.lease = renew_session_lease(self.store, self.lease) or self.lease
+            except BaseException as exc:  # retained for the owning worker thread
+                self._error = exc
+            finally:
+                self._done.set()
+
+        self._thread = Thread(target=beat, name="session-lease-heartbeat", daemon=True)
+        self._thread.start()
+        return self
+
+    def stop(self) -> None:
+        self._stop.set()
+        thread = self._thread
+        if thread is not None and thread is not current_thread():
+            thread.join(timeout=max(1.0, self.interval))
+
+    def raise_if_failed(self) -> None:
+        if self._error is not None:
+            raise self._error
+
+    def __enter__(self) -> Self:
+        return self.start()
+
+    def __exit__(self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: Any) -> None:
+        self.stop()
+        if exc_type is None:
+            self.raise_if_failed()
 
 
 @contextmanager
@@ -129,7 +184,7 @@ def session_lock(
     tenant_id: str,
     session_id: str,
     timeout: float | None = None,
-):
+) -> Iterator[SessionLease | str | None]:
     """Acquire the strongest session lock supported by the backend.
 
     The helper keeps the storage protocol backwards compatible: custom stores
@@ -169,6 +224,12 @@ def session_lock(
 
 class RedisSessionLockMixin:
     """Mixin implementing a crash-safe Redis SET NX EX lock."""
+
+    client: Any
+
+    def _key(self, kind: str, tenant_id: str, suffix: str = "") -> str:
+        """Return a namespaced backend key supplied by the concrete store."""
+        raise NotImplementedError
 
     def acquire_session_lock(self, tenant_id: str, session_id: str, timeout: float) -> str:
         key = self._key("session-lock", tenant_id, session_id)
@@ -214,7 +275,7 @@ class RedisSessionLockMixin:
                     session_id,
                     owner,
                     fence,
-                    datetime.now(timezone.utc) + timedelta(seconds=ttl),
+                    datetime.now(UTC) + timedelta(seconds=ttl),
                 )
             if time.monotonic() >= deadline:
                 raise SessionLockTimeout(f"session lease timeout: {tenant_id}/{session_id}")
@@ -254,7 +315,7 @@ class RedisSessionLockMixin:
             lease.session_id,
             lease.owner,
             lease.fencing_token,
-            datetime.now(timezone.utc) + timedelta(seconds=ttl),
+            datetime.now(UTC) + timedelta(seconds=ttl),
         )
 
     def validate_session_lease(self, lease: SessionLease) -> None:
@@ -273,9 +334,12 @@ class RedisSessionLockMixin:
 class PostgresSessionLockMixin:
     """Mixin using a PostgreSQL advisory lock scoped to the connection."""
 
+    _conn: Any
+    _lock: RLock
+
     @staticmethod
     def _lock_name(tenant_id: str, session_id: str) -> str:
-        digest = hashlib.sha256(f"{tenant_id}:{session_id}".encode("utf-8")).hexdigest()
+        digest = hashlib.sha256(f"{tenant_id}:{session_id}".encode()).hexdigest()
         return f"trpc-agent-session:{digest}"
 
     def acquire_session_lock(self, tenant_id: str, session_id: str, timeout: float) -> str:
@@ -304,7 +368,7 @@ class PostgresSessionLockMixin:
         deadline = time.monotonic() + max(0.0, timeout)
         ttl = max(1, int(os.getenv("SESSION_LEASE_TTL_SECONDS", "120")))
         while True:
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             expires_at = now + timedelta(seconds=ttl)
             with self._lock, self._conn.transaction(), self._conn.cursor() as cur:
                 cur.execute(
@@ -355,7 +419,7 @@ class PostgresSessionLockMixin:
 
     def renew_session_lease(self, lease: SessionLease) -> SessionLease:
         ttl = max(1, int(os.getenv("SESSION_LEASE_TTL_SECONDS", "120")))
-        expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl)
+        expires_at = datetime.now(UTC) + timedelta(seconds=ttl)
         with self._lock, self._conn.transaction(), self._conn.cursor() as cur:
             cur.execute(
                 """
@@ -383,7 +447,7 @@ class PostgresSessionLockMixin:
 
 
 @contextmanager
-def postgres_advisory_lock(connection, name: str, timeout: float = 60.0):
+def postgres_advisory_lock(connection: Any, name: str, timeout: float = 60.0) -> Iterator[None]:
     """Serialize process-wide database operations such as schema migrations."""
 
     deadline = time.monotonic() + max(0.0, timeout)
@@ -405,7 +469,7 @@ def postgres_advisory_lock(connection, name: str, timeout: float = 60.0):
 
 
 @contextmanager
-def local_session_lock(tenant_id: str, session_id: str):
+def local_session_lock(tenant_id: str, session_id: str) -> Iterator[None]:
     """Explicit local lock context for stores that do not need a backend lock."""
 
     with session_lock(object(), tenant_id, session_id, timeout=30):

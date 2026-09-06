@@ -32,7 +32,17 @@ RLS_TABLES = (
     "session_lease",
     "inbox_message",
     "outbox_message",
+    "mailbox_message",
+    "mailbox_fence",
+    "session_mailbox",
+    "session_mailbox_item",
+    "tool_approval",
+    "tool_budget",
+    "tool_executions",
     "knowledge_chunk",
+    "migration_lease",
+    "migration_write_barrier",
+    "migration_checkpoint",
 )
 RLS_RUNTIME_TABLES = tuple(
     table for table in RLS_TABLES if table not in {"tenant_config", "tenant_active"}
@@ -80,6 +90,32 @@ def validate_runtime_role(owner: object, *, expected_role_env: str | None = None
     if bool(is_superuser) or bool(bypasses_rls):
         raise PostgresRLSError(
             f"RLS runtime connection role {current_user!r} must not be SUPERUSER or BYPASSRLS"
+        )
+
+
+def validate_worker_role(owner: object, *, expected_role_env: str | None = None) -> None:
+    """Reject privileged or non-worker roles on cross-tenant worker connections."""
+
+    if not rls_enabled():
+        return
+    connection = _connection(owner)
+    with connection.cursor() as cur:
+        cur.execute(
+            "SELECT current_user, rolsuper, rolbypassrls, rolcanlogin "
+            "FROM pg_roles WHERE rolname = current_user"
+        )
+        row = cur.fetchone()
+    if row is None:
+        raise PostgresRLSError("RLS worker connection role could not be inspected")
+    current_user, is_superuser, bypasses_rls, can_login = row
+    expected_role = os.getenv(expected_role_env, "").strip() if expected_role_env else ""
+    if expected_role and str(current_user) != expected_role:
+        raise PostgresRLSError(
+            f"RLS worker connection uses role {current_user!r}; expected {expected_role!r}"
+        )
+    if bool(is_superuser) or not bool(bypasses_rls) or not bool(can_login):
+        raise PostgresRLSError(
+            f"RLS worker role {current_user!r} must be LOGIN, NOSUPERUSER, and BYPASSRLS"
         )
 
 
@@ -214,6 +250,35 @@ def _ensure_login_role(cur, role: str, password: str | None) -> None:
         raise PostgresRLSError(f"role {role!r} must have LOGIN enabled")
 
 
+def _ensure_worker_role(cur, role: str, password: str | None) -> None:
+    state = _role_exists(cur, role)
+    if state is None:
+        if not password:
+            raise PostgresRLSError(
+                f"worker role {role!r} does not exist; provide its password through the migration environment"
+            )
+        from psycopg import sql
+
+        cur.execute(
+            sql.SQL(
+                "CREATE ROLE {} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE "
+                "NOINHERIT NOREPLICATION BYPASSRLS PASSWORD {}"
+            ).format(sql.Identifier(role), sql.Literal(password))
+        )
+        return
+    if state[0] or state[3] or state[4] or state[5]:
+        raise PostgresRLSError(
+            f"worker role {role!r} must be a least-privilege login role "
+            "without SUPERUSER, CREATEDB, CREATEROLE, or REPLICATION"
+        )
+    if not state[1]:
+        from psycopg import sql
+
+        cur.execute(sql.SQL("ALTER ROLE {} BYPASSRLS").format(sql.Identifier(role)))
+    if not state[2]:
+        raise PostgresRLSError(f"worker role {role!r} must have LOGIN enabled")
+
+
 def _grant_runtime_privileges(cur, role: str, tables: tuple[str, ...]) -> None:
     from psycopg import sql
 
@@ -272,6 +337,8 @@ def apply_rls_migration(
     admin_role: str | None = None,
     app_password: str | None = None,
     admin_password: str | None = None,
+    worker_role: str | None = None,
+    worker_password: str | None = None,
 ) -> None:
     """Create least-privilege roles and install tenant policies.
 
@@ -289,12 +356,20 @@ def apply_rls_migration(
     )
     if app_role == admin_role:
         raise PostgresRLSError("application and admin RLS roles must be different")
+    worker_role = _identifier(
+        worker_role or os.getenv("POSTGRES_RLS_WORKER_ROLE", "trpc_worker"),
+        "worker role",
+    )
+    if worker_role in {app_role, admin_role}:
+        raise PostgresRLSError("worker, application, and admin RLS roles must be different")
 
     with connection.transaction(), connection.cursor() as cur:
         _ensure_login_role(cur, app_role, app_password or os.getenv("POSTGRES_RLS_APP_PASSWORD"))
         _ensure_login_role(cur, admin_role, admin_password or os.getenv("POSTGRES_RLS_ADMIN_PASSWORD"))
+        _ensure_worker_role(cur, worker_role, worker_password or os.getenv("POSTGRES_RLS_WORKER_PASSWORD"))
         _grant_runtime_privileges(cur, app_role, RLS_RUNTIME_TABLES)
         _grant_runtime_privileges(cur, admin_role, RLS_TABLES)
+        _grant_runtime_privileges(cur, worker_role, RLS_TABLES)
         for table in RLS_TABLES:
             cur.execute("SELECT to_regclass(%s)", (f"public.{table}",))
             if cur.fetchone()[0] is None:
@@ -331,4 +406,5 @@ __all__ = [
     "rls_enabled",
     "rls_tenant_method",
     "validate_runtime_role",
+    "validate_worker_role",
 ]
