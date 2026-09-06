@@ -57,8 +57,35 @@ uv sync --locked --extra dev --python 3.12
 
 ### 运行测试
 
-执行完整测试套件。当前仓库共收集 639 个测试，默认结果为 637 passed、2 skipped；
-跳过项是需要真实外部服务或显式环境变量的集成测试：
+执行完整测试套件。当前仓库共收集 639 个测试，默认结果为 `637 passed、2 skipped`。
+默认不会自动启用以下两个 opt-in 集成测试：
+
+- `tests/test_postgres_rls.py::PostgresRLSIntegrationTests::test_app_role_isolation_and_admin_visibility`
+  会创建和删除数据库角色、RLS 策略及测试数据，必须明确指定可丢弃的 PostgreSQL 数据库，
+  避免误操作开发或生产数据。
+- `tests/test_real_model_integration.py::RealModelIntegrationTests::test_responses_api_with_configured_model`
+  会向真实模型服务发起网络请求并消耗配额，还会受到服务可用性、延迟和限流影响；默认测试应保持
+  无外部凭据、可离线重复执行。
+
+启用相应环境变量后，可以单独运行这两个测试：
+
+```bash
+POSTGRES_RLS_TEST_DSN="postgresql://user:password@localhost:5432/disposable_db" \
+POSTGRES_RLS_TEST_ALLOW_DESTRUCTIVE=1 \
+uv run pytest -q tests/test_postgres_rls.py
+
+RUN_REAL_MODEL_TESTS=1 \
+CPA_BASE_URL="https://provider.example/v1" \
+CPA_MODEL="provider-model-id" \
+OPENAI_API_KEY="<new-key>" \
+uv run pytest -q tests/test_real_model_integration.py
+```
+
+本次本地 opt-in 验证结果为 PostgreSQL RLS `8 passed`、真实模型 `1 passed`；两项均启用时，
+完整套件对应 `639 passed、0 skipped`。API key 只能通过环境变量或 Secret Manager 注入，
+不得写入仓库、配置样例、日志或测试输出。
+
+默认质量检查命令仍为：
 
 ```bash
 uv run python scripts/quality_gate.py
@@ -69,8 +96,9 @@ uv run python scripts/quality_gate.py
 严格检查，可运行 `uv run mypy --config-file mypy-strict.ini trpc_service`。strict
 配置作为持续改进工具保留，不作为本次实战功能验收的硬门禁。
 
-项目 release gate 使用 unittest 作为其中一项检查，因此它会报告 191 个测试
-（其中 2 个跳过）；pytest 还会收集以函数形式定义的测试。两种命令的
+默认环境下，项目 release gate 使用 unittest 作为其中一项检查，因此它会报告 191 个测试
+（其中 2 个跳过）；启用两个 opt-in 集成测试后，该口径也会相应纳入这两项测试。
+pytest 还会收集以函数形式定义的测试。两种命令的
 通过结果一致，统计数量不同是测试发现器口径不同造成的。
 
 也可以分别运行测试、编译和代码风格检查：

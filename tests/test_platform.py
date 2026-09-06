@@ -14,7 +14,10 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request
 
-for key in (
+import pytest
+
+
+_PLATFORM_ENV_KEYS = (
     "WORKER_QUEUE_URL",
     "WORKER_REMOTE",
     "REDIS_URL",
@@ -48,12 +51,23 @@ for key in (
     "CPA_CODEX_TIMEOUT_MS",
     "CPA_CODEX_CWD",
     "ENABLE_LEGACY_WECOM",
-):
-    os.environ.pop(key, None)
-os.environ["CPA_MODEL"] = "test-model"
-# The test suite intentionally exercises the no-credential demo runtime.
-# Production defaults remain fail-fast tRPC-Agent-Python mode.
+)
+
+
+@pytest.fixture(autouse=True)
+def _platform_test_environment(monkeypatch):
+    for key in _PLATFORM_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("CPA_MODEL", "test-model")
+    # The test suite intentionally exercises the no-credential demo runtime.
+    # Production defaults remain fail-fast tRPC-Agent-Python mode.
+    monkeypatch.setenv("TRPC_AGENT_RUNTIME_MODE", "local")
+
+
+# Keep the downstream test modules on the no-credential demo default. Individual
+# tests still receive a clean, automatically restored environment from the fixture.
 os.environ.setdefault("TRPC_AGENT_RUNTIME_MODE", "local")
+os.environ.setdefault("CPA_MODEL", "test-model")
 
 from trpc_service.admin.auth import AdminAuthenticationError, AdminPrincipal, authenticate, authorize
 from trpc_service.agent import RuntimeBridgeSpec, build_runtime_worker
