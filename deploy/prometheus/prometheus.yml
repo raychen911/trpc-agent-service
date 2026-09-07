@@ -1,0 +1,19 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: tenant-agent-gateway
+    static_configs: [{targets: ["gateway:8080"]}]
+  - job_name: tenant-agent-channel
+    static_configs: [{targets: ["channel-adapter:8080"]}]
+  - job_name: tenant-agent-worker
+    dns_sd_configs:
+      - names: [worker]
+        type: A
+        port: 8080
+  - job_name: tenant-agent-outbox
+    dns_sd_configs:
+      - names: [outbox]
+        type: A
+        port: 8080

@@ -1,0 +1,110 @@
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: otel-collector, namespace: tenant-agent}
+data:
+  collector.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc: {endpoint: 0.0.0.0:4317}
+          http: {endpoint: 0.0.0.0:4318}
+    processors:
+      memory_limiter: {check_interval: 1s, limit_mib: 512}
+      transform/redact:
+        error_mode: ignore
+        trace_statements:
+          - context: span
+            statements:
+              - set(attributes["trpc_agent.runner.input"], "[REDACTED]") where attributes["trpc_agent.runner.input"] != nil
+              - set(attributes["trpc_agent.runner.output"], "[REDACTED]") where attributes["trpc_agent.runner.output"] != nil
+              - set(attributes["trpc_agent.agent.input"], "[REDACTED]") where attributes["trpc_agent.agent.input"] != nil
+              - set(attributes["trpc_agent.agent.output"], "[REDACTED]") where attributes["trpc_agent.agent.output"] != nil
+              - set(attributes["trpc_agent.llm_request"], "[REDACTED]") where attributes["trpc_agent.llm_request"] != nil
+              - set(attributes["trpc_agent.llm_response"], "[REDACTED]") where attributes["trpc_agent.llm_response"] != nil
+              - set(attributes["trpc_agent.tool_call_args"], "[REDACTED]") where attributes["trpc_agent.tool_call_args"] != nil
+              - set(attributes["trpc_agent.tool_response"], "[REDACTED]") where attributes["trpc_agent.tool_response"] != nil
+              - set(attributes["trpc_agent.stream_function_calls.raw"], "[REDACTED]") where attributes["trpc_agent.stream_function_calls.raw"] != nil
+              - set(attributes["trpc_agent.stream_function_calls.post_planner"], "[REDACTED]") where attributes["trpc_agent.stream_function_calls.post_planner"] != nil
+              - set(attributes["trpc.python.agent.runner.input"], "[REDACTED]") where attributes["trpc.python.agent.runner.input"] != nil
+              - set(attributes["trpc.python.agent.runner.output"], "[REDACTED]") where attributes["trpc.python.agent.runner.output"] != nil
+              - set(attributes["trpc.python.agent.agent.input"], "[REDACTED]") where attributes["trpc.python.agent.agent.input"] != nil
+              - set(attributes["trpc.python.agent.agent.output"], "[REDACTED]") where attributes["trpc.python.agent.agent.output"] != nil
+              - set(attributes["trpc.python.agent.llm_request"], "[REDACTED]") where attributes["trpc.python.agent.llm_request"] != nil
+              - set(attributes["trpc.python.agent.llm_response"], "[REDACTED]") where attributes["trpc.python.agent.llm_response"] != nil
+              - set(attributes["trpc.python.agent.tool_call_args"], "[REDACTED]") where attributes["trpc.python.agent.tool_call_args"] != nil
+              - set(attributes["trpc.python.agent.tool_response"], "[REDACTED]") where attributes["trpc.python.agent.tool_response"] != nil
+              - set(attributes["trpc.python.agent.stream_function_calls.raw"], "[REDACTED]") where attributes["trpc.python.agent.stream_function_calls.raw"] != nil
+              - set(attributes["trpc.python.agent.stream_function_calls.post_planner"], "[REDACTED]") where attributes["trpc.python.agent.stream_function_calls.post_planner"] != nil
+              - delete_key(attributes, "http.url")
+              - delete_key(attributes, "url.full")
+              - delete_key(attributes, "url.query")
+              - delete_key(attributes, "gen_ai.prompt")
+              - delete_key(attributes, "gen_ai.completion")
+              - delete_key(attributes, "gen_ai.input.messages")
+              - delete_key(attributes, "gen_ai.output.messages")
+      batch: {send_batch_size: 1024, timeout: 2s}
+    exporters:
+      otlp:
+        endpoint: ${env:TRACE_BACKEND_OTLP_ENDPOINT}
+        headers: {Authorization: "Bearer ${env:TRACE_BACKEND_TOKEN}"}
+    service:
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, transform/redact, batch]
+          exporters: [otlp]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: otel-collector, namespace: tenant-agent}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: otel-collector}}
+  template:
+    metadata: {labels: {app: otel-collector}}
+    spec:
+      serviceAccountName: tenant-agent
+      automountServiceAccountToken: false
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector: {matchLabels: {app: otel-collector}}
+      containers:
+        - name: collector
+          image: otel/opentelemetry-collector-contrib:0.132.0
+          args: [--config=/etc/otel/collector.yaml]
+          envFrom: [{secretRef: {name: telemetry-secrets}}]
+          ports:
+            - {name: grpc, containerPort: 4317}
+            - {name: http, containerPort: 4318}
+          resources:
+            requests: {cpu: 200m, memory: 256Mi}
+            limits: {cpu: "1", memory: 768Mi}
+          readinessProbe: {tcpSocket: {port: http}, periodSeconds: 5}
+          livenessProbe: {tcpSocket: {port: http}, periodSeconds: 15}
+          startupProbe: {tcpSocket: {port: http}, periodSeconds: 5, failureThreshold: 30}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities: {drop: [ALL]}
+            seccompProfile: {type: RuntimeDefault}
+          volumeMounts: [{name: config, mountPath: /etc/otel, readOnly: true}]
+      volumes: [{name: config, configMap: {name: otel-collector}}]
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: otel-collector, namespace: tenant-agent}
+spec:
+  minAvailable: 1
+  selector: {matchLabels: {app: otel-collector}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: otel-collector, namespace: tenant-agent}
+spec:
+  selector: {app: otel-collector}
+  ports:
+    - {name: grpc, port: 4317, targetPort: grpc}
+    - {name: http, port: 4318, targetPort: http}

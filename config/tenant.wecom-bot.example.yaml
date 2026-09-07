@@ -1,0 +1,42 @@
+# Local connection test. Set the two referenced variables; no secrets belong here.
+# Switch to a configured remote model and shared backends for production.
+tenants:
+  - tenant_id: botdemo
+    display_name: WeCom Bot Connection Test
+    revision: 1
+    models:
+      offline:
+        provider: deterministic
+        model_name: deterministic-v1
+        max_output_tokens: 1024
+        context_window_tokens: 2048
+    apps:
+      assistant:
+        app_id: assistant
+        agent_name: WeComAssistant
+        instruction: You are running the offline connection test profile.
+        model_profile: offline
+        allowed_tools: [calculator, current_time, memory_search]
+    channels:
+      - binding_id: wecom-bot-demo-001
+        channel: wecom_bot
+        app_id: assistant
+        external_account_id: botdemo-account
+        credential_refs:
+          bot_id: {uri: "env://TENANT_BOTDEMO_WECOM_BOT_ID"}
+          bot_secret: {uri: "env://TENANT_BOTDEMO_WECOM_BOT_SECRET"}
+    data_backends:
+      session: {kind: inmemory}
+      memory: {kind: inmemory}
+      summary: {kind: inmemory}
+      artifact: {kind: inmemory}
+      knowledge: {kind: inmemory}
+      audit: {kind: sql, dsn_ref: {uri: "env://TAP_CONTROL_DATABASE_URL"}}
+    governance:
+      tools:
+        allow: [calculator, current_time, memory_search]
+      budget:
+        monthly_tokens: 1000000
+        monthly_cost_usd: 10
+    metadata:
+      summary_every_events: "4"

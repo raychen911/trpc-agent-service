@@ -1,0 +1,110 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tenant-agent-platform"
+version = "0.1.0"
+description = "Production-oriented multi-tenant, multi-node deployment platform for tRPC-Agent-Python"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Changyuan Chen", email = "cchen22@emich.edu" }]
+dependencies = [
+  "alembic>=1.16.0,<2.0",
+  "aiosqlite>=0.21.0",
+  "cryptography>=45.0.0",
+  "defusedxml>=0.7.1,<1.0",
+  "fastapi>=0.116.0,<1.0",
+  "httpx>=0.28.0,<1.0",
+  "opentelemetry-api>=1.36.0,<2.0",
+  "opentelemetry-exporter-otlp-proto-http>=1.36.0,<2.0",
+  "opentelemetry-instrumentation-fastapi>=0.57b0,<1.0",
+  "opentelemetry-sdk>=1.36.0,<2.0",
+  "prometheus-client>=0.22.0,<1.0",
+  "pydantic>=2.11.0,<3.0",
+  "pydantic-settings>=2.10.0,<3.0",
+  "PyYAML>=6.0.2,<7.0",
+  "redis>=6.2.0,<7.0",
+  "SQLAlchemy>=2.0.43,<3.0",
+  "trpc-agent-py==1.1.19",
+  "typer>=0.16.0,<1.0",
+  "uvicorn[standard]>=0.35.0,<1.0",
+  "websockets>=16.0,<17.0",
+]
+
+[project.optional-dependencies]
+production = [
+  "aioboto3>=15.0.0,<16.0",
+  "asyncpg>=0.30.0,<1.0",
+  "litellm>=1.75.5,<2.0",
+  "qdrant-client>=1.15.0,<2.0",
+]
+dev = [
+  "asgi-lifespan>=2.1.0,<3.0",
+  "fakeredis[lua]>=2.31.0,<3.0",
+  "mypy>=1.17.0,<2.0",
+  "pytest>=9.0.3,<10.0",
+  "pytest-asyncio>=1.1.0,<2.0",
+  "pytest-cov>=6.2.0,<7.0",
+  "ruff>=0.12.0,<1.0",
+  "types-PyYAML>=6.0.12.20250516",
+]
+
+[project.scripts]
+tenant-agent = "tenant_agent.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tenant_agent"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"alembic.ini" = "tenant_agent/_resources/alembic.ini"
+"migrations" = "tenant_agent/_resources/migrations"
+"config" = "tenant_agent/_resources/config"
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers --strict-config"
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+  "integration: requires an explicitly configured disposable external service",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["tenant_agent"]
+omit = ["src/tenant_agent/asgi.py"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+fail_under = 85
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "ASYNC", "S", "UP", "RUF"]
+ignore = ["S101"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S105", "S106"]
+"src/tenant_agent/cli.py" = ["S104"]
+"src/tenant_agent/settings.py" = ["S104"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = [
+  "trpc_agent_sdk.*",
+  "defusedxml.*",
+  "aioboto3.*",
+  "qdrant_client.*",
+  "numpy.*",
+]
+ignore_missing_imports = true
+follow_imports = "skip"

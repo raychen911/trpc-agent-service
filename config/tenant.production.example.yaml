@@ -1,0 +1,108 @@
+tenants:
+  - tenant_id: acme
+    display_name: ACME Production
+    revision: 1
+    status: active
+    models:
+      primary:
+        provider: openai-compatible
+        model_name: gpt-5-mini
+        api_key_ref: {uri: "vault://kv/data/tenants/acme/model#api_key"}
+        base_url: "https://api.openai.com/v1"
+        timeout_seconds: 60
+        max_output_tokens: 4096
+        input_cost_per_million: 0
+        output_cost_per_million: 0
+    apps:
+      support:
+        app_id: support
+        agent_name: SupportAgent
+        description: ACME support assistant
+        instruction: "Answer only from ACME-approved tools and knowledge."
+        model_profile: primary
+        allowed_tools: [calculator, current_time, memory_search, save_text_artifact, fetch_url]
+    channels:
+      - binding_id: tg-acme-prod-01
+        channel: telegram
+        app_id: support
+        external_account_id: acme-support-bot
+        credential_refs:
+          webhook_secret: {uri: "vault://kv/data/tenants/acme/telegram#webhook_secret"}
+          bot_token: {uri: "vault://kv/data/tenants/acme/telegram#bot_token"}
+        settings: {streaming_edits: true}
+        enabled: true
+      - binding_id: wc-acme-prod-01
+        channel: wecom
+        app_id: support
+        external_account_id: acme-corp-app
+        credential_refs:
+          callback_token: {uri: "vault://kv/data/tenants/acme/wecom#callback_token"}
+          encoding_aes_key: {uri: "vault://kv/data/tenants/acme/wecom#encoding_aes_key"}
+          corp_id: {uri: "vault://kv/data/tenants/acme/wecom#corp_id"}
+          corp_secret: {uri: "vault://kv/data/tenants/acme/wecom#corp_secret"}
+          agent_id: {uri: "vault://kv/data/tenants/acme/wecom#agent_id"}
+        settings: {async_reply: true}
+        enabled: true
+      - binding_id: wb-acme-prod-01
+        channel: wecom_bot
+        app_id: support
+        external_account_id: acme-support-bot
+        credential_refs:
+          bot_id: {uri: "env://TENANT_ACME_WECOM_BOT_ID"}
+          bot_secret: {uri: "env://TENANT_ACME_WECOM_BOT_SECRET"}
+        enabled: true
+    data_backends:
+      session:
+        kind: redis
+        namespace: acme-session
+        dsn_ref: {uri: "vault://kv/data/tenants/acme/redis#url"}
+        options: {cluster: true}
+      memory:
+        kind: redis
+        namespace: acme-memory
+        dsn_ref: {uri: "vault://kv/data/tenants/acme/redis#url"}
+        options: {cluster: true}
+      summary:
+        kind: sql
+        namespace: acme-summary
+        dsn_ref: {uri: "vault://kv/data/tenants/acme/postgres#async_url"}
+      artifact:
+        kind: s3
+        namespace: acme-artifacts
+        dsn_ref: {uri: "vault://kv/data/tenants/acme/object-store#connection_json"}
+      knowledge:
+        kind: qdrant
+        namespace: acme-knowledge
+        dsn_ref: {uri: "vault://kv/data/tenants/acme/qdrant#connection_json"}
+      audit:
+        kind: sql
+        namespace: audit
+        dsn_ref: {uri: "env://TAP_CONTROL_DATABASE_URL"}
+    governance:
+      tools:
+        allow: [calculator, current_time, memory_search, save_text_artifact, fetch_url]
+        deny: []
+        dangerous: [fetch_url]
+        confirmation_ttl_seconds: 300
+      users: {allow_users: [], deny_users: [], allow_groups: [], group_session_scope: conversation}
+      budget:
+        monthly_tokens: 100000000
+        monthly_cost_usd: 5000
+        max_tokens_per_request: 16000
+        max_concurrent_sessions: 1000
+        max_llm_calls_per_request: 8
+        max_tool_calls_per_request: 16
+      redaction:
+        redact_email: true
+        redact_phone: true
+        redact_credentials: true
+        redact_before_model: false
+        replacement: "[REDACTED]"
+    audit:
+      enabled: true
+      retention_days: 365
+      include_prompt_hash: true
+      include_content: false
+    metadata:
+      summary_every_events: "20"
+      http_tool_allowlist: "api.acme.example"

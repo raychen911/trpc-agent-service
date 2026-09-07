@@ -1,0 +1,223 @@
+name: tenant-agent-platform
+
+x-app: &app
+  build: .
+  restart: unless-stopped
+  stop_grace_period: 130s
+  init: true
+  environment: &common-env
+    TAP_ENVIRONMENT: production
+    TAP_CONTROL_DATABASE_URL: postgresql+asyncpg://tenant_agent_app:${POSTGRES_APP_PASSWORD:?set POSTGRES_APP_PASSWORD}@postgres:5432/tenant_agent
+    TAP_REDIS_URL: redis://redis:6379/0
+    TAP_REDIS_CLUSTER: "false"
+    TAP_BROKER_MODE: redis-streams
+    TAP_WORKER_MAX_ATTEMPTS: "8"
+    TAP_CONFIG_PREFLIGHT_TIMEOUT_SECONDS: "30"
+    TAP_AUTO_CREATE_SCHEMA: "false"
+    TAP_BOOTSTRAP_CONFIG_PATH: /app/config/tenant.production.example.yaml
+    TAP_OTLP_ENDPOINT: http://otel-collector:4318/v1/traces
+  networks: [backend]
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+    redis:
+      condition: service_healthy
+  security_opt: [no-new-privileges:true]
+  read_only: true
+  tmpfs: [/tmp]
+
+services:
+  minimal:
+    profiles: [minimal]
+    build: .
+    command: [tenant-agent, serve, --role, all, --host, 0.0.0.0, --port, "8080"]
+    environment:
+      TAP_ENVIRONMENT: development
+      TAP_SERVICE_ROLE: all
+      TAP_CONTROL_DATABASE_URL: sqlite+aiosqlite:////app/data/tenant-agent.db
+      TAP_BOOTSTRAP_CONFIG_PATH: /app/config/tenants.example.yaml
+      TAP_SESSION_HMAC_KEY: local-development-hmac-key-change-me
+      TAP_ADMIN_BEARER_TOKEN: local-development-admin-token
+      TAP_INTERNAL_BEARER_TOKEN: local-development-internal-token
+      TENANT_DEMO_WEBHOOK_TOKEN: development-webhook-token
+      TAP_BROKER_MODE: inline
+    ports: ["${TAP_PUBLIC_BIND_ADDRESS:-127.0.0.1}:8080:8080"]
+    volumes:
+      - minimal-data:/app/data
+      - minimal-artifacts:/app/artifacts
+    networks: [frontend]
+    security_opt: [no-new-privileges:true]
+
+  postgres:
+    profiles: [production]
+    image: postgres:16.4-alpine
+    environment:
+      POSTGRES_DB: tenant_agent
+      POSTGRES_USER: tenant_agent_admin
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?set POSTGRES_ADMIN_PASSWORD}
+      POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD:?set POSTGRES_APP_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./deploy/postgres/init-app-role.sh:/docker-entrypoint-initdb.d/10-app-role.sh:ro
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U tenant_agent_admin -d tenant_agent]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [backend]
+
+  redis:
+    profiles: [production]
+    image: redis:7.4.1-alpine
+    command: [redis-server, --appendonly, "yes", --appendfsync, everysec]
+    volumes: [redis-data:/data]
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [backend]
+
+  migrate:
+    profiles: [production]
+    build: .
+    command: [tenant-agent, db-init]
+    environment:
+      <<: *common-env
+      TAP_CONTROL_DATABASE_URL: postgresql+asyncpg://tenant_agent_admin:${POSTGRES_ADMIN_PASSWORD:?set POSTGRES_ADMIN_PASSWORD}@postgres:5432/tenant_agent
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [backend]
+
+  channel-adapter:
+    profiles: [production]
+    <<: *app
+    command: [tenant-agent, serve, --role, channel-adapter, --host, 0.0.0.0, --port, "8080"]
+    environment:
+      <<: *common-env
+      TAP_SERVICE_ROLE: channel-adapter
+      TAP_SESSION_HMAC_KEY: ${TAP_SESSION_HMAC_KEY:?set TAP_SESSION_HMAC_KEY}
+      TAP_INTERNAL_BEARER_TOKEN: ${TAP_INTERNAL_BEARER_TOKEN:?set TAP_INTERNAL_BEARER_TOKEN}
+      TAP_GATEWAY_INTERNAL_URL: http://gateway:8080
+      TAP_ENABLE_BROWSER_UI: "false"
+      VAULT_ADDR: ${VAULT_ADDR:?set VAULT_ADDR}
+      VAULT_TOKEN: ${VAULT_CHANNEL_TOKEN:?set VAULT_CHANNEL_TOKEN}
+    ports: ["${TAP_PUBLIC_BIND_ADDRESS:-127.0.0.1}:8080:8080"]
+    networks: [frontend, backend]
+    deploy:
+      resources:
+        limits: {cpus: "1", memory: 1G}
+
+  gateway:
+    profiles: [production]
+    <<: *app
+    command: [tenant-agent, serve, --role, gateway, --host, 0.0.0.0, --port, "8080"]
+    environment:
+      <<: *common-env
+      TAP_SERVICE_ROLE: gateway
+      TAP_SESSION_HMAC_KEY: ${TAP_SESSION_HMAC_KEY:?set TAP_SESSION_HMAC_KEY}
+      TAP_INTERNAL_BEARER_TOKEN: ${TAP_INTERNAL_BEARER_TOKEN:?set TAP_INTERNAL_BEARER_TOKEN}
+    expose: ["8080"]
+    deploy:
+      resources:
+        limits: {cpus: "1", memory: 1G}
+
+  worker:
+    profiles: [production]
+    <<: *app
+    command: [tenant-agent, serve, --role, worker, --host, 0.0.0.0, --port, "8080"]
+    environment:
+      <<: *common-env
+      TAP_SERVICE_ROLE: worker
+      TAP_SESSION_HMAC_KEY: ${TAP_SESSION_HMAC_KEY:?set TAP_SESSION_HMAC_KEY}
+      VAULT_ADDR: ${VAULT_ADDR:?set VAULT_ADDR}
+      VAULT_TOKEN: ${VAULT_WORKER_TOKEN:?set VAULT_WORKER_TOKEN}
+    networks: [backend, egress]
+    deploy:
+      replicas: 3
+      resources:
+        limits: {cpus: "2", memory: 2G}
+
+  outbox:
+    profiles: [production]
+    <<: *app
+    command: [tenant-agent, serve, --role, outbox, --host, 0.0.0.0, --port, "8080"]
+    environment:
+      <<: *common-env
+      TAP_SERVICE_ROLE: outbox
+      VAULT_ADDR: ${VAULT_ADDR:?set VAULT_ADDR}
+      VAULT_TOKEN: ${VAULT_OUTBOX_TOKEN:?set VAULT_OUTBOX_TOKEN}
+    networks: [backend, egress]
+    deploy:
+      replicas: 2
+      resources:
+        limits: {cpus: "1", memory: 1G}
+
+  admin-api:
+    profiles: [production]
+    <<: *app
+    command: [tenant-agent, serve, --role, admin-api, --host, 0.0.0.0, --port, "8080"]
+    environment:
+      <<: *common-env
+      TAP_SERVICE_ROLE: admin-api
+      TAP_ADMIN_BEARER_TOKEN: ${TAP_ADMIN_BEARER_TOKEN:?set TAP_ADMIN_BEARER_TOKEN}
+      VAULT_ADDR: ${VAULT_ADDR:?set VAULT_ADDR}
+      VAULT_TOKEN: ${VAULT_ADMIN_TOKEN:?set VAULT_ADMIN_TOKEN}
+    ports: ["127.0.0.1:8081:8080"]
+    deploy:
+      resources:
+        limits: {cpus: "1", memory: 1G}
+
+  qdrant:
+    profiles: [production]
+    image: qdrant/qdrant:v1.15.4
+    volumes: [qdrant-data:/qdrant/storage]
+    networks: [backend]
+
+  minio:
+    profiles: [production]
+    image: minio/minio:RELEASE.2025-07-23T15-54-02Z
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-tenant-agent}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
+    volumes: [minio-data:/data]
+    networks: [backend]
+
+  otel-collector:
+    profiles: [production]
+    image: otel/opentelemetry-collector-contrib:0.132.0
+    command: [--config=/etc/otelcol/config.yaml]
+    volumes:
+      - ./deploy/otel/collector.yaml:/etc/otelcol/config.yaml:ro
+    networks: [backend]
+
+  jaeger:
+    profiles: [production]
+    image: jaegertracing/jaeger:2.9.0
+    environment: {COLLECTOR_OTLP_ENABLED: "true"}
+    ports: ["127.0.0.1:16686:16686"]
+    networks: [backend]
+
+  prometheus:
+    profiles: [production]
+    image: prom/prometheus:v3.5.0
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports: ["127.0.0.1:9090:9090"]
+    networks: [backend]
+
+networks:
+  frontend: {}
+  egress: {}
+  backend:
+    internal: true
+
+volumes:
+  minimal-data: {}
+  minimal-artifacts: {}
+  postgres-data: {}
+  redis-data: {}
+  qdrant-data: {}
+  minio-data: {}
