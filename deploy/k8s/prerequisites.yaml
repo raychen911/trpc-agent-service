@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tenant-agent
+  labels: {pod-security.kubernetes.io/enforce: restricted}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: tenant-agent-config, namespace: tenant-agent}
+data:
+  TAP_ENVIRONMENT: production
+  TAP_BROKER_MODE: redis-streams
+  TAP_REDIS_CLUSTER: "true"
+  TAP_REDIS_STREAM: tap:{inbound}:v1
+  TAP_REDIS_CONSUMER_GROUP: agent-workers
+  TAP_BROKER_GLOBAL_QUEUE_LIMIT: "100000"
+  TAP_BROKER_TENANT_QUEUE_LIMIT: "10000"
+  TAP_WORKER_MAX_ATTEMPTS: "8"
+  TAP_CONFIG_PREFLIGHT_TIMEOUT_SECONDS: "30"
+  TAP_BOOTSTRAP_CONFIG_PATH: /etc/tenant-agent/no-bootstrap.yaml
+  TAP_AUTO_CREATE_SCHEMA: "false"
+  TAP_OTLP_ENDPOINT: http://otel-collector.tenant-agent.svc:4318/v1/traces
+  TAP_EXPOSE_METRICS: "true"
+  TAP_ENABLE_BROWSER_UI: "false"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: tenant-agent, namespace: tenant-agent}
+automountServiceAccountToken: false

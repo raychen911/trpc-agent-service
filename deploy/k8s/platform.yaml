@@ -1,0 +1,434 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tenant-agent
+  labels: {pod-security.kubernetes.io/enforce: restricted}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: tenant-agent-config, namespace: tenant-agent}
+data:
+  TAP_ENVIRONMENT: production
+  TAP_BROKER_MODE: redis-streams
+  TAP_REDIS_CLUSTER: "true"
+  TAP_REDIS_STREAM: tap:{inbound}:v1
+  TAP_REDIS_CONSUMER_GROUP: agent-workers
+  TAP_BROKER_GLOBAL_QUEUE_LIMIT: "100000"
+  TAP_BROKER_TENANT_QUEUE_LIMIT: "10000"
+  TAP_WORKER_MAX_ATTEMPTS: "8"
+  TAP_CONFIG_PREFLIGHT_TIMEOUT_SECONDS: "30"
+  TAP_BOOTSTRAP_CONFIG_PATH: /etc/tenant-agent/no-bootstrap.yaml
+  TAP_AUTO_CREATE_SCHEMA: "false"
+  TAP_OTLP_ENDPOINT: http://otel-collector.tenant-agent.svc:4318/v1/traces
+  TAP_EXPOSE_METRICS: "true"
+  TAP_ENABLE_BROWSER_UI: "false"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: tenant-agent, namespace: tenant-agent}
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: channel-adapter, namespace: tenant-agent}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: tenant-agent, role: channel-adapter}}
+  strategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 0, maxSurge: 1}}
+  template:
+    metadata: {labels: {app: tenant-agent, role: channel-adapter}}
+    spec:
+      serviceAccountName: tenant-agent
+      automountServiceAccountToken: false
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector: {matchLabels: {app: tenant-agent, role: channel-adapter}}
+      containers:
+        - name: app
+          image: tenant-agent-platform:0.1.0
+          args: [tenant-agent, serve, --role, channel-adapter, --host, 0.0.0.0, --port, "8080"]
+          envFrom:
+            - configMapRef: {name: tenant-agent-config}
+            - secretRef: {name: tenant-agent-channel-secrets}
+          env:
+            - {name: TAP_NODE_ID, valueFrom: {fieldRef: {fieldPath: metadata.name}}}
+            - {name: TAP_GATEWAY_INTERNAL_URL, value: http://gateway:8080}
+          ports: [{name: http, containerPort: 8080}]
+          resources:
+            requests: {cpu: 200m, memory: 256Mi}
+            limits: {cpu: "1", memory: 1Gi}
+          readinessProbe: {httpGet: {path: /health/ready, port: http}, periodSeconds: 5}
+          livenessProbe: {httpGet: {path: /health/live, port: http}, periodSeconds: 15}
+          startupProbe: {httpGet: {path: /health/live, port: http}, periodSeconds: 5, failureThreshold: 30}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            capabilities: {drop: [ALL]}
+            seccompProfile: {type: RuntimeDefault}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            - {name: provider-secrets, mountPath: /run/secrets, readOnly: true}
+      volumes:
+        - {name: tmp, emptyDir: {sizeLimit: 256Mi}}
+        - {name: provider-secrets, secret: {secretName: tenant-channel-provider-secrets, optional: true}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: channel-adapter, namespace: tenant-agent}
+spec:
+  type: ClusterIP
+  selector: {app: tenant-agent, role: channel-adapter}
+  ports: [{name: http, port: 80, targetPort: http}]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: channel-adapter
+  namespace: tenant-agent
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: 2m
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [agent.example.com]
+      secretName: tenant-agent-ingress-tls
+  rules:
+    - host: agent.example.com
+      http:
+        paths:
+          - path: /v1/channels
+            pathType: Prefix
+            backend:
+              service: {name: channel-adapter, port: {name: http}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: gateway, namespace: tenant-agent}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: tenant-agent, role: gateway}}
+  strategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 0, maxSurge: 1}}
+  template:
+    metadata: {labels: {app: tenant-agent, role: gateway}}
+    spec:
+      serviceAccountName: tenant-agent
+      automountServiceAccountToken: false
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector: {matchLabels: {app: tenant-agent, role: gateway}}
+      containers:
+        - name: app
+          image: tenant-agent-platform:0.1.0
+          args: [tenant-agent, serve, --role, gateway, --host, 0.0.0.0, --port, "8080"]
+          envFrom:
+            - configMapRef: {name: tenant-agent-config}
+            - secretRef: {name: tenant-agent-gateway-secrets}
+          env: [{name: TAP_NODE_ID, valueFrom: {fieldRef: {fieldPath: metadata.name}}}]
+          ports: [{name: http, containerPort: 8080}]
+          resources:
+            requests: {cpu: 250m, memory: 256Mi}
+            limits: {cpu: "1", memory: 1Gi}
+          readinessProbe: {httpGet: {path: /health/ready, port: http}, periodSeconds: 5}
+          livenessProbe: {httpGet: {path: /health/live, port: http}, periodSeconds: 15}
+          startupProbe: {httpGet: {path: /health/live, port: http}, periodSeconds: 5, failureThreshold: 30}
+          securityContext: &secure
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            capabilities: {drop: [ALL]}
+            seccompProfile: {type: RuntimeDefault}
+          volumeMounts: [{name: tmp, mountPath: /tmp}]
+      volumes: [{name: tmp, emptyDir: {sizeLimit: 256Mi}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: gateway, namespace: tenant-agent}
+spec:
+  selector: {app: tenant-agent, role: gateway}
+  ports: [{name: http, port: 8080, targetPort: http}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: worker, namespace: tenant-agent}
+spec:
+  replicas: 3
+  selector: {matchLabels: {app: tenant-agent, role: worker}}
+  strategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 1, maxSurge: 1}}
+  template:
+    metadata: {labels: {app: tenant-agent, role: worker}}
+    spec:
+      serviceAccountName: tenant-agent
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 150
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector: {matchLabels: {app: tenant-agent, role: worker}}
+      containers:
+        - name: app
+          image: tenant-agent-platform:0.1.0
+          args: [tenant-agent, serve, --role, worker, --host, 0.0.0.0, --port, "8080"]
+          envFrom:
+            - configMapRef: {name: tenant-agent-config}
+            - secretRef: {name: tenant-agent-worker-secrets}
+          env: [{name: TAP_NODE_ID, valueFrom: {fieldRef: {fieldPath: metadata.name}}}]
+          ports: [{name: metrics, containerPort: 8080}]
+          resources:
+            requests: {cpu: "1", memory: 1Gi}
+            limits: {cpu: "2", memory: 3Gi}
+          readinessProbe: {httpGet: {path: /health/ready, port: metrics}, periodSeconds: 5}
+          livenessProbe: {httpGet: {path: /health/live, port: metrics}, periodSeconds: 15}
+          startupProbe: {httpGet: {path: /health/live, port: metrics}, periodSeconds: 5, failureThreshold: 30}
+          lifecycle: {preStop: {exec: {command: [/bin/sh, -c, "sleep 10"]}}}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            capabilities: {drop: [ALL]}
+            seccompProfile: {type: RuntimeDefault}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            - {name: provider-secrets, mountPath: /run/secrets, readOnly: true}
+      volumes:
+        - {name: tmp, emptyDir: {sizeLimit: 1Gi}}
+        - {name: provider-secrets, secret: {secretName: tenant-worker-provider-secrets, optional: true}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: worker-metrics, namespace: tenant-agent}
+spec:
+  clusterIP: None
+  selector: {app: tenant-agent, role: worker}
+  ports: [{name: metrics, port: 8080, targetPort: metrics}]
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: {name: worker, namespace: tenant-agent}
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: worker}
+  minReplicas: 3
+  maxReplicas: 50
+  behavior:
+    scaleUp: {stabilizationWindowSeconds: 0, policies: [{type: Percent, value: 100, periodSeconds: 30}]}
+    scaleDown: {stabilizationWindowSeconds: 300, policies: [{type: Percent, value: 25, periodSeconds: 60}]}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: {type: Utilization, averageUtilization: 65}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: outbox, namespace: tenant-agent}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: tenant-agent, role: outbox}}
+  template:
+    metadata: {labels: {app: tenant-agent, role: outbox}}
+    spec:
+      serviceAccountName: tenant-agent
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 150
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector: {matchLabels: {app: tenant-agent, role: outbox}}
+      containers:
+        - name: app
+          image: tenant-agent-platform:0.1.0
+          args: [tenant-agent, serve, --role, outbox, --host, 0.0.0.0, --port, "8080"]
+          envFrom:
+            - configMapRef: {name: tenant-agent-config}
+            - secretRef: {name: tenant-agent-outbox-secrets}
+          env: [{name: TAP_NODE_ID, valueFrom: {fieldRef: {fieldPath: metadata.name}}}]
+          ports: [{name: metrics, containerPort: 8080}]
+          resources:
+            requests: {cpu: 200m, memory: 256Mi}
+            limits: {cpu: "1", memory: 1Gi}
+          readinessProbe: {httpGet: {path: /health/ready, port: metrics}, periodSeconds: 5}
+          livenessProbe: {httpGet: {path: /health/live, port: metrics}, periodSeconds: 15}
+          startupProbe: {httpGet: {path: /health/live, port: metrics}, periodSeconds: 5, failureThreshold: 30}
+          lifecycle: {preStop: {exec: {command: [/bin/sh, -c, "sleep 10"]}}}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            capabilities: {drop: [ALL]}
+            seccompProfile: {type: RuntimeDefault}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            - {name: provider-secrets, mountPath: /run/secrets, readOnly: true}
+      volumes:
+        - {name: tmp, emptyDir: {sizeLimit: 256Mi}}
+        - {name: provider-secrets, secret: {secretName: tenant-outbox-provider-secrets, optional: true}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: admin-api, namespace: tenant-agent}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: tenant-agent, role: admin-api}}
+  template:
+    metadata: {labels: {app: tenant-agent, role: admin-api}}
+    spec:
+      serviceAccountName: tenant-agent
+      automountServiceAccountToken: false
+      containers:
+        - name: app
+          image: tenant-agent-platform:0.1.0
+          args: [tenant-agent, serve, --role, admin-api, --host, 0.0.0.0, --port, "8080"]
+          envFrom:
+            - configMapRef: {name: tenant-agent-config}
+            - secretRef: {name: tenant-agent-admin-secrets}
+          env: [{name: TAP_NODE_ID, valueFrom: {fieldRef: {fieldPath: metadata.name}}}]
+          ports: [{name: http, containerPort: 8080}]
+          resources:
+            requests: {cpu: 200m, memory: 256Mi}
+            limits: {cpu: "1", memory: 1Gi}
+          readinessProbe: {httpGet: {path: /health/ready, port: http}, periodSeconds: 5}
+          livenessProbe: {httpGet: {path: /health/live, port: http}, periodSeconds: 15}
+          startupProbe: {httpGet: {path: /health/live, port: http}, periodSeconds: 5, failureThreshold: 30}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            capabilities: {drop: [ALL]}
+            seccompProfile: {type: RuntimeDefault}
+          volumeMounts: [{name: tmp, mountPath: /tmp}]
+      volumes: [{name: tmp, emptyDir: {sizeLimit: 256Mi}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: admin-api, namespace: tenant-agent}
+spec:
+  selector: {app: tenant-agent, role: admin-api}
+  ports: [{name: http, port: 8080, targetPort: http}]
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: channel-adapter, namespace: tenant-agent}
+spec:
+  minAvailable: 1
+  selector: {matchLabels: {app: tenant-agent, role: channel-adapter}}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: worker, namespace: tenant-agent}
+spec:
+  minAvailable: 2
+  selector: {matchLabels: {app: tenant-agent, role: worker}}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: gateway, namespace: tenant-agent}
+spec:
+  minAvailable: 1
+  selector: {matchLabels: {app: tenant-agent, role: gateway}}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: outbox, namespace: tenant-agent}
+spec:
+  minAvailable: 1
+  selector: {matchLabels: {app: tenant-agent, role: outbox}}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: default-deny, namespace: tenant-agent}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: channel-to-gateway, namespace: tenant-agent}
+spec:
+  podSelector: {matchLabels: {app: tenant-agent, role: gateway}}
+  policyTypes: [Ingress]
+  ingress:
+    - from: [{podSelector: {matchLabels: {app: tenant-agent, role: channel-adapter}}}]
+      ports: [{protocol: TCP, port: 8080}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: public-channel-ingress, namespace: tenant-agent}
+spec:
+  podSelector: {matchLabels: {app: tenant-agent, role: channel-adapter}}
+  policyTypes: [Ingress]
+  ingress:
+    - ports: [{protocol: TCP, port: 8080}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: platform-internal-ingress, namespace: tenant-agent}
+spec:
+  podSelector: {matchLabels: {app: tenant-agent}}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: tenant-agent}}
+      ports: [{protocol: TCP, port: 8080}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: platform-egress, namespace: tenant-agent}
+spec:
+  podSelector: {matchLabels: {app: tenant-agent}}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: tenant-agent}}
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to: [{ipBlock: {cidr: 0.0.0.0/0}}]
+      ports:
+        - {protocol: TCP, port: 443}
+        - {protocol: TCP, port: 5432}
+        - {protocol: TCP, port: 6379}
+        - {protocol: TCP, port: 8200}
+        - {protocol: TCP, port: 6333}
+        - {protocol: TCP, port: 9000}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: telemetry-ingress, namespace: tenant-agent}
+spec:
+  podSelector: {matchLabels: {app: otel-collector}}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: tenant-agent}}
+      ports:
+        - {protocol: TCP, port: 4317}
+        - {protocol: TCP, port: 4318}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: telemetry-egress, namespace: tenant-agent}
+spec:
+  podSelector: {matchLabels: {app: otel-collector}}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to: [{ipBlock: {cidr: 0.0.0.0/0}}]
+      ports: [{protocol: TCP, port: 443}]

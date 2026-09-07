@@ -1,0 +1,76 @@
+tenants:
+  - tenant_id: demo
+    display_name: Demo Tenant
+    revision: 1
+    status: active
+    models:
+      offline:
+        provider: deterministic
+        model_name: deterministic-v1
+    apps:
+      assistant:
+        app_id: assistant
+        agent_name: DemoAssistant
+        description: Offline deterministic demonstration assistant
+        instruction: >-
+          You are a concise and helpful tenant-scoped assistant. Never expose
+          another tenant's data and only use configured tools.
+        model_profile: offline
+        allowed_tools: [calculator, current_time, memory_search, save_text_artifact]
+        enabled: true
+    channels:
+      - binding_id: web-demo-001
+        channel: web
+        app_id: assistant
+        external_account_id: browser-demo
+        credential_refs:
+          webhook_token: {uri: "env://TENANT_DEMO_WEBHOOK_TOKEN"}
+        settings: {}
+        enabled: true
+    data_backends:
+      session: {kind: inmemory, namespace: demo}
+      memory: {kind: inmemory, namespace: demo}
+      summary: {kind: inmemory, namespace: demo}
+      artifact:
+        kind: filesystem
+        namespace: demo
+        options: {root: "./artifacts"}
+      knowledge:
+        kind: local_vector
+        namespace: demo
+        options: {path: "./demo-vectors.db"}
+      audit:
+        kind: sql
+        namespace: control
+        dsn_ref: {uri: "env://TAP_CONTROL_DATABASE_URL"}
+    governance:
+      tools:
+        allow: [calculator, current_time, memory_search, save_text_artifact]
+        deny: []
+        dangerous: []
+        confirmation_ttl_seconds: 300
+      users:
+        allow_users: []
+        deny_users: []
+        allow_groups: []
+        group_session_scope: conversation
+      budget:
+        monthly_tokens: 1000000
+        monthly_cost_usd: 25
+        max_tokens_per_request: 8000
+        max_concurrent_sessions: 50
+        max_llm_calls_per_request: 8
+        max_tool_calls_per_request: 16
+      redaction:
+        redact_email: true
+        redact_phone: true
+        redact_credentials: true
+        redact_before_model: false
+        replacement: "[REDACTED]"
+    audit:
+      enabled: true
+      retention_days: 180
+      include_prompt_hash: true
+      include_content: false
+    metadata:
+      summary_every_events: "4"

@@ -1,0 +1,31 @@
+apiVersion: batch/v1
+kind: Job
+metadata: {name: schema-migrate-d4e5f607a1b2, namespace: tenant-agent}
+spec:
+  backoffLimit: 4
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata: {labels: {app: tenant-agent, role: schema-migration}}
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: tenant-agent
+      automountServiceAccountToken: false
+      containers:
+        - name: migrate
+          image: tenant-agent-platform:0.1.0
+          args: [tenant-agent, db-init]
+          envFrom:
+            - configMapRef: {name: tenant-agent-config}
+            - secretRef: {name: tenant-agent-migration-secrets}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: "1", memory: 512Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            capabilities: {drop: [ALL]}
+            seccompProfile: {type: RuntimeDefault}
+          volumeMounts: [{name: tmp, mountPath: /tmp}]
+      volumes: [{name: tmp, emptyDir: {sizeLimit: 128Mi}}]

@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tenant Agent Console</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
+    body { margin: 0; min-height: 100vh; background: #07111f; color: #dce8f7; display: grid; place-items: center; }
+    main { width: min(860px, calc(100vw - 32px)); background: #0d1b2d; border: 1px solid #23415f; border-radius: 18px; overflow: hidden; box-shadow: 0 28px 80px #0008; }
+    header { padding: 22px 26px; border-bottom: 1px solid #23415f; display: flex; gap: 12px; align-items: baseline; }
+    header h1 { margin: 0; font-size: 19px; } header span { color: #7ea6ca; font-size: 13px; }
+    #messages { min-height: 420px; max-height: 62vh; overflow-y: auto; padding: 22px; }
+    .message { max-width: 78%; margin: 10px 0; padding: 12px 15px; border-radius: 13px; white-space: pre-wrap; line-height: 1.45; }
+    .user { margin-left: auto; background: #1768ac; } .agent { background: #152c43; border: 1px solid #294c6b; }
+    form { display: grid; grid-template-columns: 1fr auto; gap: 10px; padding: 16px; border-top: 1px solid #23415f; }
+    input, textarea, button { font: inherit; color: inherit; }
+    textarea { resize: none; min-height: 52px; border: 1px solid #315675; background: #091625; border-radius: 11px; padding: 12px; }
+    button { border: 0; border-radius: 11px; padding: 0 22px; background: #2f9ed9; font-weight: 700; cursor: pointer; }
+    .settings { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; padding: 12px 16px 0; }
+    .settings input { min-width: 0; background: #091625; border: 1px solid #315675; border-radius: 8px; padding: 9px; }
+    @media (max-width: 650px) { .settings { grid-template-columns: 1fr; } .message { max-width: 90%; } }
+  </style>
+</head>
+<body>
+<main>
+  <header><h1>Tenant Agent Console</h1><span>Streaming browser fallback</span></header>
+  <section class="settings">
+    <input id="binding" value="web-demo-001" aria-label="Binding ID" placeholder="Binding ID">
+    <input id="token" value="development-webhook-token" aria-label="Webhook token" placeholder="Webhook token">
+    <input id="user" value="demo-user" aria-label="User ID" placeholder="User ID">
+  </section>
+  <section id="messages" aria-live="polite"></section>
+  <form id="chat"><textarea id="input" required placeholder="Ask the tenant assistant..."></textarea><button>Send</button></form>
+</main>
+<script>
+const messages = document.querySelector('#messages');
+const conversation = crypto.randomUUID();
+function bubble(text, role) { const el = document.createElement('div'); el.className = `message ${role}`; el.textContent = text; messages.append(el); messages.scrollTop = messages.scrollHeight; return el; }
+document.querySelector('#chat').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const input = document.querySelector('#input'); const text = input.value.trim(); if (!text) return;
+  bubble(text, 'user'); input.value = ''; const answer = bubble('', 'agent');
+  const binding = encodeURIComponent(document.querySelector('#binding').value);
+  const response = await fetch(`/v1/chat/stream/${binding}`, { method: 'POST', headers: {'content-type':'application/json','x-webhook-token':document.querySelector('#token').value}, body: JSON.stringify({user_id:document.querySelector('#user').value, conversation_id:conversation, message_id:crypto.randomUUID(), text}) });
+  if (!response.ok) { answer.textContent = `Request failed (${response.status})`; return; }
+  const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = ''; let partial = '';
+  while (true) { const {value, done} = await reader.read(); if (done) break; buffer += decoder.decode(value, {stream:true}); const frames = buffer.split('\n\n'); buffer = frames.pop(); for (const frame of frames) { const line = frame.split('\n').find(x => x.startsWith('data: ')); if (!line) continue; const data = JSON.parse(line.slice(6)); if (data.event_type === 'text_delta') { partial += data.text || ''; answer.textContent = partial; } if (data.event_type === 'text_final') answer.textContent = data.text || partial; if (data.messages?.[0]?.text) answer.textContent = data.messages[0].text; } }
+});
+</script>
+</body>
+</html>
