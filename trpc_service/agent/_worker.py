@@ -1,0 +1,286 @@
+# Tencent is pleased to support the open source community by making tRPC-Agent-Python available.
+#
+# Copyright (C) 2026 Tencent. All rights reserved.
+#
+# tRPC-Agent-Python is licensed under Apache-2.0.
+"""Stateless tenant worker.
+
+The worker turns a normalized inbound message into an agent run for the right
+tenant and session. It holds no per-request state: the session service is a
+shared backend wrapped with :class:`TenantSessionService`, so any worker can
+serve any tenant/session (no sticky sessions required).
+"""
+
+from __future__ import annotations
+
+import inspect
+import time
+from typing import Any
+from typing import Callable
+from typing import Optional
+
+from trpc_agent_sdk.abc import MemoryServiceABC
+from trpc_agent_sdk.abc import SessionABC
+from trpc_agent_sdk.abc import SessionServiceABC
+from trpc_agent_sdk.agents import BaseAgent
+from trpc_agent_sdk.context import new_agent_context
+from trpc_agent_sdk.runners import Runner
+from trpc_agent_sdk.types import Content
+from trpc_agent_sdk.types import Part
+
+from trpc_service.log import AuditLogEntry
+from trpc_service.log import AuditLogger
+from trpc_service.channels import InboundMessage
+from trpc_service.channels import generate_session_id
+from trpc_service.tool import ConfirmationManager
+from trpc_service.tool import SensitiveDataRedactor
+from trpc_service.tool import apply_tenant_governance
+from trpc_service.tool import parse_confirmation_token
+from trpc_service.metrics._observability import attach_tenant_to_span
+from trpc_service.metrics._observability import current_trace_id
+from trpc_service.metrics import EnterpriseMetrics
+from trpc_service.metrics import get_enterprise_metrics
+from trpc_service.workspace import TenantMemoryService
+from trpc_service.workspace import TenantSessionService
+from trpc_service.tenant import Tenant
+from trpc_service.tenant import TenantConfigManager
+from trpc_service.tenant import TenantStatus
+from ._locks import LocalSessionLockManager
+
+AgentFactory = Callable[[Tenant], BaseAgent]
+SessionServiceFactory = Callable[[Tenant], SessionServiceABC]
+MemoryServiceFactory = Callable[[Tenant], MemoryServiceABC]
+
+CONFIRMED_TOOLS_KEY = "confirmed_tools"
+"""Session-state key holding tool names approved via HITL confirmation."""
+
+
+async def collect_final_text(events) -> str:
+    """Collect the final assistant text from a stream of agent events.
+
+    Mirrors the framework's own aggregation: partial deltas and tool-call
+    drafts are skipped to avoid duplicated or half-formed answers.
+    """
+    final_text = ""
+    async for event in events:
+        if not event.content or not event.content.parts:
+            continue
+        if event.partial:
+            continue
+        if any(part.function_call for part in event.content.parts):
+            continue
+        event_text = "".join(part.text for part in event.content.parts
+                             if part.text and not getattr(part, "thought", False))
+        if event_text:
+            final_text = event_text if not final_text or event_text.startswith(final_text) else final_text + event_text
+    return final_text
+
+
+class TenantWorker:
+    """Runs an agent turn for a tenant and returns the final reply text."""
+
+    def __init__(
+        self,
+        *,
+        manager: TenantConfigManager,
+        agent_factory: AgentFactory,
+        session_service_factory: SessionServiceFactory,
+        memory_service_factory: Optional[MemoryServiceFactory] = None,
+        app_name: str = "default",
+        audit_logger: Optional[AuditLogger] = None,
+        confirmation_manager: Optional[ConfirmationManager] = None,
+        session_lock_manager: Optional[Any] = None,
+        metrics: Optional[EnterpriseMetrics] = None,
+    ) -> None:
+        self._manager = manager
+        self._agent_factory = agent_factory
+        self._session_factory = session_service_factory
+        self._memory_factory = memory_service_factory
+        self._app_name = app_name
+        self._audit_logger = audit_logger
+        self._confirmation_manager = confirmation_manager
+        self._session_locks = session_lock_manager or LocalSessionLockManager()
+        self._metrics = metrics or get_enterprise_metrics()
+
+    @property
+    def metrics(self) -> EnterpriseMetrics:
+        return self._metrics
+
+    def resolve_tenant(self, tenant_id: str) -> Optional[Tenant]:
+        tenant = self._manager.get(tenant_id)
+        if tenant is None or tenant.status != TenantStatus.ACTIVE:
+            return None
+        return tenant
+
+    async def _get_or_create_session(self, session_service: SessionServiceABC, user_id: str,
+                                     session_id: str) -> SessionABC:
+        session = await session_service.get_session(app_name=self._app_name, user_id=user_id, session_id=session_id)
+        if session is None:
+            session = await session_service.create_session(app_name=self._app_name,
+                                                           user_id=user_id,
+                                                           session_id=session_id)
+        return session
+
+    @staticmethod
+    def _load_confirmed_tools(session: SessionABC) -> list[str]:
+        tools = session.state.get(CONFIRMED_TOOLS_KEY, []) if session.state else []
+        return list(tools) if isinstance(tools, list) else []
+
+    async def handle(self, tenant_id: str, channel: str, inbound: InboundMessage) -> str:
+        """Execute a turn and return the final assistant text (empty on failure)."""
+        started = time.perf_counter()
+        tenant = self.resolve_tenant(tenant_id)
+        if tenant is None:
+            return ""
+
+        attach_tenant_to_span(tenant_id)
+        session_id = generate_session_id(tenant_id, channel, inbound.chat_type, inbound.sender_id, inbound.chat_id)
+
+        lock_key = f"{tenant_id}:{self._app_name}:{inbound.sender_id}:{session_id}"
+        try:
+            async with self._session_locks.acquire(lock_key):
+                return await self._handle_locked(tenant, tenant_id, channel, inbound, session_id, started)
+        except Exception as exc:
+            await self._audit_turn(
+                tenant,
+                channel,
+                inbound,
+                session_id,
+                "",
+                decision="error",
+                error_type=type(exc).__name__,
+                latency_ms=int((time.perf_counter() - started) * 1000),
+            )
+            raise
+
+    async def _handle_locked(self, tenant: Tenant, tenant_id: str, channel: str, inbound: InboundMessage,
+                             session_id: str, started: float) -> str:
+        """Execute a turn while holding the session-scoped writer lock."""
+
+        backend: SessionServiceABC = self._session_factory(tenant)
+        session_service = TenantSessionService(backend, tenant_id)
+        memory_service = None
+        if self._memory_factory is not None:
+            memory_service = TenantMemoryService(self._memory_factory(tenant), tenant_id)
+        storage_started = time.perf_counter()
+        session = await self._get_or_create_session(session_service, inbound.sender_id, session_id)
+        self._metrics.observe(
+            "agent_session_backend_latency_ms",
+            (time.perf_counter() - storage_started) * 1000,
+            tenant_id=tenant_id,
+            operation="load",
+            backend=tenant.storage_config.session_backend,
+        )
+        confirmed_tools = self._load_confirmed_tools(session)
+
+        # HITL: a confirmation reply ("确认 <token>") resolves the pending request
+        # and records the approved tool so a subsequent run may execute it.
+        token = parse_confirmation_token(inbound.text)
+        if token is not None and self._confirmation_manager is not None:
+            pending = self._confirmation_manager.resolve(token, approve=True)
+            if inspect.isawaitable(pending):
+                pending = await pending
+            identity_matches = pending is not None and (pending.user_id is None or pending.user_id == inbound.sender_id)
+            session_matches = pending is not None and (pending.session_id is None or pending.session_id == session_id)
+            if pending is not None and pending.tenant_id == tenant_id and identity_matches and session_matches:
+                if pending.tool_name not in confirmed_tools:
+                    confirmed_tools.append(pending.tool_name)
+                session.state[CONFIRMED_TOOLS_KEY] = confirmed_tools
+                await session_service.update_session(session)
+                return f"已确认执行工具「{pending.tool_name}」，请重新发起该操作。"
+            return "确认码无效或已过期。"
+
+        agent = apply_tenant_governance(
+            self._agent_factory(tenant),
+            tenant,
+            confirmation_manager=self._confirmation_manager,
+            audit_logger=self._audit_logger,
+        )
+        runner = Runner(
+            app_name=self._app_name,
+            agent=agent,
+            session_service=session_service,
+            memory_service=memory_service,
+            close_session_service_on_close=False,
+            close_memory_service_on_close=False,
+        )
+
+        agent_context = new_agent_context(
+            metadata={
+                "tenant_id": tenant_id,
+                "channel": channel,
+                "channel_user_id": inbound.sender_id,
+                "channel_chat_id": inbound.chat_id,
+                "channel_user_verified": inbound.metadata.get("user_verified", False),
+                "confirmed_tools": confirmed_tools,
+            })
+        new_message = Content(parts=[Part.from_text(text=inbound.text or "")])
+
+        try:
+            run_started = time.perf_counter()
+            events = runner.run_async(
+                user_id=inbound.sender_id,
+                session_id=session_id,
+                new_message=new_message,
+                agent_context=agent_context,
+            )
+            final_text = await collect_final_text(events)
+            final_text = SensitiveDataRedactor().redact(final_text, tenant.audit_policy.desensitize_rules)
+            self._metrics.increment("agent_requests_total", tenant_id=tenant_id, channel=channel, outcome="success")
+            self._metrics.observe(
+                "agent_runner_latency_ms",
+                (time.perf_counter() - run_started) * 1000,
+                tenant_id=tenant_id,
+                channel=channel,
+            )
+        except Exception as exc:
+            self._metrics.increment(
+                "agent_requests_total",
+                tenant_id=tenant_id,
+                channel=channel,
+                outcome="error",
+                error_type=type(exc).__name__,
+            )
+            raise
+        finally:
+            await runner.close()
+
+        await self._audit_turn(
+            tenant,
+            channel,
+            inbound,
+            session_id,
+            final_text,
+            agent_name=agent.name,
+            latency_ms=int((time.perf_counter() - started) * 1000),
+        )
+        return final_text
+
+    async def _audit_turn(
+        self,
+        tenant: Tenant,
+        channel: str,
+        inbound: InboundMessage,
+        session_id: str,
+        final_text: str,
+        *,
+        agent_name: Optional[str] = None,
+        decision: str = "allow",
+        latency_ms: Optional[int] = None,
+        error_type: Optional[str] = None,
+    ) -> None:
+        if self._audit_logger is None or not tenant.audit_policy.enabled:
+            return
+        await self._audit_logger.log(
+            AuditLogEntry(
+                tenant_id=tenant.tenant_id,
+                channel=channel,
+                user_id=inbound.sender_id,
+                session_id=session_id,
+                agent_name=agent_name,
+                decision=decision,
+                latency_ms=latency_ms,
+                error_type=error_type,
+                trace_id=current_trace_id(),
+                detail={"reply_length": len(final_text)},
+            ))

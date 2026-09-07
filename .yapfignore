@@ -21,3 +21,5 @@ docs/
 *.tmp
 *.temp
 
+# exapmle
+examples/

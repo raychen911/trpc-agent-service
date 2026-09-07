@@ -1,0 +1,541 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>tRPC Agent Console</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #09111f;
+      --panel: rgba(17, 28, 48, 0.86);
+      --panel-strong: #13213a;
+      --line: rgba(148, 163, 184, 0.18);
+      --text: #edf4ff;
+      --muted: #94a3b8;
+      --cyan: #42d3c5;
+      --blue: #69a6ff;
+      --red: #fb7185;
+      --shadow: 0 24px 80px rgba(0, 0, 0, 0.28);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 10% 0%, rgba(66, 211, 197, 0.12), transparent 30%),
+        radial-gradient(circle at 90% 12%, rgba(105, 166, 255, 0.15), transparent 34%),
+        var(--bg);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    button, input, select { font: inherit; }
+
+    .shell {
+      width: min(1440px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 28px 0 48px;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+      margin-bottom: 24px;
+    }
+
+    .brand { display: flex; align-items: center; gap: 14px; }
+
+    .mark {
+      display: grid;
+      width: 44px;
+      height: 44px;
+      place-items: center;
+      border: 1px solid rgba(66, 211, 197, 0.35);
+      border-radius: 14px;
+      color: var(--cyan);
+      background: rgba(66, 211, 197, 0.08);
+      box-shadow: inset 0 0 24px rgba(66, 211, 197, 0.08);
+      font-weight: 800;
+    }
+
+    h1, h2, p { margin: 0; }
+    h1 { font-size: 20px; letter-spacing: -0.02em; }
+    .subtitle { margin-top: 4px; color: var(--muted); font-size: 13px; }
+
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: var(--muted);
+      box-shadow: 0 0 0 4px rgba(148, 163, 184, 0.1);
+    }
+
+    .status.ok .dot { background: var(--cyan); box-shadow: 0 0 0 4px rgba(66, 211, 197, 0.12); }
+    .status.error .dot { background: var(--red); box-shadow: 0 0 0 4px rgba(251, 113, 133, 0.12); }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(18px);
+    }
+
+    .auth {
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) auto auto;
+      gap: 12px;
+      padding: 16px;
+      margin-bottom: 18px;
+    }
+
+    input, select {
+      min-height: 42px;
+      width: 100%;
+      padding: 0 13px;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      outline: none;
+      color: var(--text);
+      background: rgba(5, 12, 25, 0.7);
+    }
+
+    input:focus, select:focus { border-color: rgba(66, 211, 197, 0.65); }
+
+    button {
+      min-height: 42px;
+      padding: 0 16px;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      color: var(--text);
+      background: var(--panel-strong);
+      cursor: pointer;
+      transition: transform 120ms ease, border-color 120ms ease;
+    }
+
+    button:hover { transform: translateY(-1px); border-color: rgba(105, 166, 255, 0.55); }
+    button.primary { border-color: transparent; color: #041713; background: var(--cyan); font-weight: 750; }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+      margin-bottom: 18px;
+    }
+
+    .stat { padding: 18px; }
+    .stat-label { color: var(--muted); font-size: 12px; }
+    .stat-value { margin-top: 10px; font-size: 27px; font-weight: 760; letter-spacing: -0.04em; }
+    .stat-note { margin-top: 7px; color: var(--muted); font-size: 11px; }
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 15px 18px;
+      margin-bottom: 18px;
+    }
+
+    .toolbar h2 { font-size: 15px; }
+    .toolbar select { width: min(280px, 48vw); }
+
+    .grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.05fr) minmax(0, 1.95fr);
+      gap: 18px;
+    }
+
+    .section-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 18px 20px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .section-head h2 { font-size: 15px; }
+    .count { color: var(--muted); font-size: 12px; }
+    .tenant-list { display: grid; gap: 10px; padding: 14px; }
+
+    .tenant {
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(5, 12, 25, 0.4);
+    }
+
+    .tenant-row { display: flex; justify-content: space-between; gap: 12px; }
+    .tenant-name { font-weight: 680; }
+    .tenant-id { margin-top: 3px; color: var(--muted); font-size: 11px; }
+    .model { color: var(--blue); font-size: 12px; }
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+
+    .chip {
+      padding: 4px 8px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: #cbd5e1;
+      background: rgba(105, 166, 255, 0.08);
+      font-size: 10px;
+    }
+
+    .table-wrap { overflow: auto; max-height: 520px; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th, td { padding: 12px 14px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+    th { position: sticky; top: 0; z-index: 1; color: var(--muted); background: #101d33; font-weight: 600; }
+    td.muted { color: var(--muted); }
+
+    .decision {
+      display: inline-flex;
+      padding: 4px 8px;
+      border-radius: 999px;
+      color: var(--cyan);
+      background: rgba(66, 211, 197, 0.1);
+    }
+
+    .decision.error, .decision.deny { color: var(--red); background: rgba(251, 113, 133, 0.1); }
+    .empty { padding: 36px 18px; color: var(--muted); text-align: center; font-size: 13px; }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      padding: 14px;
+    }
+
+    .metric {
+      min-width: 0;
+      padding: 13px;
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      background: rgba(5, 12, 25, 0.4);
+    }
+
+    .metric-name { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; }
+    .metric-value { margin-top: 7px; font-size: 20px; font-weight: 700; }
+    .metric-labels { margin-top: 6px; overflow: hidden; color: #64748b; font-size: 10px; text-overflow: ellipsis; }
+    .notice { margin-top: 18px; padding: 14px 18px; color: var(--muted); font-size: 12px; line-height: 1.7; }
+    .hidden { display: none; }
+
+    @media (max-width: 900px) {
+      .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .grid { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 620px) {
+      .shell { width: min(100% - 20px, 1440px); padding-top: 18px; }
+      .topbar { align-items: flex-start; flex-direction: column; }
+      .auth { grid-template-columns: 1fr 1fr; }
+      .auth input { grid-column: 1 / -1; }
+      .stats { grid-template-columns: 1fr 1fr; }
+      .toolbar { align-items: stretch; flex-direction: column; }
+      .toolbar select { width: 100%; }
+      .metrics { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="mark">A</div>
+        <div>
+          <h1>tRPC Agent Console</h1>
+          <p class="subtitle">本地只读管理台 · 租户、审计与运行指标</p>
+        </div>
+      </div>
+      <div id="status" class="status"><span class="dot"></span><span id="statusText">等待连接</span></div>
+    </header>
+
+    <section class="panel auth" aria-label="管理凭证">
+      <input id="apiKey" type="password" autocomplete="off" placeholder="输入 ADMIN_API_KEY">
+      <button id="connect" class="primary">连接后台</button>
+      <button id="refresh">刷新数据</button>
+    </section>
+
+    <section class="stats">
+      <article class="panel stat">
+        <div class="stat-label">启用租户</div>
+        <div id="tenantTotal" class="stat-value">—</div>
+        <div class="stat-note">当前 gateway 配置</div>
+      </article>
+      <article class="panel stat">
+        <div class="stat-label">最近交互</div>
+        <div id="auditTotal" class="stat-value">—</div>
+        <div class="stat-note">审计记录总数</div>
+      </article>
+      <article class="panel stat">
+        <div class="stat-label">平均响应</div>
+        <div id="latencyAverage" class="stat-value">—</div>
+        <div class="stat-note">有耗时数据的请求</div>
+      </article>
+      <article class="panel stat">
+        <div class="stat-label">异常记录</div>
+        <div id="errorTotal" class="stat-value">—</div>
+        <div class="stat-note">error / deny</div>
+      </article>
+    </section>
+
+    <section class="panel toolbar">
+      <div>
+        <h2>数据范围</h2>
+        <p class="subtitle">按租户筛选审计与指标</p>
+      </div>
+      <select id="tenantFilter" aria-label="租户筛选">
+        <option value="">全部租户</option>
+      </select>
+    </section>
+
+    <section class="grid">
+      <article class="panel">
+        <div class="section-head">
+          <h2>租户与渠道</h2>
+          <span id="tenantCount" class="count">0 个</span>
+        </div>
+        <div id="tenantList" class="tenant-list"><div class="empty">连接后加载租户</div></div>
+      </article>
+
+      <article class="panel">
+        <div class="section-head">
+          <h2>最近交互</h2>
+          <span id="auditCount" class="count">0 条</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>时间</th>
+                <th>渠道</th>
+                <th>用户</th>
+                <th>Agent</th>
+                <th>状态</th>
+                <th>耗时</th>
+                <th>会话</th>
+              </tr>
+            </thead>
+            <tbody id="auditRows"></tbody>
+          </table>
+          <div id="auditEmpty" class="empty">连接后加载审计记录</div>
+        </div>
+      </article>
+
+      <article class="panel">
+        <div class="section-head">
+          <h2>计数指标</h2>
+          <span id="counterCount" class="count">0 项</span>
+        </div>
+        <div id="counterList" class="metrics"><div class="empty">暂无数据</div></div>
+      </article>
+
+      <article class="panel">
+        <div class="section-head">
+          <h2>耗时分布</h2>
+          <span id="histogramCount" class="count">0 项</span>
+        </div>
+        <div id="histogramList" class="metrics"><div class="empty">暂无数据</div></div>
+      </article>
+    </section>
+
+    <aside class="panel notice">
+      当前后台为只读页面。审计数据包含用户、会话、渠道、耗时和错误状态，但出于隐私与安全考虑，
+      现有 Admin API 不返回完整聊天正文。API Key 仅保存在当前标签页的 sessionStorage 中。
+    </aside>
+  </main>
+
+  <script>
+    const byId = (id) => document.getElementById(id);
+    const state = { tenants: [], audits: [], metrics: { counters: [], histograms: [] } };
+
+    function setStatus(kind, message) {
+      const status = byId("status");
+      status.className = `status ${kind || ""}`;
+      byId("statusText").textContent = message;
+    }
+
+    function formatNumber(value, digits = 0) {
+      const number = Number(value);
+      const options = { maximumFractionDigits: digits };
+      return Number.isFinite(number) ? number.toLocaleString("zh-CN", options) : "—";
+    }
+
+    function short(value, length = 18) {
+      const text = String(value || "—");
+      return text.length > length ? `${text.slice(0, length)}…` : text;
+    }
+
+    function element(tag, className, value) {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (value !== undefined) node.textContent = value;
+      return node;
+    }
+
+    async function request(path) {
+      const key = byId("apiKey").value.trim();
+      const response = await fetch(path, {
+        cache: "no-store",
+        headers: key ? { "X-Admin-API-Key": key } : {}
+      });
+      if (!response.ok) {
+        if (response.status === 401) throw new Error("ADMIN_API_KEY 不正确");
+        throw new Error(`${response.status} ${response.statusText}`);
+      }
+      return response.json();
+    }
+
+    function renderTenantFilter() {
+      const select = byId("tenantFilter");
+      const selected = select.value;
+      select.replaceChildren(element("option", "", "全部租户"));
+      select.firstChild.value = "";
+      for (const tenant of state.tenants) {
+        const option = element("option", "", tenant.name || tenant.tenant_id);
+        option.value = tenant.tenant_id;
+        select.appendChild(option);
+      }
+      const stillExists = [...select.options].some((option) => option.value === selected);
+      if (stillExists) select.value = selected;
+    }
+
+    function renderTenants() {
+      const list = byId("tenantList");
+      list.replaceChildren();
+      byId("tenantTotal").textContent = formatNumber(state.tenants.length);
+      byId("tenantCount").textContent = `${state.tenants.length} 个`;
+      if (!state.tenants.length) {
+        list.appendChild(element("div", "empty", "没有可用租户"));
+        return;
+      }
+      for (const tenant of state.tenants) {
+        const card = element("article", "tenant");
+        const row = element("div", "tenant-row");
+        const title = element("div");
+        title.appendChild(element("div", "tenant-name", tenant.name || tenant.tenant_id));
+        title.appendChild(element("div", "tenant-id", tenant.tenant_id));
+        const model = tenant.model || {};
+        row.appendChild(title);
+        row.appendChild(element("div", "model", model.model_name || "未配置模型"));
+        card.appendChild(row);
+        const chips = element("div", "chips");
+        const channels = Object.keys(tenant.channel_configs || {});
+        for (const channel of channels) chips.appendChild(element("span", "chip", channel));
+        if (!channels.length) chips.appendChild(element("span", "chip", "无渠道"));
+        card.appendChild(chips);
+        list.appendChild(card);
+      }
+    }
+
+    function renderAudits() {
+      const rows = byId("auditRows");
+      const empty = byId("auditEmpty");
+      rows.replaceChildren();
+      const visible = state.audits.slice(0, 100);
+      empty.classList.toggle("hidden", visible.length > 0);
+      byId("auditTotal").textContent = formatNumber(state.audits.length);
+      byId("auditCount").textContent = `${state.audits.length} 条`;
+      const latencies = state.audits
+        .filter((item) => item.latency_ms != null)
+        .map((item) => Number(item.latency_ms))
+        .filter(Number.isFinite);
+      const sum = latencies.reduce((total, value) => total + value, 0);
+      const average = latencies.length ? sum / latencies.length : null;
+      byId("latencyAverage").textContent = average === null ? "—" : `${formatNumber(average)} ms`;
+      const errors = state.audits.filter((item) => {
+        return item.error_type || ["error", "deny"].includes(item.decision);
+      });
+      byId("errorTotal").textContent = formatNumber(errors.length);
+      for (const audit of visible) {
+        const row = document.createElement("tr");
+        const date = audit.created_at ? new Date(audit.created_at).toLocaleString("zh-CN") : "—";
+        row.appendChild(element("td", "muted", date));
+        row.appendChild(element("td", "", audit.channel || "—"));
+        row.appendChild(element("td", "", short(audit.user_id)));
+        row.appendChild(element("td", "", audit.agent_name || "—"));
+        const decisionCell = element("td");
+        const label = audit.error_type || audit.decision || "—";
+        decisionCell.appendChild(element("span", `decision ${audit.decision || ""}`, label));
+        row.appendChild(decisionCell);
+        row.appendChild(element("td", "", audit.latency_ms == null ? "—" : `${audit.latency_ms} ms`));
+        row.appendChild(element("td", "muted", short(audit.session_id, 22)));
+        rows.appendChild(row);
+      }
+    }
+
+    function metricCard(metric, histogram = false) {
+      const card = element("article", "metric");
+      card.appendChild(element("div", "metric-name", metric.name || "未命名指标"));
+      let value = formatNumber(metric.value, 2);
+      if (histogram) value = `${formatNumber(metric.sum, 1)} / ${formatNumber(metric.count)}`;
+      card.appendChild(element("div", "metric-value", value));
+      const labels = Object.entries(metric.attributes || {});
+      const labelText = labels.map(([key, item]) => `${key}=${item}`).join(" · ");
+      card.appendChild(element("div", "metric-labels", labelText || (histogram ? "总和 / 次数" : "无标签")));
+      return card;
+    }
+
+    function renderMetricList(id, countId, values, histogram = false) {
+      const list = byId(id);
+      list.replaceChildren();
+      byId(countId).textContent = `${values.length} 项`;
+      if (!values.length) {
+        list.appendChild(element("div", "empty", "暂无指标，发送消息后再刷新"));
+        return;
+      }
+      for (const metric of values) list.appendChild(metricCard(metric, histogram));
+    }
+
+    function render() {
+      renderTenantFilter();
+      renderTenants();
+      renderAudits();
+      renderMetricList("counterList", "counterCount", state.metrics.counters || []);
+      renderMetricList("histogramList", "histogramCount", state.metrics.histograms || [], true);
+    }
+
+    async function load() {
+      const key = byId("apiKey").value.trim();
+      if (key) sessionStorage.setItem("trpc-admin-api-key", key);
+      setStatus("", "加载中…");
+      const tenant = byId("tenantFilter").value;
+      const query = tenant ? `?tenant_id=${encodeURIComponent(tenant)}` : "";
+      try {
+        const [tenants, audits, metrics] = await Promise.all([
+          request("/admin/tenants"),
+          request(`/admin/audit${query}`),
+          request(`/admin/metrics${query}`)
+        ]);
+        state.tenants = tenants;
+        state.audits = audits;
+        state.metrics = metrics;
+        render();
+        setStatus("ok", `已连接 · ${new Date().toLocaleTimeString("zh-CN")}`);
+      } catch (error) {
+        setStatus("error", error.message || "连接失败");
+      }
+    }
+
+    byId("apiKey").value = sessionStorage.getItem("trpc-admin-api-key") || "";
+    byId("connect").addEventListener("click", load);
+    byId("refresh").addEventListener("click", load);
+    byId("tenantFilter").addEventListener("change", load);
+    byId("apiKey").addEventListener("keydown", (event) => {
+      if (event.key === "Enter") load();
+    });
+    if (byId("apiKey").value) load();
+  </script>
+</body>
+</html>

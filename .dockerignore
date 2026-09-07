@@ -1,0 +1,14 @@
+.git
+.venv
+**/__pycache__
+**/*.pyc
+**/node_modules
+**/.next
+**/.vinext
+**/dist
+**/.coverage
+.pytest_cache
+MyTestWeb
+MyTestUserWeb
+tests
+coverage*.xml

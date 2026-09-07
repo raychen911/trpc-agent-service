@@ -1,0 +1,95 @@
+# Minimal deployment for the tRPC-Agent enterprise gateway + worker.
+#
+# Redis provides queue/lock/session and MySQL provides durable configuration,
+# summary and audit data. Gateway and Worker can be scaled independently.
+#
+#   docker compose -f docker-compose.minimal.yml up
+#
+# Webhook endpoint: POST http://localhost:8080/webhook/{tenant_id}/{channel}
+
+services:
+  gateway:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    command: ["uvicorn", "trpc_service.web.app:app", "--host", "0.0.0.0", "--port", "8080"]
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      - TENANTS_CONFIG=/app/tenants.yaml
+      - TRPC_AGENT_API_KEY=${TRPC_AGENT_API_KEY:-}
+      - QQBOT_APP_ID=${QQBOT_APP_ID:-}
+      - QQBOT_APP_SECRET=${QQBOT_APP_SECRET:-}
+      - REDIS_URL=redis://redis:6379/0
+      - MYSQL_URL=mysql+aiomysql://agent:agent_local@mysql:3306/trpc_agent
+      - TENANT_CONFIG_ENCRYPTION_KEY=${TENANT_CONFIG_ENCRYPTION_KEY:-local-compose-change-me}
+      - AGENT_QUEUE_ENABLED=${AGENT_QUEUE_ENABLED:-1}
+      - ADMIN_API_KEY=${ADMIN_API_KEY:-local-admin}
+    volumes:
+      - ./tenants.yaml:/app/tenants.yaml:ro
+      - artifact-data:/app/data/objects
+    depends_on:
+      redis:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # Standalone worker: consumes tasks from Redis Streams. Only needed when
+  # REDIS_URL is set (decoupled mode); ignored in single-node in-process mode.
+  worker:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    command: ["python", "-m", "trpc_service.agent.run_worker"]
+    environment:
+      - TENANTS_CONFIG=/app/tenants.yaml
+      - TRPC_AGENT_API_KEY=${TRPC_AGENT_API_KEY:-}
+      - QQBOT_APP_ID=${QQBOT_APP_ID:-}
+      - QQBOT_APP_SECRET=${QQBOT_APP_SECRET:-}
+      - REDIS_URL=redis://redis:6379/0
+      - MYSQL_URL=mysql+aiomysql://agent:agent_local@mysql:3306/trpc_agent
+      - TENANT_CONFIG_ENCRYPTION_KEY=${TENANT_CONFIG_ENCRYPTION_KEY:-local-compose-change-me}
+    volumes:
+      - ./tenants.yaml:/app/tenants.yaml:ro
+      - artifact-data:/app/data/objects
+    depends_on:
+      redis:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_USER: agent
+      MYSQL_PASSWORD: agent_local
+      MYSQL_DATABASE: trpc_agent
+      MYSQL_ROOT_PASSWORD: root_local_only
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot_local_only"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  redis-data:
+  mysql-data:
+  artifact-data:

@@ -1,0 +1,97 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agent-config
+data:
+  tenants.yaml: |
+    tenants:
+      - tenant_id: tenant_a
+        name: 电商公司
+        model:
+          model_name: gpt-4o
+          api_endpoint: https://api.openai.com/v1
+          timeout: 30
+          retry: 2
+          fallback_model: gpt-4o-mini
+        tool_permissions:
+          tool_whitelist: [query_order, query_logistics]
+          dangerous_tools: [cancel_order]
+        channel_configs:
+          wecom:
+            channel_type: wecom
+            token: ${WECOM_TOKEN}
+            secret: ${WECOM_CORP_SECRET}
+            aes_key: ${WECOM_AES_KEY}
+            corp_id: wx123456
+            agent_id: "1000001"
+          wechat_kf:
+            channel_type: wechat_kf
+            token: ${WECHAT_KF_TOKEN}
+            aes_key: ${WECHAT_KF_AES_KEY}
+            corp_id: wx123456
+            open_kfid: wk123456
+          dingtalk:
+            channel_type: dingtalk
+            app_id: ${DINGTALK_CLIENT_ID}
+            robot_code: ${DINGTALK_ROBOT_CODE}
+            secret: ${DINGTALK_CLIENT_SECRET}
+          feishu:
+            channel_type: feishu
+            app_id: ${FEISHU_APP_ID}
+            verification_token: ${FEISHU_VERIFICATION_TOKEN}
+            encrypt_key: ${FEISHU_ENCRYPT_KEY}
+        storage_config:
+          session_backend: redis
+          memory_backend: redis
+          summary_backend: redis
+          audit_backend: mysql
+          redis_url: ${REDIS_URL}
+          mysql_url: ${MYSQL_URL}
+          vector:
+            backend: qdrant
+            url: ${VECTOR_URL}
+            api_key: ${QDRANT_API_KEY}
+            collection: tenant_a_knowledge
+          object:
+            backend: s3
+            endpoint_url: ${OBJECT_STORE_ENDPOINT}
+            bucket: tenant-a-artifacts
+            region: ${OBJECT_STORE_REGION}
+            access_key: ${OBJECT_STORE_ACCESS_KEY}
+            secret_key: ${OBJECT_STORE_SECRET_KEY}
+        audit_policy:
+          enabled: true
+          retention_days: 90
+        budget:
+          daily_token_budget: 2000000
+          daily_cost_limit: 50.0
+
+      - tenant_id: tenant_b
+        name: 物流公司
+        model:
+          model_name: gpt-4o-mini
+        channel_configs:
+          feishu:
+            channel_type: feishu
+            app_id: ${FEISHU_APP_ID_B}
+            verification_token: ${FEISHU_VERIFICATION_TOKEN_B}
+            encrypt_key: ${FEISHU_ENCRYPT_KEY_B}
+        storage_config:
+          session_backend: mysql
+          memory_backend: mysql
+          summary_backend: mysql
+          audit_backend: mysql
+          redis_url: ${REDIS_URL}
+          mysql_url: ${MYSQL_URL}
+          vector:
+            backend: qdrant
+            url: ${VECTOR_URL}
+            api_key: ${QDRANT_API_KEY}
+            collection: tenant_b_knowledge
+          object:
+            backend: s3
+            endpoint_url: ${OBJECT_STORE_ENDPOINT}
+            bucket: tenant-b-artifacts
+            region: ${OBJECT_STORE_REGION}
+            access_key: ${OBJECT_STORE_ACCESS_KEY}
+            secret_key: ${OBJECT_STORE_SECRET_KEY}

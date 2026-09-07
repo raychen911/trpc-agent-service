@@ -1,0 +1,206 @@
+# Decoupled gateway + worker.
+# The gateway exposes /webhook/{tenant_id}/{channel} and enqueues tasks to Redis
+# Streams; worker pods consume and execute. Each layer scales independently via
+# its own HPA. Session state lives in Redis so any worker can serve any request.
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-gateway
+spec:
+  selector:
+    app: agent-gateway
+  ports:
+    - port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-gateway
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: agent-gateway
+  template:
+    metadata:
+      labels:
+        app: agent-gateway
+        app.kubernetes.io/part-of: trpc-agent-enterprise
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: agent
+          image: trpc-agent-enterprise:latest
+          command: ["uvicorn", "trpc_service.web.app:app", "--host", "0.0.0.0", "--port", "8080"]
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            periodSeconds: 5
+            timeoutSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          env:
+            - name: TENANTS_CONFIG
+              value: /etc/agent/tenants.yaml
+            - name: REDIS_URL
+              value: redis://redis:6379
+            - name: MYSQL_URL
+              valueFrom:
+                secretKeyRef:
+                  name: agent-secrets
+                  key: mysql-url
+            - name: TRPC_AGENT_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: agent-secrets
+                  key: api-key
+            - name: TENANT_CONFIG_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: agent-secrets
+                  key: tenant-config-encryption-key
+            - name: ADMIN_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: agent-secrets
+                  key: admin-api-key
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: http://otel-collector:4318
+          envFrom:
+            - secretRef:
+                name: agent-channel-secrets
+            - secretRef:
+                name: agent-storage-secrets
+          volumeMounts:
+            - name: config
+              mountPath: /etc/agent
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: agent-config
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-worker
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: agent-worker
+  template:
+    metadata:
+      labels:
+        app: agent-worker
+        app.kubernetes.io/part-of: trpc-agent-enterprise
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: worker
+          image: trpc-agent-enterprise:latest
+          command: ["python", "-m", "trpc_service.agent.run_worker"]
+          env:
+            - name: TENANTS_CONFIG
+              value: /etc/agent/tenants.yaml
+            - name: REDIS_URL
+              value: redis://redis:6379
+            - name: MYSQL_URL
+              valueFrom:
+                secretKeyRef:
+                  name: agent-secrets
+                  key: mysql-url
+            - name: TRPC_AGENT_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: agent-secrets
+                  key: api-key
+            - name: TENANT_CONFIG_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: agent-secrets
+                  key: tenant-config-encryption-key
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: http://otel-collector:4318
+          envFrom:
+            - secretRef:
+                name: agent-channel-secrets
+            - secretRef:
+                name: agent-storage-secrets
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "4"
+              memory: 4Gi
+          readinessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "kill -0 1"]
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "kill -0 1"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          volumeMounts:
+            - name: config
+              mountPath: /etc/agent
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: agent-config
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: agent-gateway
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: agent-gateway
+  minReplicas: 2
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: agent-worker
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: agent-worker
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

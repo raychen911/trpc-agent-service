@@ -1,0 +1,104 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "trpc_service/version.py"
+
+[project]
+name = "trpc-agent-service"
+dynamic = ["version"]
+description = "Multi-tenant enterprise service built on tRPC-Agent-Python"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "Apache-2.0"}
+authors = [{name = "tRPC-Agent-Service contributors"}]
+keywords = ["trpc", "agent", "multi-tenant", "im", "fastapi"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "trpc-agent-py[openclaw]>=1.1.17,<1.2",
+    "pydantic>=2.11.3",
+    "fastapi>=0.95.0",
+    "uvicorn>=0.35.0",
+    "httpx>=0.27.0",
+    "cryptography>=44.0.0",
+    "PyYAML>=6.0.3",
+    "redis>=6.2.0",
+    "SQLAlchemy>=2.0.0",
+    "PyMySQL>=1.1.0",
+    "aiomysql>=0.3.0",
+    "opentelemetry-api>=1.28.0,<2.0.0",
+    "opentelemetry-sdk>=1.28.0,<2.0.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.28.0,<2.0.0",
+]
+
+[project.optional-dependencies]
+object-storage = [
+    "boto3>=1.34",
+]
+vector-storage = [
+    "qdrant-client>=1.15,<2",
+]
+dev = [
+    "build",
+    "diff-cover",
+    "fakeredis",
+    "flake8",
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov",
+    "qdrant-client>=1.15,<2",
+    "yapf",
+]
+
+[project.scripts]
+trpc-service = "trpc_service._cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["trpc_service"]
+
+[project.urls]
+Repository = "https://github.com/raychen911/trpc-agent-service"
+SDK = "https://github.com/trpc-group/trpc-agent-python"
+
+[tool.uv]
+package = true
+
+[tool.black]
+line-length = 120
+target-version = ["py310"]
+exclude = '''
+/(
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+  | venv
+  | env
+  | node_modules
+)/
+'''
+
+[tool.yapf]
+based_on_style = "pep8"
+column_limit = 120
+indent_width = 4
+split_before_logical_operator = true
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q"
+testpaths = ["tests"]
+asyncio_mode = "auto"
