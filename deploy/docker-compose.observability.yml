@@ -1,0 +1,46 @@
+services:
+  gateway:
+    environment:
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+      - OTEL_SERVICE_NAME=trpc-agent-gateway
+      - OTEL_METRIC_EXPORT_INTERVAL=5000
+      - PROMETHEUS_URL=http://prometheus:9090
+    depends_on:
+      otel-collector:
+        condition: service_started
+
+  worker:
+    environment:
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+      - OTEL_SERVICE_NAME=trpc-agent-worker
+      - OTEL_METRIC_EXPORT_INTERVAL=5000
+    depends_on:
+      otel-collector:
+        condition: service_started
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.133.0
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes:
+      - ./otel-collector.compose.yaml:/etc/otel/config.yaml:ro
+    ports:
+      - "127.0.0.1:8889:8889"
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    depends_on:
+      otel-collector:
+        condition: service_started
+
+volumes:
+  prometheus-data:

@@ -8,6 +8,9 @@
 from __future__ import annotations
 
 import hmac
+import logging
+import os
+import socket
 from importlib.resources import files
 from typing import Any
 from typing import Optional
@@ -25,8 +28,11 @@ from pydantic import Field
 from trpc_service.log import AuditLogger
 from trpc_service.metrics import EnterpriseMetrics
 from trpc_service.metrics import get_enterprise_metrics
+from trpc_service.metrics import PrometheusMetricsReader
 from trpc_service.tenant import Tenant
 from trpc_service.tenant import TenantConfigManager
+
+logger = logging.getLogger(__name__)
 
 
 class MutationMetadata(BaseModel):
@@ -56,6 +62,8 @@ def create_admin_router(
     audit_logger: Optional[AuditLogger] = None,
     api_key: Optional[str] = None,
     metrics: Optional[EnterpriseMetrics] = None,
+    prometheus_url: Optional[str] = None,
+    prometheus_reader: Optional[Any] = None,
 ) -> APIRouter:
     """Create the local/production Admin API router.
 
@@ -65,6 +73,8 @@ def create_admin_router(
     """
     router = APIRouter(prefix="/admin", tags=["admin"])
     metrics = metrics or get_enterprise_metrics()
+    prometheus_url = prometheus_url or os.environ.get("PROMETHEUS_URL")
+    prometheus_reader = prometheus_reader or (PrometheusMetricsReader(prometheus_url) if prometheus_url else None)
 
     @router.get("", include_in_schema=False)
     async def admin_root() -> RedirectResponse:
@@ -206,8 +216,29 @@ def create_admin_router(
     async def query_metrics(
             tenant_id: Optional[str] = None,
             x_admin_api_key: Optional[str] = Header(default=None),
-    ) -> dict[str, list[dict[str, Any]]]:
+    ) -> dict[str, Any]:
         authorize(x_admin_api_key)
-        return metrics.snapshot(tenant_id)
+        snapshot = metrics.snapshot(tenant_id)
+        scope = "process"
+        error = None
+        if prometheus_reader is not None:
+            try:
+                snapshot = await prometheus_reader.snapshot(tenant_id)
+                scope = "prometheus"
+            except Exception as exc:  # noqa: BLE001 - keep local diagnostics available during monitoring outages
+                error = type(exc).__name__
+                logger.warning("failed to query Prometheus metrics; using the process-local snapshot", exc_info=True)
+        return {
+            "scope":
+            scope,
+            "service_name":
+            "all" if scope == "prometheus" else os.environ.get("OTEL_SERVICE_NAME", "trpc-agent-gateway"),
+            "instance_id":
+            None if scope == "prometheus" else os.environ.get("OTEL_SERVICE_INSTANCE_ID") or os.environ.get("HOSTNAME")
+            or socket.gethostname(),
+            "source_error":
+            error,
+            **snapshot,
+        }
 
     return router

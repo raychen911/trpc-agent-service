@@ -15,6 +15,7 @@ import fakeredis.aioredis as faioredis
 
 from trpc_agent_sdk.abc import FilterResult
 from trpc_agent_sdk.context import new_agent_context
+from trpc_service import EnterpriseMetrics
 from trpc_service.tool import BudgetTracker
 from trpc_service.tool import ConfirmationManager
 from trpc_service.tool import ModelBudgetFilter
@@ -39,11 +40,12 @@ def _tenant(token_budget=None, cost_limit=None) -> Tenant:
 
 def test_budget_tracker_records_tokens_and_cost():
     tracker = BudgetTracker(pricing={"gpt-4o": ModelPricing(input_per_mtok=2.5, output_per_mtok=10.0)})
-    tracker.record("tenant_a", "gpt-4o", input_tokens=1000, output_tokens=500)
+    cost = tracker.record("tenant_a", "gpt-4o", input_tokens=1000, output_tokens=500)
     assert tracker.input_tokens("tenant_a") == 1000
     assert tracker.output_tokens("tenant_a") == 500
     assert tracker.total_tokens("tenant_a") == 1500
     # (1000*2.5 + 500*10.0) / 1e6 = (2500 + 5000)/1e6 = 0.0075
+    assert cost == 0.0075
     assert tracker.cost("tenant_a") == 0.0075
 
 
@@ -106,11 +108,76 @@ async def test_model_budget_filter_blocks_over_budget():
 
 async def test_model_budget_filter_records_usage_after():
     tracker = BudgetTracker()
-    f = ModelBudgetFilter(tracker, tenant=_tenant(token_budget=10000))
+    metrics = EnterpriseMetrics(meter=False)
+    f = ModelBudgetFilter(tracker, tenant=_tenant(token_budget=10000), metrics=metrics)
     rsp = FilterResult()
     rsp.rsp = SimpleNamespace(usage_metadata=SimpleNamespace(prompt_token_count=80, total_token_count=120))
     await f._after(new_agent_context(metadata={"tenant_id": "tenant_a"}), SimpleNamespace(model="gpt-4o"), rsp)
     assert tracker.total_tokens("tenant_a") == 120
+    counters = {item["name"]: item for item in metrics.snapshot("tenant_a")["counters"]}
+    assert counters["agent_llm_input_tokens_total"]["value"] == 80
+    assert counters["agent_llm_output_tokens_total"]["value"] == 40
+    assert counters["agent_llm_cost_total"]["value"] == 0
+    assert counters["agent_llm_input_tokens_total"]["attributes"]["model"] == "gpt-4o"
+
+
+async def test_model_budget_filter_records_streamed_usage_and_budget_gauges():
+    tracker = BudgetTracker()
+    metrics = EnterpriseMetrics(meter=False)
+    tenant = _tenant(token_budget=10000, cost_limit=5)
+    model_filter = ModelBudgetFilter(tracker, tenant=tenant, metrics=metrics)
+    ctx = new_agent_context(metadata={"tenant_id": "tenant_a"})
+    response = SimpleNamespace(
+        model="gpt-4o",
+        usage_metadata=SimpleNamespace(
+            prompt_token_count=80,
+            candidates_token_count=45,
+            total_token_count=125,
+        ),
+    )
+
+    async def handle():
+        yield FilterResult(rsp=response)
+
+    events = [event async for event in model_filter.run_stream(ctx, SimpleNamespace(model="gpt-4o"), handle)]
+
+    assert events[0].rsp is response
+    assert tracker.total_tokens("tenant_a") == 125
+    snapshot = metrics.snapshot("tenant_a")
+    counters = {item["name"]: item["value"] for item in snapshot["counters"]}
+    gauges = {item["name"]: item["value"] for item in snapshot["gauges"]}
+    assert counters["agent_llm_input_tokens_total"] == 80
+    assert counters["agent_llm_output_tokens_total"] == 45
+    assert gauges == {
+        "agent_budget_cost_used": 0,
+        "agent_budget_daily_cost_limit": 5,
+        "agent_budget_daily_token_limit": 10000,
+        "agent_budget_tokens_reserved": 0,
+        "agent_budget_tokens_used": 125,
+    }
+
+
+async def test_model_budget_filter_records_priced_cost_and_rejections():
+    metrics = EnterpriseMetrics(meter=False)
+    tracker = BudgetTracker(pricing={"gpt-4o": ModelPricing(input_per_mtok=2.5, output_per_mtok=10.0)})
+    f = ModelBudgetFilter(tracker, tenant=_tenant(token_budget=10000), metrics=metrics)
+    rsp = FilterResult()
+    rsp.rsp = SimpleNamespace(usage_metadata=SimpleNamespace(prompt_token_count=1000, total_token_count=1500))
+
+    await f._after(new_agent_context(metadata={"tenant_id": "tenant_a"}), SimpleNamespace(model="gpt-4o"), rsp)
+
+    cost = next(item for item in metrics.snapshot("tenant_a")["counters"] if item["name"] == "agent_llm_cost_total")
+    assert cost["value"] == 0.0075
+    assert cost["unit"] == "USD"
+
+    blocked = ModelBudgetFilter(tracker, tenant=_tenant(token_budget=1), metrics=metrics)
+    blocked_rsp = FilterResult()
+    await blocked._before(new_agent_context(metadata={"tenant_id": "tenant_a"}), SimpleNamespace(model="gpt-4o"),
+                          blocked_rsp)
+    rejection = next(item for item in metrics.snapshot("tenant_a")["counters"]
+                     if item["name"] == "agent_budget_rejection_total")
+    assert rejection["value"] == 1
+    assert blocked_rsp.is_continue is False
 
 
 async def test_redis_budget_tracker_is_atomic_across_concurrent_workers():
@@ -126,7 +193,8 @@ async def test_redis_budget_tracker_is_atomic_across_concurrent_workers():
     assert usage["reserved"] == 60
 
     await tracker_b.release("tenant_a", 60, date_str="2026-01-01")
-    await tracker_a.record("tenant_a", "gpt-4o", 40, 10, date_str="2026-01-01")
+    cost = await tracker_a.record("tenant_a", "gpt-4o", 40, 10, date_str="2026-01-01")
+    assert cost == 0
     usage = await tracker_a.usage("tenant_a", date_str="2026-01-01")
     assert usage["reserved"] == 0
     assert usage["input"] + usage["output"] == 50

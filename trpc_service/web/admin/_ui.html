@@ -141,6 +141,17 @@
     .stat-value { margin-top: 10px; font-size: 27px; font-weight: 760; letter-spacing: -0.04em; }
     .stat-note { margin-top: 7px; color: var(--muted); font-size: 11px; }
 
+    .focus-panel { padding: 18px; margin-bottom: 18px; }
+    .focus-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+    .focus-head h2 { font-size: 15px; }
+    .focus-head p { color: var(--muted); font-size: 11px; }
+    .kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 14px; }
+    .kpi { min-width: 0; padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: rgba(5, 12, 25, 0.42); }
+    .kpi.alert { border-color: rgba(251, 113, 133, 0.42); background: rgba(251, 113, 133, 0.08); }
+    .kpi-label { color: var(--muted); font-size: 11px; }
+    .kpi-value { margin-top: 8px; font-size: 23px; font-weight: 760; letter-spacing: -0.04em; }
+    .kpi-note { margin-top: 5px; overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+
     .toolbar {
       display: flex;
       align-items: center;
@@ -228,11 +239,29 @@
     .metric-name { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; }
     .metric-value { margin-top: 7px; font-size: 20px; font-weight: 700; }
     .metric-labels { margin-top: 6px; overflow: hidden; color: #64748b; font-size: 10px; text-overflow: ellipsis; }
+    .histogram-chart { display: grid; gap: 5px; margin-top: 12px; }
+    .histogram-row { display: grid; grid-template-columns: 68px minmax(0, 1fr) 34px; align-items: center; gap: 7px; }
+    .histogram-range { overflow: hidden; color: var(--muted); font-size: 9px; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
+    .histogram-track { display: block; height: 8px; overflow: hidden; border-radius: 999px; background: rgba(148, 163, 184, 0.1); }
+    .histogram-bar { display: block; height: 100%; min-width: 0; border-radius: inherit; background: linear-gradient(90deg, var(--cyan), var(--blue)); }
+    .histogram-count { color: #cbd5e1; font-size: 9px; font-variant-numeric: tabular-nums; text-align: right; }
+    .metric-group { grid-column: 1 / -1; }
+    .metric-group + .metric-group { margin-top: 4px; }
+    .metric-group-head { display: flex; align-items: baseline; justify-content: space-between; padding: 4px 2px 2px; }
+    .metric-group-head h3 { color: #cbd5e1; font-size: 11px; font-weight: 650; }
+    .metric-group-head span { color: var(--muted); font-size: 10px; }
+    .metric-group-items { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .metric-details { grid-column: 1 / -1; }
+    .metric-details > summary { cursor: pointer; list-style: none; }
+    .metric-details > summary::-webkit-details-marker { display: none; }
+    .metric-details > summary::after { float: right; color: var(--muted); content: "展开"; font-size: 11px; }
+    .metric-details[open] > summary::after { content: "收起"; }
     .notice { margin-top: 18px; padding: 14px 18px; color: var(--muted); font-size: 12px; line-height: 1.7; }
     .hidden { display: none; }
 
     @media (max-width: 900px) {
       .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .grid { grid-template-columns: 1fr; }
     }
 
@@ -245,6 +274,8 @@
       .toolbar { align-items: stretch; flex-direction: column; }
       .toolbar select { width: 100%; }
       .metrics { grid-template-columns: 1fr; }
+      .kpis { grid-template-columns: 1fr 1fr; }
+      .metric-group-items { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -300,6 +331,16 @@
       </select>
     </section>
 
+    <section class="panel focus-panel" aria-labelledby="metricsFocusTitle">
+      <div class="focus-head">
+        <h2 id="metricsFocusTitle">运行概览</h2>
+        <p>只显示当前筛选范围内最重要的链路信号</p>
+      </div>
+      <div id="metricKpis" class="kpis">
+        <div class="empty">连接后加载运行指标</div>
+      </div>
+    </section>
+
     <section class="grid">
       <article class="panel">
         <div class="section-head">
@@ -333,21 +374,15 @@
         </div>
       </article>
 
-      <article class="panel">
-        <div class="section-head">
-          <h2>计数指标</h2>
-          <span id="counterCount" class="count">0 项</span>
-        </div>
+      <details class="panel metric-details">
+        <summary class="section-head"><h2>数值指标明细</h2><span id="counterCount" class="count">0 项</span></summary>
         <div id="counterList" class="metrics"><div class="empty">暂无数据</div></div>
-      </article>
+      </details>
 
-      <article class="panel">
-        <div class="section-head">
-          <h2>耗时分布</h2>
-          <span id="histogramCount" class="count">0 项</span>
-        </div>
+      <details class="panel metric-details">
+        <summary class="section-head"><h2>耗时指标明细</h2><span id="histogramCount" class="count">0 项</span></summary>
         <div id="histogramList" class="metrics"><div class="empty">暂无数据</div></div>
-      </article>
+      </details>
     </section>
 
     <aside class="panel notice">
@@ -358,7 +393,7 @@
 
   <script>
     const byId = (id) => document.getElementById(id);
-    const state = { tenants: [], audits: [], metrics: { counters: [], histograms: [] } };
+    const state = { tenants: [], audits: [], metrics: { counters: [], gauges: [], histograms: [] } };
 
     function setStatus(kind, message) {
       const status = byId("status");
@@ -382,6 +417,89 @@
       if (className) node.className = className;
       if (value !== undefined) node.textContent = value;
       return node;
+    }
+
+    const metricGroups = [
+      { label: "Gateway 回调", match: (name) => name.startsWith("agent_callback") },
+      { label: "队列与缓存", match: (name) => name.startsWith("agent_queue") || name.startsWith("agent_result_cache") },
+      { label: "Worker 消费", match: (name) => name.startsWith("agent_worker") },
+      { label: "Agent 执行", match: (name) => name.startsWith("agent_requests") || name.startsWith("agent_runner") || name.startsWith("agent_session") || name.startsWith("agent_storage") },
+      { label: "模型与预算", match: (name) => name.startsWith("agent_llm") || name.startsWith("agent_budget") },
+      { label: "IM 回复", match: (name) => name.startsWith("agent_im_delivery") },
+    ];
+
+    function totalCounter(name, outcome) {
+      return (state.metrics.counters || [])
+        .filter((item) => item.name === name && (!outcome || item.attributes?.outcome === outcome))
+        .reduce((total, item) => total + Number(item.value || 0), 0);
+    }
+
+    function totalGauge(name) {
+      return (state.metrics.gauges || [])
+        .filter((item) => item.name === name)
+        .reduce((total, item) => total + Number(item.value || 0), 0);
+    }
+
+    function histogramTotal(name, outcome) {
+      return (state.metrics.histograms || [])
+        .filter((item) => item.name === name && (!outcome || item.attributes?.outcome === outcome))
+        .reduce((total, item) => ({
+          count: total.count + Number(item.count || 0),
+          sum: total.sum + Number(item.sum || 0),
+          max: Math.max(total.max, Number(item.max || 0)),
+        }), { count: 0, sum: 0, max: 0 });
+    }
+
+    function kpi(label, value, note, alert = false) {
+      const card = element("article", `kpi${alert ? " alert" : ""}`);
+      card.appendChild(element("div", "kpi-label", label));
+      card.appendChild(element("div", "kpi-value", value));
+      card.appendChild(element("div", "kpi-note", note));
+      return card;
+    }
+
+    function renderMetricSummary() {
+      const list = byId("metricKpis");
+      list.replaceChildren();
+      const callbacks = totalCounter("agent_callback_total");
+      const messages = totalCounter("agent_callback_total", "success");
+      const challenges = totalCounter("agent_callback_total", "challenge");
+      const queue = totalCounter("agent_callback_enqueue_total");
+      const worker = totalCounter("agent_worker_task_total");
+      const requests = totalCounter("agent_requests_total");
+      const inputTokens = totalCounter("agent_llm_input_tokens_total");
+      const outputTokens = totalCounter("agent_llm_output_tokens_total");
+      const modelCost = totalCounter("agent_llm_cost_total");
+      const budgetTokens = totalGauge("agent_budget_tokens_used");
+      const budgetTokenLimit = totalGauge("agent_budget_daily_token_limit");
+      const budgetCost = totalGauge("agent_budget_cost_used");
+      const budgetCostLimit = totalGauge("agent_budget_daily_cost_limit");
+      const deliveries = totalCounter("agent_im_delivery_total");
+      const deliveryErrors = totalCounter("agent_im_delivery_total", "error");
+      const errors = ["error", "retry", "dead_letter"].reduce((sum, outcome) => {
+        return sum + (state.metrics.counters || [])
+          .filter((item) => item.attributes?.outcome === outcome)
+          .reduce((total, item) => total + Number(item.value || 0), 0);
+      }, 0);
+      const callbackLatency = histogramTotal("agent_callback_duration_ms", "success");
+      const averageLatency = callbackLatency.count ? callbackLatency.sum / callbackLatency.count : null;
+      const deliveryRate = deliveries ? ((deliveries - deliveryErrors) / deliveries) * 100 : null;
+      const budgetValue = budgetTokenLimit
+        ? `${formatNumber(budgetTokens)} / ${formatNumber(budgetTokenLimit)}`
+        : formatNumber(budgetTokens);
+      const budgetNote = budgetCostLimit
+        ? `成本 $${formatNumber(budgetCost, 4)} / $${formatNumber(budgetCostLimit, 4)}`
+        : `已用成本 $${formatNumber(budgetCost, 4)}`;
+      list.appendChild(kpi("消息回调", formatNumber(messages), `outcome=success · 平台总数 ${formatNumber(callbacks)}`));
+      list.appendChild(kpi("验证回调", formatNumber(challenges), "outcome=challenge"));
+      list.appendChild(kpi("入队总数", formatNumber(queue), "写入 Redis 队列"));
+      list.appendChild(kpi("Worker 处理", formatNumber(worker), "消费到的任务"));
+      list.appendChild(kpi("Agent 执行", formatNumber(requests), "模型 turn 次数"));
+      list.appendChild(kpi("Token 消耗", formatNumber(inputTokens + outputTokens), `输入 ${formatNumber(inputTokens)} · 输出 ${formatNumber(outputTokens)}`));
+      list.appendChild(kpi("模型成本", `$${formatNumber(modelCost, 6)}`, "按已配置模型单价估算"));
+      list.appendChild(kpi("Token 预算", budgetValue, budgetNote));
+      list.appendChild(kpi("回复成功率", deliveryRate === null ? "—" : `${formatNumber(deliveryRate, 1)}%`, "IM 回复结果"));
+      list.appendChild(kpi("异常 / 重试", formatNumber(errors), averageLatency === null ? "暂无消息回调耗时" : `消息回调均值 ${formatNumber(averageLatency, 1)} ms`, errors > 0));
     }
 
     async function request(path) {
@@ -475,15 +593,65 @@
       }
     }
 
+    function unitSuffix(unit) {
+      if (unit === "ms") return " ms";
+      if (unit === "{part}") return " 段";
+      if (unit === "{token}") return " token";
+      return "";
+    }
+
+    function bucketRange(bucket, unit) {
+      const suffix = unitSuffix(unit);
+      if (bucket.lower == null) return `≤ ${formatNumber(bucket.upper, 1)}${suffix}`;
+      if (bucket.upper == null) return `> ${formatNumber(bucket.lower, 1)}${suffix}`;
+      return `${formatNumber(bucket.lower, 1)}–${formatNumber(bucket.upper, 1)}${suffix}`;
+    }
+
+    function histogramChart(metric) {
+      const buckets = metric.buckets || [];
+      if (!buckets.length) return null;
+      const chart = element("div", "histogram-chart");
+      chart.setAttribute("role", "img");
+      chart.setAttribute("aria-label", `${metric.name || "指标"} 分布直方图`);
+      const maximum = Math.max(0, ...buckets.map((bucket) => Number(bucket.count || 0)));
+      for (const bucket of buckets) {
+        const count = Number(bucket.count || 0);
+        const row = element("div", "histogram-row");
+        row.appendChild(element("span", "histogram-range", bucketRange(bucket, metric.unit)));
+        const track = element("span", "histogram-track");
+        const bar = element("span", "histogram-bar");
+        bar.style.width = maximum ? `${(count / maximum) * 100}%` : "0";
+        track.appendChild(bar);
+        row.appendChild(track);
+        row.appendChild(element("span", "histogram-count", formatNumber(count)));
+        chart.appendChild(row);
+      }
+      return chart;
+    }
+
     function metricCard(metric, histogram = false) {
-      const card = element("article", "metric");
+      const card = element("article", `metric${histogram ? " histogram" : ""}`);
       card.appendChild(element("div", "metric-name", metric.name || "未命名指标"));
       let value = formatNumber(metric.value, 2);
-      if (histogram) value = `${formatNumber(metric.sum, 1)} / ${formatNumber(metric.count)}`;
+      if (metric.unit === "USD") value = `$${formatNumber(metric.value, 6)}`;
+      if (metric.unit === "{token}") value = `${formatNumber(metric.value)} token`;
+      if (histogram) {
+        const average = Number(metric.count) ? Number(metric.sum) / Number(metric.count) : null;
+        value = average === null ? "—" : `${formatNumber(average, 1)}${unitSuffix(metric.unit)}`;
+      }
       card.appendChild(element("div", "metric-value", value));
       const labels = Object.entries(metric.attributes || {});
       const labelText = labels.map(([key, item]) => `${key}=${item}`).join(" · ");
-      card.appendChild(element("div", "metric-labels", labelText || (histogram ? "总和 / 次数" : "无标签")));
+      const maximum = metric.max == null ? "—" : `${formatNumber(metric.max, 1)}${unitSuffix(metric.unit)}`;
+      const note = histogram
+        ? `平均 · ${formatNumber(metric.count)} 次 · 最大 ${maximum}`
+        : (labelText || "无标签");
+      const detail = histogram && labelText ? `${note} · ${labelText}` : note;
+      card.appendChild(element("div", "metric-labels", detail));
+      if (histogram) {
+        const chart = histogramChart(metric);
+        if (chart) card.appendChild(chart);
+      }
       return card;
     }
 
@@ -495,14 +663,33 @@
         list.appendChild(element("div", "empty", "暂无指标，发送消息后再刷新"));
         return;
       }
-      for (const metric of values) list.appendChild(metricCard(metric, histogram));
+      const groups = [...metricGroups];
+      const unmatched = values.filter((metric) => !metricGroups.some((group) => group.match(metric.name || "")));
+      if (unmatched.length) groups.push({ label: "其他", match: (name) => unmatched.some((item) => item.name === name) });
+      for (const group of groups) {
+        const grouped = values.filter((metric) => group.match(metric.name || ""));
+        if (!grouped.length) continue;
+        const section = element("section", "metric-group");
+        const head = element("div", "metric-group-head");
+        head.appendChild(element("h3", "", group.label));
+        head.appendChild(element("span", "", `${grouped.length} 项`));
+        section.appendChild(head);
+        const items = element("div", "metric-group-items");
+        for (const metric of grouped) items.appendChild(metricCard(metric, histogram));
+        section.appendChild(items);
+        list.appendChild(section);
+      }
     }
 
     function render() {
       renderTenantFilter();
       renderTenants();
       renderAudits();
-      renderMetricList("counterList", "counterCount", state.metrics.counters || []);
+      renderMetricSummary();
+      renderMetricList("counterList", "counterCount", [
+        ...(state.metrics.counters || []),
+        ...(state.metrics.gauges || []),
+      ]);
       renderMetricList("histogramList", "histogramCount", state.metrics.histograms || [], true);
     }
 
@@ -522,7 +709,9 @@
         state.audits = audits;
         state.metrics = metrics;
         render();
-        setStatus("ok", `已连接 · ${new Date().toLocaleTimeString("zh-CN")}`);
+        const metricScope = metrics.scope === "prometheus" ? "Prometheus 全局指标" : "当前进程指标";
+        const fallback = metrics.source_error ? ` · Prometheus 不可用 (${metrics.source_error})` : "";
+        setStatus(metrics.source_error ? "error" : "ok", `已连接 · ${metricScope}${fallback} · ${new Date().toLocaleTimeString("zh-CN")}`);
       } catch (error) {
         setStatus("error", error.message || "连接失败");
       }

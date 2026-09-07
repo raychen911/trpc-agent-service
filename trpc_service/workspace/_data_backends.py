@@ -7,6 +7,7 @@ import hashlib
 import json
 import math
 import os
+import time
 from abc import ABC
 from abc import abstractmethod
 from pathlib import Path
@@ -19,6 +20,10 @@ from uuid import uuid5
 from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
+
+from trpc_service.metrics import EnterpriseMetrics
+from trpc_service.metrics import get_enterprise_metrics
+from trpc_service.metrics import storage_span
 
 
 class VectorRecord(BaseModel):
@@ -463,25 +468,63 @@ class S3CompatibleObjectStore(ObjectStoreABC):
 class TenantVectorStore(VectorStoreABC):
     """Namespace a vector backend by tenant."""
 
-    def __init__(self, backend: VectorStoreABC, tenant_id: str) -> None:
+    def __init__(self,
+                 backend: VectorStoreABC,
+                 tenant_id: str,
+                 metrics: Optional[EnterpriseMetrics] = None,
+                 backend_name: Optional[str] = None) -> None:
         self._backend = backend
         self._prefix = f"{tenant_id}:"
+        self._tenant_id = tenant_id
+        self._metrics = metrics or get_enterprise_metrics()
+        self._backend_name = backend_name or type(backend).__name__
 
     def _scope(self, namespace: str) -> str:
         return namespace if namespace.startswith(self._prefix) else f"{self._prefix}{namespace}"
 
+    async def _execute(self, operation: str, awaitable: Any) -> Any:
+        started = time.perf_counter()
+        outcome = "error"
+        error_type = None
+        try:
+            with storage_span(self._tenant_id, "vector", operation):
+                result = await awaitable
+            outcome = "success"
+            return result
+        except Exception as exc:
+            error_type = type(exc).__name__
+            raise
+        finally:
+            attributes = {
+                "tenant_id": self._tenant_id,
+                "backend": self._backend_name,
+                "data_type": "vector",
+                "operation": operation,
+                "outcome": outcome,
+                "error_type": error_type,
+            }
+            self._metrics.increment("agent_storage_operation_total", **attributes)
+            self._metrics.observe(
+                "agent_storage_operation_duration_ms",
+                (time.perf_counter() - started) * 1000,
+                **attributes,
+            )
+
     async def upsert(self, namespace: str, records: list[VectorRecord]) -> None:
-        await self._backend.upsert(self._scope(namespace), records)
+        await self._execute("upsert", self._backend.upsert(self._scope(namespace), records))
 
     async def search(self,
                      namespace: str,
                      embedding: list[float],
                      limit: int = 5,
                      metadata_filter: Optional[dict[str, Any]] = None) -> list[VectorMatch]:
-        return await self._backend.search(self._scope(namespace), embedding, limit, metadata_filter)
+        return await self._execute(
+            "search",
+            self._backend.search(self._scope(namespace), embedding, limit, metadata_filter),
+        )
 
     async def delete(self, namespace: str, record_ids: Optional[list[str]] = None) -> None:
-        await self._backend.delete(self._scope(namespace), record_ids)
+        await self._execute("delete", self._backend.delete(self._scope(namespace), record_ids))
 
     async def close(self) -> None:
         await self._backend.close()
@@ -490,30 +533,65 @@ class TenantVectorStore(VectorStoreABC):
 class TenantObjectStore(ObjectStoreABC):
     """Prefix every artifact key with the tenant id."""
 
-    def __init__(self, backend: ObjectStoreABC, tenant_id: str) -> None:
+    def __init__(self,
+                 backend: ObjectStoreABC,
+                 tenant_id: str,
+                 metrics: Optional[EnterpriseMetrics] = None,
+                 backend_name: Optional[str] = None) -> None:
         self._backend = backend
         self._prefix = f"{tenant_id}/"
+        self._tenant_id = tenant_id
+        self._metrics = metrics or get_enterprise_metrics()
+        self._backend_name = backend_name or type(backend).__name__
 
     def _scope(self, key: str) -> str:
         return key if key.startswith(self._prefix) else f"{self._prefix}{key}"
+
+    async def _execute(self, operation: str, awaitable: Any) -> Any:
+        started = time.perf_counter()
+        outcome = "error"
+        error_type = None
+        try:
+            with storage_span(self._tenant_id, "object", operation):
+                result = await awaitable
+            outcome = "success"
+            return result
+        except Exception as exc:
+            error_type = type(exc).__name__
+            raise
+        finally:
+            attributes = {
+                "tenant_id": self._tenant_id,
+                "backend": self._backend_name,
+                "data_type": "object",
+                "operation": operation,
+                "outcome": outcome,
+                "error_type": error_type,
+            }
+            self._metrics.increment("agent_storage_operation_total", **attributes)
+            self._metrics.observe(
+                "agent_storage_operation_duration_ms",
+                (time.perf_counter() - started) * 1000,
+                **attributes,
+            )
 
     async def put(self,
                   key: str,
                   data: bytes,
                   content_type: str = "application/octet-stream",
                   metadata: Optional[dict[str, Any]] = None) -> ObjectInfo:
-        info = await self._backend.put(self._scope(key), data, content_type, metadata)
+        info = await self._execute("put", self._backend.put(self._scope(key), data, content_type, metadata))
         return info.model_copy(update={"key": key})
 
     async def get(self, key: str) -> Optional[bytes]:
-        return await self._backend.get(self._scope(key))
+        return await self._execute("get", self._backend.get(self._scope(key)))
 
     async def head(self, key: str) -> Optional[ObjectInfo]:
-        info = await self._backend.head(self._scope(key))
+        info = await self._execute("head", self._backend.head(self._scope(key)))
         return info.model_copy(update={"key": key}) if info is not None else None
 
     async def delete(self, key: str) -> None:
-        await self._backend.delete(self._scope(key))
+        await self._execute("delete", self._backend.delete(self._scope(key)))
 
     async def close(self) -> None:
         await self._backend.close()

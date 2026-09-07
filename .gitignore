@@ -32,6 +32,8 @@ node_modules
 
 # Duplicate/temporary frontend prototype; MyTestWeb is the retained frontend.
 /MyTestUserWeb/
+# Local frontend sandbox; do not publish local experiments from this checkout.
+/MyTestWeb/
 
 .coverage
 htmlcov
@@ -39,6 +41,18 @@ cov.tmp
 coverage.xml
 coverage-*.xml
 .pytest_cache
+.mypy_cache
+.ruff_cache
+.tox
+.nox
+
+# Local runtime databases, process files and editor scratch files.
+*.db
+*.sqlite
+*.sqlite3
+*.pid
+*.tmp
+*.swp
 
 pyrightconfig.json
 

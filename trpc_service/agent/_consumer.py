@@ -5,21 +5,25 @@
 # tRPC-Agent-Python is licensed under Apache-2.0.
 """Stream worker consumer: pulls tasks from Redis Streams and runs them.
 
-The consumer owns the full turn (agent run + IM reply) via the shared
-:func:`run_and_reply` helper, so it is behaviourally identical to the
-in-process gateway dispatch path. Delivery is at-least-once via the consumer
-group; combined with the gateway's idempotency key, redelivery is safe.
+The consumer owns the full turn (agent run + IM reply) via the shared dispatch
+primitives, so it is behaviourally identical to the in-process gateway path.
+Delivery is at-least-once via the consumer group; combined with the gateway's
+idempotency key, redelivery is safe.
 """
 
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from trpc_service.web._dispatch import reply_to_channel
 from trpc_service.web._dispatch import run_turn
 from trpc_service.agent._queue import TaskMessage
 from trpc_service.metrics._observability import extracted_trace_context
+from trpc_service.metrics import EnterpriseMetrics
+from trpc_service.metrics import get_enterprise_metrics
+from trpc_service.metrics import operation_span
 from ._results import LocalTaskResultStore
 
 logger = logging.getLogger(__name__)
@@ -35,44 +39,95 @@ class StreamWorker:
                  registry: Any,
                  min_idle_ms: int = 60000,
                  max_attempts: int = 3,
-                 result_store: Any = None) -> None:
+                 result_store: Any = None,
+                 metrics: EnterpriseMetrics | None = None) -> None:
         self._queue = queue
         self._worker = worker
         self._registry = registry
         self._min_idle_ms = min_idle_ms
         self._max_attempts = max_attempts
         self._result_store = result_store or LocalTaskResultStore()
+        self._metrics = metrics or getattr(worker, "metrics", None) or get_enterprise_metrics()
 
     async def _process(self, message_id: str, payload: str) -> bool:
+        started = time.perf_counter()
+        task = None
+        outcome = "error"
+        error_type = None
         try:
             task = TaskMessage.model_validate_json(payload)
             inbound = task.to_inbound()
             with extracted_trace_context(task.trace_headers):
-                text = await self._result_store.get(task.idempotency_key)
-                if text is None:
-                    text = await run_turn(
+                with operation_span(
+                        "worker.process_task",
+                        **{
+                            "tenant.id": task.tenant_id,
+                            "channel": task.channel,
+                        },
+                ):
+                    with operation_span("result_cache.get", **{"tenant.id": task.tenant_id}):
+                        text = await self._result_store.get(task.idempotency_key)
+                    cache_outcome = "hit" if text is not None else "miss"
+                    self._metrics.increment(
+                        "agent_result_cache_total",
+                        tenant_id=task.tenant_id,
+                        channel=task.channel,
+                        outcome=cache_outcome,
+                    )
+                    if text is None:
+                        text = await run_turn(
+                            tenant_id=task.tenant_id,
+                            channel=task.channel,
+                            inbound=inbound,
+                            worker=self._worker,
+                        )
+                        with operation_span("result_cache.put", **{"tenant.id": task.tenant_id}):
+                            await self._result_store.put(task.idempotency_key, text)
+                    await reply_to_channel(
                         tenant_id=task.tenant_id,
                         channel=task.channel,
                         inbound=inbound,
+                        text=text,
                         worker=self._worker,
+                        registry=self._registry,
                     )
-                    await self._result_store.put(task.idempotency_key, text)
-                await reply_to_channel(
-                    tenant_id=task.tenant_id,
-                    channel=task.channel,
-                    inbound=inbound,
-                    text=text,
-                    worker=self._worker,
-                    registry=self._registry,
-                )
-        except Exception:  # noqa: BLE001 - a bad message must not stop the consumer
+                    await self._queue.ack(message_id)
+            outcome = "success"
+            return True
+        except Exception as exc:  # noqa: BLE001 - a bad message must not stop the consumer
+            error_type = type(exc).__name__
             logger.exception("failed to process task %s", message_id)
             attempts = await self._queue.delivery_count(message_id)
             if attempts >= self._max_attempts:
                 await self._queue.dead_letter(message_id, payload, "task processing failed")
+                outcome = "dead_letter"
+                self._metrics.increment(
+                    "agent_queue_dlq_total",
+                    tenant_id=task.tenant_id if task is not None else None,
+                    channel=task.channel if task is not None else None,
+                )
+            else:
+                outcome = "retry"
+                self._metrics.increment(
+                    "agent_worker_retry_total",
+                    tenant_id=task.tenant_id if task is not None else None,
+                    channel=task.channel if task is not None else None,
+                    error_type=error_type,
+                )
             return False
-        await self._queue.ack(message_id)
-        return True
+        finally:
+            attributes = {
+                "tenant_id": task.tenant_id if task is not None else None,
+                "channel": task.channel if task is not None else None,
+                "outcome": outcome,
+                "error_type": error_type,
+            }
+            self._metrics.increment("agent_worker_task_total", **attributes)
+            self._metrics.observe(
+                "agent_worker_task_duration_ms",
+                (time.perf_counter() - started) * 1000,
+                **attributes,
+            )
 
     async def _process_batches(self, messages: list) -> int:
         processed = 0

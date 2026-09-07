@@ -51,8 +51,8 @@
 | 危险工具二次确认 | `tool/_hitl.py` + `agent/_worker.py`（确认回显→放行） | `test_worker.py::test_worker_hitl_confirmation_flow`、`test_budget_hitl_stream.py` |
 | 敏感信息脱敏 | `tool/_redactor.py` + `ToolOutputRedactionFilter` | `test_governance.py::test_redaction_filter_masks_sensitive_output` |
 | 预算限制 | `tool/_budget.py`（`BudgetTracker`/`ModelBudgetFilter`/原子 `reserve`） | `test_budget_hitl_stream.py`、`test_adversarial.py::test_budget_reserve_is_thread_safe` |
-| 监控指标 | `observability.py::tenant_attributes` + 框架 `report_*` | `test_*`（间接） |
-| OTel 全链路 | `observability.py::callback_span/attach_tenant_to_span` + `gateway`/`worker` 接线 | `test_e2e.py`（路径覆盖） |
+| 监控指标 | `metrics/_metrics.py` + Gateway/Queue/Worker/Storage/IM 埋点 + Collector/Prometheus | `test_observability.py`、`test_gateway.py`、`test_queue.py`、`test_worker.py`、`test_tenant_storage.py` |
+| OTel 全链路 | `metrics/_observability.py` 的 Trace/Meter Provider、跨队列 carrier、业务 span | `test_observability.py::test_trace_context_survives_queue_carrier`、`test_queue.py` |
 | 审计日志字段 | `log/_models.py::AuditLogEntry` | `test_audit.py::test_audit_entry_fields` |
 | 密钥管理 + 脱敏 | `SecretStr` + `log/_masker.py::SecretMasker/RedactingLogFilter` | `test_audit.py::test_secret_masker_*`、`test_tenants.py` |
 
@@ -73,14 +73,14 @@
 | 1 | 模块源码 | `trpc_service/` |
 | 2 | 测试工程 | `tests/service/`（服务模块行覆盖率门禁 95%，增量覆盖率门禁 85%） |
 | 3 | 演示工程 | `examples/multi_tenant_saas/` |
-| 4 | 部署配置 | `deploy/docker-compose.minimal.yml` + `deploy/kubernetes/` |
-| 5 | 设计/数据/同步/后端/接入/追溯文档 | `DESIGN.md`、`DATA_MODEL.md`、`SYNC_AND_IDEMPOTENCY.md`、`BACKEND_ADAPTERS.md`、`ONBOARDING.md`、`TRACEABILITY.md` |
+| 4 | 部署配置 | `deploy/docker-compose.minimal.yml` + `deploy/docker-compose.observability.yml` + `deploy/kubernetes/` |
+| 5 | 设计/数据/同步/后端/接入/监控/追溯文档 | `DESIGN.md`、`DATA_MODEL.md`、`SYNC_AND_IDEMPOTENCY.md`、`BACKEND_ADAPTERS.md`、`ONBOARDING.md`、`METRICS.md`、`TRACEABILITY.md` |
 | 6 | 项目申请书 | 已提供 |
 
-## 验收基线（2026-09-06）
+## 验收基线（2026-09-07）
 
-- `pytest tests/service`：224 passed；
-- `--cov=trpc_service --cov-fail-under=95`：95.93%；
-- `diff-cover coverage.xml --fail-under=85`：99%；
-- Redis pending reclaim/DLQ、跨节点锁、结果缓存、fallback model、Admin API、迁移双写、OTel trace carrier 已纳入自动测试；
+- `pytest tests/service`：233 passed；
+- `--cov=trpc_service --cov-fail-under=95`：95.85%；
+- `diff-cover coverage.xml --fail-under=85`：95%；
+- Redis pending reclaim/DLQ、跨节点锁、结果缓存、fallback model、Admin API、迁移双写、OTel Trace/Metrics 和 Prometheus 部署契约已纳入自动测试；
 - 完整的环境、故障、迁移、容量和逐项验收方法见 `ACCEPTANCE_TEST_PLAN.md`。

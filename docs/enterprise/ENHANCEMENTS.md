@@ -14,8 +14,8 @@
 | 1 | 网关/Worker 网络分离 | Redis Streams | 中 | P1 | 独立扩缩容、削峰 | ✅ |
 | 2 | 企业微信原生流式卡片 | Stream API + TemplateCard | 中 | P1 | 首字延迟、体验 | ✅（Stream API 部分） |
 | 3 | 预算按日重置 | 日期前缀键（无重置） | 低 | P1 | 正确性、零运维 | ✅ |
-| 4 | Admin API HTTP 化 | FastAPI + 文件持久化 | 低 | P2 | 租户自助管理 | 待做 |
-| 5 | OTel 导出实测 | Jaeger(Tempo) + Langfuse | 低 | P2 | 可观测闭环 | 待做 |
+| 4 | Admin API HTTP 化 | FastAPI + 数据库事实源 | 低 | P2 | 租户自助管理 | ✅ |
+| 5 | OTel 导出实测 | Jaeger + Prometheus | 低 | P2 | 可观测闭环 | ✅（Trace/Metrics） |
 | 6 | HITL 卡片交互 | TemplateCard + Inline Keyboard | 中 | P2 | 确认转化率 | 待做 |
 
 ---
@@ -88,7 +88,7 @@
 
 **目标**：把租户 CRUD / 版本回滚 / 审计查询暴露为 HTTP，实现租户自助与运营管理。
 
-**现状**：`TenantConfigManager` 为进程内对象，配置靠 YAML 文件加载，无管理接口。
+**现状**：已提供 FastAPI Admin API、管理页面、MySQL 配置事实源、版本历史和回滚；文件/YAML 用于启动引导。
 
 | 方案 | 实现 | 一致性 | 复杂度 | 运维 | 适用 |
 |---|---|---|---|---|---|
@@ -105,8 +105,8 @@
 
 **目标**：验证 trace/metrics 能端到端导出并可视化，闭环可观测。
 
-**现状**：已写 `callback_span`/`attach_tenant_to_span` 与租户属性助手，但未实测 OTLP
-导出链路。
+**现状**：已配置 OTel TracerProvider/MeterProvider、OTLP HTTP exporter、跨 Redis Streams trace carrier、
+Collector traces/metrics pipeline、Prometheus 抓取与基础告警。指标目录和调试方法见 `METRICS.md`。
 
 | 方案 | 组件 | 场景 | 复杂度 | 适用 |
 |---|---|---|---|---|
@@ -142,8 +142,11 @@ trace 用 Jaeger/Tempo，指标用 Prometheus，LLM 成本/质量评估交给 La
 已完成（P0）：
   ✅ 3 预算日期分桶 → ✅ 1 网关/Worker 分离 → ✅ 2 企业微信流式
 
-待做（P2，运维/可观测）：
-  4 Admin API → 5 OTel 导出 → 6 HITL 卡片
+已完成（P2，运维/可观测）：
+  ✅ 4 Admin API → ✅ 5 OTel Trace/Metrics 导出
+
+待做：
+  6 HITL 卡片
 ```
 
 理由：**3** 改动最小、收益最确定（修复跨日正确性）；**1** 是水平扩展的关键前提；**2**

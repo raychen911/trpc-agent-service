@@ -14,6 +14,7 @@ tenant.
 from __future__ import annotations
 
 import os
+import socket
 from contextlib import contextmanager
 from typing import Any
 from typing import Iterator
@@ -24,34 +25,96 @@ TENANT_ID_ATTRIBUTE = "tenant.id"
 """OpenTelemetry attribute key used to tag spans and metrics with the tenant."""
 
 _TELEMETRY_CONFIGURED = False
+_TRACE_PROVIDER: Any = None
+_METER_PROVIDER: Any = None
 
 
 def configure_telemetry(service_name: str) -> bool:
-    """Configure OTLP tracing when an exporter endpoint is present.
+    """Configure OTLP tracing and metrics when an exporter endpoint is present.
 
     Local development stays dependency-free and uses the no-op provider. In a
-    deployed gateway/worker, ``OTEL_EXPORTER_OTLP_ENDPOINT`` activates a batch
-    exporter to the configured collector. The process is configured once.
+    deployed gateway/worker, ``OTEL_EXPORTER_OTLP_ENDPOINT`` activates batch
+    trace export and periodic metric export to the configured collector. The
+    process is configured once.
     """
+    global _METER_PROVIDER
     global _TELEMETRY_CONFIGURED
+    global _TRACE_PROVIDER
     if _TELEMETRY_CONFIGURED:
         return True
-    if not os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
+    generic_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
+    trace_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
+    metric_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT")
+    if not any((generic_endpoint, trace_endpoint, metric_endpoint)):
         return False
     try:
+        from opentelemetry import metrics
         from opentelemetry import trace
+        from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
         from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+        from opentelemetry.sdk.metrics import MeterProvider
+        from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+        from opentelemetry.sdk.metrics.view import ExplicitBucketHistogramAggregation
+        from opentelemetry.sdk.metrics.view import View
         from opentelemetry.sdk.resources import Resource
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.sdk.trace.export import BatchSpanProcessor
     except ImportError:  # pragma: no cover - deployment dependency is optional
         return False
 
-    provider = TracerProvider(resource=Resource.create({"service.name": service_name}))
-    provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
-    trace.set_tracer_provider(provider)
+    configured_name = os.environ.get("OTEL_SERVICE_NAME", service_name)
+    resource_attributes = {"service.name": configured_name}
+    instance_id = os.environ.get("OTEL_SERVICE_INSTANCE_ID") or os.environ.get("HOSTNAME") or socket.gethostname()
+    if instance_id:
+        resource_attributes["service.instance.id"] = instance_id
+    resource = Resource.create(resource_attributes)
+
+    trace_provider = None
+    if generic_endpoint or trace_endpoint:
+        trace_provider = TracerProvider(resource=resource)
+        trace_provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+        trace.set_tracer_provider(trace_provider)
+
+    meter_provider = None
+    if generic_endpoint or metric_endpoint:
+        from ._metrics import METRIC_DEFINITIONS
+
+        try:
+            interval_ms = int(os.environ.get("OTEL_METRIC_EXPORT_INTERVAL", "60000"))
+        except ValueError:
+            interval_ms = 60000
+        metric_reader = PeriodicExportingMetricReader(
+            OTLPMetricExporter(),
+            export_interval_millis=max(1000, interval_ms),
+        )
+        views = [
+            View(
+                instrument_name=name,
+                aggregation=ExplicitBucketHistogramAggregation(definition.boundaries),
+            ) for name, definition in METRIC_DEFINITIONS.items()
+            if definition.kind == "histogram" and definition.boundaries
+        ]
+        meter_provider = MeterProvider(resource=resource, metric_readers=[metric_reader], views=views)
+        metrics.set_meter_provider(meter_provider)
+
+    _TRACE_PROVIDER = trace_provider
+    _METER_PROVIDER = meter_provider
     _TELEMETRY_CONFIGURED = True
     return True
+
+
+def shutdown_telemetry() -> None:
+    """Flush and close process-owned telemetry providers."""
+    global _METER_PROVIDER
+    global _TELEMETRY_CONFIGURED
+    global _TRACE_PROVIDER
+    providers = (_METER_PROVIDER, _TRACE_PROVIDER)
+    _METER_PROVIDER = None
+    _TRACE_PROVIDER = None
+    _TELEMETRY_CONFIGURED = False
+    for provider in providers:
+        if provider is not None:
+            provider.shutdown()
 
 
 def tenant_attributes(tenant_id: str) -> Mapping[str, str]:
@@ -129,6 +192,22 @@ def callback_span(tenant_id: str, channel: str) -> Iterator[None]:
     with tracer.start_as_current_span("im_callback") as span:
         span.set_attribute(TENANT_ID_ATTRIBUTE, tenant_id)
         span.set_attribute("channel", channel)
+        yield
+
+
+@contextmanager
+def operation_span(name: str, **attributes: Any) -> Iterator[None]:
+    """Open a platform operation span with low-cardinality attributes."""
+    try:
+        from opentelemetry import trace
+    except ImportError:  # pragma: no cover - OTel optional at runtime
+        yield
+        return
+    tracer = trace.get_tracer("trpc.python.agent.enterprise")
+    with tracer.start_as_current_span(name) as span:
+        for key, value in attributes.items():
+            if value is not None:
+                span.set_attribute(key, value)
         yield
 
 

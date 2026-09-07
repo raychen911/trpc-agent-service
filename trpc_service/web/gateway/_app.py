@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from typing import Any
 from typing import Callable
 from typing import Optional
@@ -27,6 +28,9 @@ from .._dispatch import run_and_reply
 from trpc_service.agent._queue import TaskMessage
 from trpc_service.metrics._observability import callback_span
 from trpc_service.metrics._observability import inject_trace_headers
+from trpc_service.metrics._observability import operation_span
+from trpc_service.metrics import EnterpriseMetrics
+from trpc_service.metrics import get_enterprise_metrics
 from trpc_service.log import safe_error_message
 from trpc_service.channels import ChannelAdapter
 from trpc_service.channels import DingTalkAdapter
@@ -150,6 +154,7 @@ def create_gateway_app(
     idempotency_store: Optional[LocalIdempotencyStore] = None,
     async_dispatch: bool = True,
     queue: Any = None,
+    metrics: Optional[EnterpriseMetrics] = None,
 ) -> FastAPI:
     """Build the gateway FastAPI application.
 
@@ -164,6 +169,7 @@ def create_gateway_app(
     registry = registry or ChannelRegistry()
     manager.subscribe(lambda tenant_id, _tenant: registry.invalidate(tenant_id))
     store = idempotency_store or build_idempotency_store()
+    metrics = metrics or getattr(worker, "metrics", None) or get_enterprise_metrics()
     background_tasks: set[asyncio.Task] = set()
 
     app = FastAPI(title="tRPC-Agent Enterprise Gateway")
@@ -172,15 +178,14 @@ def create_gateway_app(
     async def healthz() -> dict[str, str]:
         return {"status": "ok"}
 
-    @app.post("/webhook/{tenant_id}/{channel}")
-    async def webhook(tenant_id: str, channel: str, request: Request) -> JSONResponse:
+    async def _handle_webhook(tenant_id: str, channel: str, request: Request) -> tuple[JSONResponse, str]:
         tenant = worker.resolve_tenant(tenant_id)
         if tenant is None:
-            return JSONResponse({"error": "tenant not found or disabled"}, status_code=404)
+            return JSONResponse({"error": "tenant not found or disabled"}, status_code=404), "tenant_not_found"
 
         adapter = registry.get(tenant, channel)
         if adapter is None:
-            return JSONResponse({"error": f"channel '{channel}' not configured"}, status_code=404)
+            return JSONResponse({"error": f"channel '{channel}' not configured"}, status_code=404), "channel_not_found"
 
         body = await request.body()
         content_type = request.headers.get("content-type", "")
@@ -196,23 +201,30 @@ def create_gateway_app(
         headers = dict(request.headers)
 
         try:
-            challenge = await adapter.challenge_response(payload)
+            with operation_span("channel.challenge", **{"tenant.id": tenant_id, "channel": channel}):
+                challenge = await adapter.challenge_response(payload)
         except Exception as exc:  # noqa: BLE001 - malformed challenge is a client error
-            return JSONResponse({"error": f"challenge failed: {safe_error_message(exc)}"}, status_code=400)
+            return JSONResponse({"error": f"challenge failed: {safe_error_message(exc)}"},
+                                status_code=400), "challenge_failed"
         if challenge is not None:
-            return JSONResponse(challenge, status_code=200)
+            return JSONResponse(challenge, status_code=200), "challenge"
 
-        if not await adapter.verify_request(body, payload, headers, query):
-            return JSONResponse({"error": "signature verification failed"}, status_code=401)
+        with operation_span("channel.verify", **{"tenant.id": tenant_id, "channel": channel}):
+            verified = await adapter.verify_request(body, payload, headers, query)
+        if not verified:
+            return JSONResponse({"error": "signature verification failed"}, status_code=401), "signature_failed"
 
         try:
-            inbound = await adapter.parse_message(payload)
+            with operation_span("channel.parse", **{"tenant.id": tenant_id, "channel": channel}):
+                inbound = await adapter.parse_message(payload)
         except Exception as exc:  # noqa: BLE001 - malformed payloads are client errors
-            return JSONResponse({"error": f"parse failed: {safe_error_message(exc)}"}, status_code=400)
+            return JSONResponse({"error": f"parse failed: {safe_error_message(exc)}"}, status_code=400), "parse_failed"
 
         dedup_key = f"{tenant_id}:{channel}:{inbound.message_id}"
-        if await store.check_and_set(dedup_key):
-            return JSONResponse(adapter.callback_response(duplicate=True), status_code=200)
+        with operation_span("idempotency.check", **{"tenant.id": tenant_id, "channel": channel}):
+            duplicate = await store.check_and_set(dedup_key)
+        if duplicate:
+            return JSONResponse(adapter.callback_response(duplicate=True), status_code=200), "duplicate"
 
         async def _dispatch() -> None:
             await run_and_reply(
@@ -233,7 +245,7 @@ def create_gateway_app(
         if queue is not None:
             # Decoupled mode: enqueue for a separate worker process.
             try:
-                with callback_span(tenant_id, channel):
+                with operation_span("callback.enqueue", **{"tenant.id": tenant_id, "channel": channel}):
                     await queue.enqueue(
                         TaskMessage.from_inbound(
                             tenant_id,
@@ -241,10 +253,23 @@ def create_gateway_app(
                             inbound,
                             trace_headers=inject_trace_headers(),
                         ))
+                metrics.increment(
+                    "agent_callback_enqueue_total",
+                    tenant_id=tenant_id,
+                    channel=channel,
+                    outcome="success",
+                )
             except Exception as exc:  # noqa: BLE001 - return retryable response to IM platform
+                metrics.increment(
+                    "agent_callback_enqueue_total",
+                    tenant_id=tenant_id,
+                    channel=channel,
+                    outcome="error",
+                    error_type=type(exc).__name__,
+                )
                 await store.release(dedup_key)
                 logger.exception("failed to enqueue callback")
-                return JSONResponse({"error": type(exc).__name__}, status_code=503)
+                return JSONResponse({"error": type(exc).__name__}, status_code=503), "enqueue_failed"
         elif async_dispatch:
             # Keep a strong reference to the task until it completes: asyncio may
             # otherwise garbage-collect a task with no external references.
@@ -256,8 +281,26 @@ def create_gateway_app(
                 await _dispatch()
             except Exception as exc:  # noqa: BLE001 - allow caller to retry
                 await store.release(dedup_key)
-                return JSONResponse({"error": type(exc).__name__}, status_code=503)
+                return JSONResponse({"error": type(exc).__name__}, status_code=503), "dispatch_failed"
 
-        return JSONResponse(adapter.callback_response(), status_code=200)
+        return JSONResponse(adapter.callback_response(), status_code=200), "success"
+
+    @app.post("/webhook/{tenant_id}/{channel}")
+    async def webhook(tenant_id: str, channel: str, request: Request) -> JSONResponse:
+        started = time.perf_counter()
+        outcome = "error"
+        try:
+            with callback_span(tenant_id, channel):
+                response, outcome = await _handle_webhook(tenant_id, channel, request)
+                return response
+        finally:
+            metrics.increment("agent_callback_total", tenant_id=tenant_id, channel=channel, outcome=outcome)
+            metrics.observe(
+                "agent_callback_duration_ms",
+                (time.perf_counter() - started) * 1000,
+                tenant_id=tenant_id,
+                channel=channel,
+                outcome=outcome,
+            )
 
     return app

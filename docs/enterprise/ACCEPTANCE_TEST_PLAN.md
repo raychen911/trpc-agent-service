@@ -71,7 +71,7 @@ diff-cover coverage.xml --fail-under=85
 | IM 账号绑定 | tenant/channel 配置与 webhook 路径交叉请求 | A 的签名和 token 不能调用 B | 安全 |
 | IM 身份映射 | 同用户跨群、跨平台、跨租户 | 映射表有 tenant+channel 复合域，不合并身份 | 组件 |
 | Filter 治理 | 白名单、脱敏、预算、HITL、用户/群权限组合 | 先鉴权后工具；预算原子预留；审计 decision 正确 | 组件 |
-| 监控指标 | 成功/失败/超时/重复投递各执行一次 | 请求、模型/工具延迟、IM 成功率、token/成本、Session 延迟均增加 | 集成 |
+| 监控指标 | 成功/失败/超时/重复投递各执行一次 | callback、queue、worker、runner、storage、IM 指标及 SDK 模型/工具/token 指标增加 | 集成 |
 | OTel Trace | IM callback 到最终回复 | callback→queue→runner→tool→storage→reply 为同一 trace | 集成 |
 | 审计字段 | 成功、deny、confirm、timeout 各生成记录 | 必填 12 字段完整，tenant 查询无越权 | 单元/API |
 | 节点故障 | Worker 在锁内、模型后、回复前被 SIGKILL | lease 到期可接管；pending 被 reclaim；已有结果不重跑 Agent | Chaos |

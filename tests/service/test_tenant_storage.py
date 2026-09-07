@@ -11,6 +11,7 @@ import pytest
 from pydantic import SecretStr, ValidationError
 from trpc_agent_sdk.abc import MemoryServiceABC
 from trpc_agent_sdk.abc import SearchMemoryResponse
+from trpc_service import EnterpriseMetrics
 from trpc_service.workspace import TenantMemoryService
 from trpc_service.workspace import TenantSessionService
 from trpc_service.workspace import TenantStorageRouter
@@ -23,7 +24,8 @@ import trpc_service.workspace._router as router_module
 
 async def test_session_isolation_between_tenants():
     base = InMemorySessionService()
-    svc_a = TenantSessionService(base, "tenant_a")
+    metrics = EnterpriseMetrics(meter=False)
+    svc_a = TenantSessionService(base, "tenant_a", metrics=metrics, backend_name="memory")
     svc_b = TenantSessionService(base, "tenant_b")
 
     s_a = await svc_a.create_session(app_name="myapp", user_id="u1", session_id="s1", state={"k": "a"})
@@ -39,6 +41,11 @@ async def test_session_isolation_between_tenants():
     got_b = await svc_b.get_session(app_name="myapp", user_id="u1", session_id="s1")
     assert got_a is not None and got_a.state["k"] == "a"
     assert got_b is not None and got_b.state["k"] == "b"
+    operations = {
+        item["attributes"]["operation"]
+        for item in metrics.snapshot("tenant_a")["counters"] if item["name"] == "agent_storage_operation_total"
+    }
+    assert operations == {"create", "get"}
 
 
 async def test_session_listing_is_tenant_scoped():
@@ -85,7 +92,8 @@ class RecordingMemory(MemoryServiceABC):
 
 async def test_memory_search_key_is_tenant_scoped():
     backend = RecordingMemory()
-    mem = TenantMemoryService(backend, "tenant_a")
+    metrics = EnterpriseMetrics(meter=False)
+    mem = TenantMemoryService(backend, "tenant_a", metrics=metrics, backend_name="recording")
 
     await mem.search_memory("myapp/u1", "hello")
     assert backend.search_keys == ["tenant_a:myapp/u1"]
@@ -93,6 +101,30 @@ async def test_memory_search_key_is_tenant_scoped():
     # Already-scoped keys must not be double-prefixed.
     await mem.search_memory("tenant_a:myapp/u1", "hello")
     assert backend.search_keys == ["tenant_a:myapp/u1", "tenant_a:myapp/u1"]
+    entry = next(item for item in metrics.snapshot("tenant_a")["counters"]
+                 if item["name"] == "agent_storage_operation_total")
+    assert entry["attributes"]["data_type"] == "memory"
+    assert entry["attributes"]["backend"] == "recording"
+    assert entry["value"] == 2
+
+
+async def test_storage_metrics_record_backend_errors():
+
+    class FailingMemory(RecordingMemory):
+
+        async def search_memory(self, key, query, limit=10, agent_context=None):
+            raise LookupError("backend unavailable")
+
+    metrics = EnterpriseMetrics(meter=False)
+    memory = TenantMemoryService(FailingMemory(), "tenant_a", metrics=metrics)
+
+    with pytest.raises(LookupError, match="backend unavailable"):
+        await memory.search_memory("myapp/u1", "hello")
+
+    entry = next(item for item in metrics.snapshot("tenant_a")["counters"]
+                 if item["name"] == "agent_storage_operation_total")
+    assert entry["attributes"]["outcome"] == "error"
+    assert entry["attributes"]["error_type"] == "LookupError"
 
 
 async def test_memory_delegates_store_and_close():

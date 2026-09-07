@@ -29,6 +29,8 @@ from trpc_agent_sdk.abc import FilterType
 from trpc_agent_sdk.context import AgentContext
 from trpc_agent_sdk.filter import BaseFilter
 
+from trpc_service.metrics import EnterpriseMetrics
+from trpc_service.metrics import get_enterprise_metrics
 from trpc_service.tenant import Tenant
 from ._exceptions import BudgetExceededError
 
@@ -77,7 +79,7 @@ class BudgetTracker:
         input_tokens: int,
         output_tokens: int,
         date_str: Optional[str] = None,
-    ) -> None:
+    ) -> float:
         date_str = self._resolve_date(date_str)
         pricing = self._pricing.get(model_name)
         cost = 0.0
@@ -88,6 +90,7 @@ class BudgetTracker:
             usage["input"] += input_tokens
             usage["output"] += output_tokens
             usage["cost"] += cost
+        return cost
 
     def reserve(self, tenant: Tenant, estimated_tokens: int, date_str: Optional[str] = None) -> bool:
         """Atomically reserve an estimated token amount against the token budget.
@@ -182,6 +185,7 @@ class ModelBudgetFilter(BaseFilter):
         resolver: Optional[TenantResolver] = None,
         tenant: Optional[Tenant] = None,
         estimated_tokens_per_call: int = 4096,
+        metrics: Optional[EnterpriseMetrics] = None,
     ) -> None:
         super().__init__()
         self._type = FilterType.MODEL
@@ -190,15 +194,74 @@ class ModelBudgetFilter(BaseFilter):
         self._resolver = resolver
         self._tenant = tenant
         self._estimated_tokens_per_call = estimated_tokens_per_call
+        self._metrics = metrics or get_enterprise_metrics()
         self._reserved_var: contextvars.ContextVar[int] = contextvars.ContextVar(
             f"tenant_model_budget_reserved_{id(self)}", default=0)
+        self._stream_response_var: contextvars.ContextVar[Any] = contextvars.ContextVar(
+            f"tenant_model_budget_stream_response_{id(self)}", default=None)
 
     def _resolve(self, tenant_id: str) -> Optional[Tenant]:
         if self._resolver is not None:
             return self._resolver(tenant_id)
         return self._tenant
 
+    async def _budget_usage(self, tenant_id: str) -> dict[str, float]:
+        usage_method = getattr(self._tracker, "usage", None)
+        if callable(usage_method):
+            usage = usage_method(tenant_id)
+            if inspect.isawaitable(usage):
+                usage = await usage
+            return {
+                "input": float(usage.get("input", 0)),
+                "output": float(usage.get("output", 0)),
+                "reserved": float(usage.get("reserved", 0)),
+                "cost": float(usage.get("cost", 0)),
+            }
+
+        return {
+            "input": float(self._tracker.input_tokens(tenant_id)),
+            "output": float(self._tracker.output_tokens(tenant_id)),
+            "reserved": float(self._tracker.reserved_tokens(tenant_id)),
+            "cost": float(self._tracker.cost(tenant_id)),
+        }
+
+    async def _publish_budget_metrics(self, tenant: Tenant) -> None:
+        attributes = {"tenant_id": tenant.tenant_id}
+        usage = await self._budget_usage(tenant.tenant_id)
+        self._metrics.set_gauge(
+            "agent_budget_tokens_used",
+            usage["input"] + usage["output"],
+            **attributes,
+        )
+        self._metrics.set_gauge("agent_budget_tokens_reserved", usage["reserved"], **attributes)
+        self._metrics.set_gauge("agent_budget_cost_used", usage["cost"], **attributes)
+        if tenant.budget.daily_token_budget is not None:
+            self._metrics.set_gauge(
+                "agent_budget_daily_token_limit",
+                tenant.budget.daily_token_budget,
+                **attributes,
+            )
+        if tenant.budget.daily_cost_limit is not None:
+            self._metrics.set_gauge(
+                "agent_budget_daily_cost_limit",
+                tenant.budget.daily_cost_limit,
+                **attributes,
+            )
+
+    @staticmethod
+    def _token_counts(response: Any) -> tuple[int, int]:
+        usage = getattr(response, "usage_metadata", None)
+        if usage is None:
+            return 0, 0
+        prompt = int(getattr(usage, "prompt_token_count", None) or 0)
+        candidates = getattr(usage, "candidates_token_count", None)
+        if candidates is not None:
+            return prompt, max(0, int(candidates))
+        total = int(getattr(usage, "total_token_count", None) or 0)
+        return prompt, max(0, total - prompt)
+
     async def _before(self, ctx: AgentContext, req: Any, rsp: FilterResult):
+        self._stream_response_var.set(None)
         tenant_id = ctx.get_metadata("tenant_id")
         tenant = self._resolve(tenant_id)
         if tenant is None:
@@ -207,14 +270,27 @@ class ModelBudgetFilter(BaseFilter):
         if inspect.isawaitable(reserved):
             reserved = await reserved
         if not reserved:
+            await self._publish_budget_metrics(tenant)
+            self._metrics.increment(
+                "agent_budget_rejection_total",
+                tenant_id=tenant_id,
+                model=getattr(req, "model", None),
+            )
             rsp.error = BudgetExceededError(f"tenant '{tenant_id}' has exceeded its budget")
             rsp.is_continue = False
             return None
         self._reserved_var.set(self._estimated_tokens_per_call)
+        await self._publish_budget_metrics(tenant)
         return None
+
+    async def _after_every_stream(self, ctx: AgentContext, req: Any, rsp: FilterResult) -> None:
+        response = rsp.rsp
+        if response is not None and getattr(response, "usage_metadata", None) is not None:
+            self._stream_response_var.set(response)
 
     async def _after(self, ctx: AgentContext, req: Any, rsp: FilterResult):
         tenant_id = ctx.get_metadata("tenant_id")
+        tenant = self._resolve(tenant_id)
         reserved = self._reserved_var.get()
         self._reserved_var.set(0)
         if reserved:
@@ -222,18 +298,25 @@ class ModelBudgetFilter(BaseFilter):
             if inspect.isawaitable(released):
                 await released
         if rsp.error:
+            if tenant is not None:
+                await self._publish_budget_metrics(tenant)
             return None
-        response = rsp.rsp
+        response = rsp.rsp or self._stream_response_var.get()
+        self._stream_response_var.set(None)
         if response is None or getattr(response, "usage_metadata", None) is None:
+            if tenant is not None:
+                await self._publish_budget_metrics(tenant)
             return None
-        usage = response.usage_metadata
-        prompt = usage.prompt_token_count or 0
-        total = usage.total_token_count or 0
-        output = max(0, total - prompt)
+        prompt, output = self._token_counts(response)
         if not tenant_id:
             return None
-        model_name = getattr(req, "model", "") or ""
-        recorded = self._tracker.record(tenant_id, model_name, prompt, output)
-        if inspect.isawaitable(recorded):
-            await recorded
+        model_name = getattr(response, "model", "") or getattr(req, "model", "") or ""
+        cost = self._tracker.record(tenant_id, model_name, prompt, output)
+        if inspect.isawaitable(cost):
+            cost = await cost
+        self._metrics.increment("agent_llm_input_tokens_total", prompt, tenant_id=tenant_id, model=model_name)
+        self._metrics.increment("agent_llm_output_tokens_total", output, tenant_id=tenant_id, model=model_name)
+        self._metrics.increment("agent_llm_cost_total", float(cost or 0.0), tenant_id=tenant_id, model=model_name)
+        if tenant is not None:
+            await self._publish_budget_metrics(tenant)
         return None

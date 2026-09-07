@@ -81,6 +81,12 @@ spec:
                   key: admin-api-key
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: http://otel-collector:4318
+            - name: OTEL_SERVICE_NAME
+              value: trpc-agent-gateway
+            - name: OTEL_METRIC_EXPORT_INTERVAL
+              value: "15000"
+            - name: PROMETHEUS_URL
+              value: http://prometheus:9090
           envFrom:
             - secretRef:
                 name: agent-channel-secrets
@@ -137,6 +143,10 @@ spec:
                   key: tenant-config-encryption-key
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: http://otel-collector:4318
+            - name: OTEL_SERVICE_NAME
+              value: trpc-agent-worker
+            - name: OTEL_METRIC_EXPORT_INTERVAL
+              value: "15000"
           envFrom:
             - secretRef:
                 name: agent-channel-secrets

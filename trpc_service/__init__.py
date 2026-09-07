@@ -22,10 +22,13 @@ from .metrics._observability import configure_telemetry
 from .metrics._observability import current_trace_id
 from .metrics._observability import extracted_trace_context
 from .metrics._observability import inject_trace_headers
+from .metrics._observability import operation_span
+from .metrics._observability import shutdown_telemetry
 from .metrics._observability import tenant_attributes
 from .metrics._observability import storage_span
 from .metrics import EnterpriseMetrics
 from .metrics import get_enterprise_metrics
+from .metrics import PrometheusMetricsReader
 from .agent._fallback_model import FallbackLLMModel
 from .log import AuditLogEntry
 from .log import AuditLogger
@@ -115,12 +118,15 @@ __all__ = [
     "current_trace_id",
     "extracted_trace_context",
     "inject_trace_headers",
+    "operation_span",
     "scope_key",
     "tenant_attributes",
     "storage_span",
+    "shutdown_telemetry",
     "to_agent_name",
     "EnterpriseMetrics",
     "get_enterprise_metrics",
+    "PrometheusMetricsReader",
     "FallbackLLMModel",
     "AuditLogEntry",
     "AuditLogger",

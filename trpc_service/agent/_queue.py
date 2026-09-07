@@ -15,6 +15,7 @@ so both sides can import it without a circular dependency.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 from typing import Optional
 
@@ -23,8 +24,12 @@ from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
 from redis.exceptions import ResponseError
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from ..channels import InboundMessage
+from ..metrics import EnterpriseMetrics
+from ..metrics import get_enterprise_metrics
+from ..metrics import operation_span
 
 
 class TaskMessage(BaseModel):
@@ -75,6 +80,7 @@ class StreamQueue:
         group: str = "agent-workers",
         consumer: str = "worker",
         maxlen: int = 10000,
+        metrics: Optional[EnterpriseMetrics] = None,
     ) -> None:
         if client is not None:
             self._client = client
@@ -86,27 +92,83 @@ class StreamQueue:
         self._group = group
         self._consumer = consumer
         self._maxlen = maxlen
+        self._metrics = metrics or get_enterprise_metrics()
+
+    async def _execute(self, operation: str, awaitable: Any) -> Any:
+        started = time.perf_counter()
+        outcome = "error"
+        error_type = None
+        try:
+            with operation_span(f"queue.{operation}", **{"messaging.system": "redis"}):
+                result = await awaitable
+            outcome = "success"
+            return result
+        except Exception as exc:
+            error_type = type(exc).__name__
+            raise
+        finally:
+            attributes = {"operation": operation, "outcome": outcome, "error_type": error_type}
+            self._metrics.increment("agent_queue_operation_total", **attributes)
+            self._metrics.observe(
+                "agent_queue_operation_duration_ms",
+                (time.perf_counter() - started) * 1000,
+                **attributes,
+            )
 
     async def enqueue(self, task: TaskMessage) -> str:
         """Append a task and return its stream message id."""
-        return await self._client.xadd(
-            self._stream,
-            {"payload": task.model_dump_json()},
-            maxlen=self._maxlen,
-            approximate=True,
+        return await self._execute(
+            "enqueue",
+            self._client.xadd(
+                self._stream,
+                {"payload": task.model_dump_json()},
+                maxlen=self._maxlen,
+                approximate=True,
+            ),
         )
 
     async def ensure_group(self) -> None:
         """Create the consumer group if it does not already exist."""
+        started = time.perf_counter()
+        outcome = "success"
+        error_type = None
         try:
-            await self._client.xgroup_create(self._stream, self._group, id="0", mkstream=True)
+            with operation_span("queue.ensure_group", **{"messaging.system": "redis"}):
+                await self._client.xgroup_create(self._stream, self._group, id="0", mkstream=True)
         except ResponseError as exc:
             if "BUSYGROUP" not in str(exc):
+                outcome = "error"
+                error_type = type(exc).__name__
                 raise
+        finally:
+            attributes = {"operation": "ensure_group", "outcome": outcome, "error_type": error_type}
+            self._metrics.increment("agent_queue_operation_total", **attributes)
+            self._metrics.observe(
+                "agent_queue_operation_duration_ms",
+                (time.perf_counter() - started) * 1000,
+                **attributes,
+            )
 
     async def read(self, count: int = 1, block: int = 0) -> list:
         """Read new (``>``) messages for the consumer group."""
-        return await self._client.xreadgroup(self._group, self._consumer, {self._stream: ">"}, count=count, block=block)
+        try:
+            return await self._execute(
+                "read",
+                self._client.xreadgroup(
+                    self._group,
+                    self._consumer,
+                    {self._stream: ">"},
+                    count=count,
+                    block=block,
+                ),
+            )
+        except RedisTimeoutError:
+            # Some redis-py configurations use the socket timeout for a
+            # blocking XREADGROUP call.  An empty poll is normal in that
+            # case; let the worker continue polling instead of exiting.
+            if block > 0:
+                return []
+            raise
 
     async def claim_stale(self, min_idle_ms: int = 60000, count: int = 10) -> list:
         """Claim abandoned pending messages for this consumer.
@@ -114,20 +176,32 @@ class StreamQueue:
         Redis Streams does not redeliver pending entries through ``>`` reads.
         ``XAUTOCLAIM`` is therefore required after a worker disappears.
         """
-        result = await self._client.xautoclaim(
-            self._stream,
-            self._group,
-            self._consumer,
-            min_idle_time=min_idle_ms,
-            start_id="0-0",
-            count=count,
+        result = await self._execute(
+            "claim_stale",
+            self._client.xautoclaim(
+                self._stream,
+                self._group,
+                self._consumer,
+                min_idle_time=min_idle_ms,
+                start_id="0-0",
+                count=count,
+            ),
         )
         entries = result[1] if result and len(result) > 1 else []
         return [(self._stream, entries)] if entries else []
 
     async def delivery_count(self, message_id: str) -> int:
         """Return the consumer-group delivery count for one pending entry."""
-        entries = await self._client.xpending_range(self._stream, self._group, min=message_id, max=message_id, count=1)
+        entries = await self._execute(
+            "delivery_count",
+            self._client.xpending_range(
+                self._stream,
+                self._group,
+                min=message_id,
+                max=message_id,
+                count=1,
+            ),
+        )
         if not entries:
             return 0
         entry = entries[0]
@@ -135,19 +209,22 @@ class StreamQueue:
 
     async def dead_letter(self, message_id: str, payload: str, error: str) -> str:
         """Move a poison task to the dead-letter stream and acknowledge it."""
-        dead_id = await self._client.xadd(
-            f"{self._stream}:dead",
-            {
-                "source_id": message_id,
-                "payload": payload,
-                "error": error[:1000]
-            },
+        dead_id = await self._execute(
+            "dead_letter",
+            self._client.xadd(
+                f"{self._stream}:dead",
+                {
+                    "source_id": message_id,
+                    "payload": payload,
+                    "error": error[:1000]
+                },
+            ),
         )
         await self.ack(message_id)
         return dead_id
 
     async def ack(self, message_id: str) -> int:
-        return await self._client.xack(self._stream, self._group, message_id)
+        return await self._execute("ack", self._client.xack(self._stream, self._group, message_id))
 
     async def close(self) -> None:
         await self._client.aclose()

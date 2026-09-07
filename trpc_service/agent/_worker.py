@@ -131,16 +131,47 @@ class TenantWorker:
         started = time.perf_counter()
         tenant = self.resolve_tenant(tenant_id)
         if tenant is None:
+            self._metrics.increment(
+                "agent_requests_total",
+                tenant_id=tenant_id,
+                channel=channel,
+                outcome="tenant_unavailable",
+            )
             return ""
 
         attach_tenant_to_span(tenant_id)
         session_id = generate_session_id(tenant_id, channel, inbound.chat_type, inbound.sender_id, inbound.chat_id)
 
         lock_key = f"{tenant_id}:{self._app_name}:{inbound.sender_id}:{session_id}"
+        outcome = "error"
+        error_type = None
+        lock_acquired = False
+        lock_wait_started = time.perf_counter()
         try:
             async with self._session_locks.acquire(lock_key):
-                return await self._handle_locked(tenant, tenant_id, channel, inbound, session_id, started)
+                lock_acquired = True
+                self._metrics.observe(
+                    "agent_session_lock_duration_ms",
+                    (time.perf_counter() - lock_wait_started) * 1000,
+                    tenant_id=tenant_id,
+                    phase="wait",
+                    outcome="success",
+                )
+                lock_held_started = time.perf_counter()
+                try:
+                    result = await self._handle_locked(tenant, tenant_id, channel, inbound, session_id, started)
+                    outcome = "success"
+                    return result
+                finally:
+                    self._metrics.observe(
+                        "agent_session_lock_duration_ms",
+                        (time.perf_counter() - lock_held_started) * 1000,
+                        tenant_id=tenant_id,
+                        phase="hold",
+                        outcome=outcome,
+                    )
         except Exception as exc:
+            error_type = type(exc).__name__
             await self._audit_turn(
                 tenant,
                 channel,
@@ -152,25 +183,62 @@ class TenantWorker:
                 latency_ms=int((time.perf_counter() - started) * 1000),
             )
             raise
+        finally:
+            if not lock_acquired:
+                self._metrics.observe(
+                    "agent_session_lock_duration_ms",
+                    (time.perf_counter() - lock_wait_started) * 1000,
+                    tenant_id=tenant_id,
+                    phase="wait",
+                    outcome="error",
+                    error_type=error_type,
+                )
+            self._metrics.increment(
+                "agent_requests_total",
+                tenant_id=tenant_id,
+                channel=channel,
+                outcome=outcome,
+                error_type=error_type,
+            )
 
     async def _handle_locked(self, tenant: Tenant, tenant_id: str, channel: str, inbound: InboundMessage,
                              session_id: str, started: float) -> str:
         """Execute a turn while holding the session-scoped writer lock."""
 
         backend: SessionServiceABC = self._session_factory(tenant)
-        session_service = TenantSessionService(backend, tenant_id)
+        session_service = TenantSessionService(
+            backend,
+            tenant_id,
+            metrics=self._metrics,
+            backend_name=tenant.storage_config.session_backend,
+        )
         memory_service = None
         if self._memory_factory is not None:
-            memory_service = TenantMemoryService(self._memory_factory(tenant), tenant_id)
+            memory_service = TenantMemoryService(
+                self._memory_factory(tenant),
+                tenant_id,
+                metrics=self._metrics,
+                backend_name=tenant.storage_config.memory_backend,
+            )
         storage_started = time.perf_counter()
-        session = await self._get_or_create_session(session_service, inbound.sender_id, session_id)
-        self._metrics.observe(
-            "agent_session_backend_latency_ms",
-            (time.perf_counter() - storage_started) * 1000,
-            tenant_id=tenant_id,
-            operation="load",
-            backend=tenant.storage_config.session_backend,
-        )
+        storage_outcome = "error"
+        storage_error_type = None
+        try:
+            session = await self._get_or_create_session(session_service, inbound.sender_id, session_id)
+            storage_outcome = "success"
+        except Exception as exc:
+            storage_error_type = type(exc).__name__
+            raise
+        finally:
+            self._metrics.observe(
+                "agent_session_backend_latency_ms",
+                (time.perf_counter() - storage_started) * 1000,
+                tenant_id=tenant_id,
+                operation="get_or_create",
+                backend=tenant.storage_config.session_backend,
+                outcome=storage_outcome,
+                error_type=storage_error_type,
+            )
         confirmed_tools = self._load_confirmed_tools(session)
 
         # HITL: a confirmation reply ("确认 <token>") resolves the pending request
@@ -218,6 +286,8 @@ class TenantWorker:
 
         try:
             run_started = time.perf_counter()
+            run_outcome = "error"
+            run_error_type = None
             events = runner.run_async(
                 user_id=inbound.sender_id,
                 session_id=session_id,
@@ -226,23 +296,19 @@ class TenantWorker:
             )
             final_text = await collect_final_text(events)
             final_text = SensitiveDataRedactor().redact(final_text, tenant.audit_policy.desensitize_rules)
-            self._metrics.increment("agent_requests_total", tenant_id=tenant_id, channel=channel, outcome="success")
+            run_outcome = "success"
+        except Exception as exc:
+            run_error_type = type(exc).__name__
+            raise
+        finally:
             self._metrics.observe(
                 "agent_runner_latency_ms",
                 (time.perf_counter() - run_started) * 1000,
                 tenant_id=tenant_id,
                 channel=channel,
+                outcome=run_outcome,
+                error_type=run_error_type,
             )
-        except Exception as exc:
-            self._metrics.increment(
-                "agent_requests_total",
-                tenant_id=tenant_id,
-                channel=channel,
-                outcome="error",
-                error_type=type(exc).__name__,
-            )
-            raise
-        finally:
             await runner.close()
 
         await self._audit_turn(

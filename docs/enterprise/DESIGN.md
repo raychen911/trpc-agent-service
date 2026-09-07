@@ -223,26 +223,30 @@ class ChannelAdapter(ABC):
 
 ### 6.2 监控指标
 
-请求量、每租户 QPS、模型/工具调用耗时、IM 投递成功率、错误率、token 消耗、每租户成本、
-Session 后端延迟。`observability.tenant_attributes(tenant_id)` 产出 `{"tenant.id": ...}`
-供框架 `report_*` 的 `extra_attributes` 使用。
+服务层记录 Gateway callback/ACK、入队、Redis Streams 操作、Worker 重试/DLQ、结果缓存、Session 锁、
+Session/Memory/Vector/Object 后端、Runner 和 IM 投递的计数与耗时；上游 SDK 继续记录 `gen_ai.*` 模型/工具
+调用耗时与 token 指标。`EnterpriseMetrics` 同时写进程内诊断快照与 OTel MeterProvider，完整指标目录见
+[`METRICS.md`](METRICS.md)。指标只使用 tenant/channel/outcome/backend 等受控维度；Collector 在 Prometheus
+出口删除上游指标中的 `gen_ai.user.id`，用户、Session、消息和 trace 标识只进入 Trace、日志或审计。
 
 ### 6.3 OpenTelemetry 链路
 
 ```
 im_callback (Gateway, 带 tenant.id/channel)
-  └── invocation (Runner)
-        ├── agent_run
-        ├── call_llm
-        ├── execute_tool
-        └── session read/write
+  └── callback.enqueue / Redis Streams + W3C carrier
+        └── worker.process_task
+              ├── result_cache.get/put
+              ├── agent_run / call_llm / execute_tool
+              ├── session/summary/memory/vector/object read/write
+              └── im.reply
 ```
 
 Gateway 用 `callback_span()` 开 `im_callback` span，Worker 用 `attach_tenant_to_span()`
 打 tenant 标签；`TenantSessionService` / `TenantMemoryService` 为每次读写创建
 `session.*`、`summary.*`、`memory.*` span；Runner/Tool/Model span 由框架原生创建。
-部署启动时 `configure_telemetry()` 读取 `OTEL_EXPORTER_OTLP_ENDPOINT`，通过批量 OTLP
-exporter 上报到独立 Telemetry Collector，队列中的 W3C trace carrier 负责跨进程续接。
+部署启动时 `configure_telemetry()` 同时配置 TracerProvider、MeterProvider 和 OTLP HTTP exporter，
+上报到独立 Telemetry Collector；队列中的 W3C trace carrier 负责跨进程续接。Collector 分别把 Trace 发往
+Jaeger/Tempo 等后端，并通过 Prometheus exporter 暴露指标。
 
 ### 6.4 审计日志（`trpc_service/log/`）
 

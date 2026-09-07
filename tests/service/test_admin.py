@@ -7,11 +7,13 @@
 
 from __future__ import annotations
 
+import httpx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from trpc_service import AuditLogEntry
 from trpc_service import AuditLogger
+from trpc_service import EnterpriseMetrics
 from trpc_service import TenantConfigManager
 from trpc_service import create_admin_router
 
@@ -40,13 +42,19 @@ def _payload(tenant_id: str = "tenant_a", model_name: str = "model-a") -> dict:
     }
 
 
-def _client(manager=None, audit_logger=None, api_key="admin-secret") -> TestClient:
+def _client(manager=None,
+            audit_logger=None,
+            api_key="admin-secret",
+            metrics=None,
+            prometheus_reader=None) -> TestClient:
     app = FastAPI()
     app.include_router(
         create_admin_router(
             manager=manager or TenantConfigManager(),
             audit_logger=audit_logger,
             api_key=api_key,
+            metrics=metrics,
+            prometheus_reader=prometheus_reader,
         ))
     return TestClient(app)
 
@@ -75,6 +83,23 @@ def test_admin_ui_is_local_read_only_console_and_does_not_embed_secret():
     assert "/admin/tenants" in response.text
     assert "/admin/audit" in response.text
     assert "/admin/metrics" in response.text
+    assert 'id="metricKpis"' in response.text
+    assert "运行概览" in response.text
+    assert "Gateway 回调" in response.text
+    assert "Worker 消费" in response.text
+    assert "回复成功率" in response.text
+    assert "Token 消耗" in response.text
+    assert 'totalCounter("agent_callback_total", "success")' in response.text
+    assert 'totalCounter("agent_callback_total", "challenge")' in response.text
+    assert 'kpi("消息回调"' in response.text
+    assert 'kpi("验证回调"' in response.text
+    assert 'histogramTotal("agent_callback_duration_ms", "success")' in response.text
+    assert "模型成本" in response.text
+    assert "Token 预算" in response.text
+    assert "Prometheus 全局指标" in response.text
+    assert "histogramChart" in response.text
+    assert "histogram-bar" in response.text
+    assert "metric-details" in response.text
     assert "sessionStorage" in response.text
     assert "admin-secret" not in response.text
 
@@ -134,3 +159,79 @@ async def test_admin_queries_audit_by_tenant():
     response = client.get("/admin/audit", params={"tenant_id": "tenant_a"})
     assert response.status_code == 200
     assert [entry["tenant_id"] for entry in response.json()] == ["tenant_a"]
+
+
+def test_admin_metrics_are_explicitly_process_local(monkeypatch):
+    metrics = EnterpriseMetrics(meter=False)
+    metrics.increment("agent_requests_total", tenant_id="tenant_a", outcome="success")
+    metrics.increment("agent_requests_total", tenant_id="tenant_b", outcome="error")
+    metrics.observe("agent_runner_latency_ms", 75, tenant_id="tenant_a", outcome="success")
+    monkeypatch.setenv("OTEL_SERVICE_NAME", "gateway-test")
+    monkeypatch.setenv("OTEL_SERVICE_INSTANCE_ID", "instance-test")
+    client = _client(api_key=None, metrics=metrics)
+
+    response = client.get("/admin/metrics", params={"tenant_id": "tenant_a"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["scope"] == "process"
+    assert body["service_name"] == "gateway-test"
+    assert body["instance_id"] == "instance-test"
+    assert len(body["counters"]) == 1
+    assert body["counters"][0]["attributes"]["tenant_id"] == "tenant_a"
+    assert body["histograms"][0]["unit"] == "ms"
+    assert sum(bucket["count"] for bucket in body["histograms"][0]["buckets"]) == 1
+
+
+def test_admin_metrics_use_prometheus_cross_process_snapshot():
+
+    class FakePrometheusReader:
+
+        async def snapshot(self, tenant_id):
+            assert tenant_id == "tenant_a"
+            return {
+                "counters": [{
+                    "name": "agent_requests_total",
+                    "attributes": {
+                        "tenant_id": tenant_id
+                    },
+                    "value": 7,
+                }],
+                "gauges": [{
+                    "name": "agent_budget_tokens_used",
+                    "attributes": {
+                        "tenant_id": tenant_id
+                    },
+                    "value": 120,
+                }],
+                "histograms": [],
+            }
+
+    client = _client(api_key=None, prometheus_reader=FakePrometheusReader())
+
+    body = client.get("/admin/metrics", params={"tenant_id": "tenant_a"}).json()
+
+    assert body["scope"] == "prometheus"
+    assert body["service_name"] == "all"
+    assert body["instance_id"] is None
+    assert body["source_error"] is None
+    assert body["counters"][0]["value"] == 7
+    assert body["gauges"][0]["value"] == 120
+
+
+def test_admin_metrics_fall_back_to_local_snapshot_when_prometheus_fails():
+
+    class FailingPrometheusReader:
+
+        async def snapshot(self, tenant_id):
+            raise httpx.ConnectError("offline")
+
+    metrics = EnterpriseMetrics(meter=False)
+    metrics.increment("agent_callback_total", tenant_id="tenant_a", outcome="success")
+    client = _client(api_key=None, metrics=metrics, prometheus_reader=FailingPrometheusReader())
+
+    body = client.get("/admin/metrics").json()
+
+    assert body["scope"] == "process"
+    assert body["source_error"] == "ConnectError"
+    assert body["counters"][0]["name"] == "agent_callback_total"

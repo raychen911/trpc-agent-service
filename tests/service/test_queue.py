@@ -11,9 +11,11 @@ import json
 
 import fakeredis.aioredis as faioredis
 from fastapi.testclient import TestClient
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from trpc_agent_sdk.agents import BaseAgent
 from trpc_service import ChannelRegistry
+from trpc_service import EnterpriseMetrics
 from trpc_service import InboundMessage
 from trpc_service import StreamQueue
 from trpc_service import StreamWorker
@@ -31,6 +33,19 @@ from trpc_agent_sdk.events import Event
 from trpc_agent_sdk.sessions import InMemorySessionService
 from trpc_agent_sdk.types import Content
 from trpc_agent_sdk.types import Part
+
+
+def _metric_values(metrics, name):
+    return {
+        tuple(sorted(item["attributes"].items())): item["value"]
+        for item in metrics.snapshot()["counters"] if item["name"] == name
+    }
+
+
+def _has_attributes(metrics, name, **expected):
+    expected = {key: str(value) for key, value in expected.items()}
+    return any(item["name"] == name and all(item["attributes"].get(key) == value for key, value in expected.items())
+               for item in metrics.snapshot()["counters"])
 
 
 class EchoAgent(BaseAgent):
@@ -123,7 +138,9 @@ def test_task_message_roundtrip():
 
 async def test_stream_queue_enqueue_read_ack():
     client = faioredis.FakeRedis(decode_responses=True)
-    queue = StreamQueue(client=client)
+    metrics = EnterpriseMetrics(meter=False)
+    queue = StreamQueue(client=client, metrics=metrics)
+    await queue.ensure_group()
     await queue.ensure_group()
 
     mid = await queue.enqueue(TaskMessage(tenant_id="t", channel="wecom", inbound={"chat_id": "c"}))
@@ -138,7 +155,27 @@ async def test_stream_queue_enqueue_read_ack():
 
     assert await queue.ack(mid) == 1
     assert await queue.read(count=1, block=0) == []
+    operations = {dict(labels)["operation"] for labels in _metric_values(metrics, "agent_queue_operation_total")}
+    assert {"ensure_group", "enqueue", "read", "ack"} <= operations
     await queue.close()
+
+
+async def test_stream_queue_treats_blocking_read_timeout_as_empty_poll():
+    class TimeoutClient:
+
+        async def xreadgroup(self, *args, **kwargs):
+            raise RedisTimeoutError("read timed out")
+
+    queue = StreamQueue(client=TimeoutClient(), metrics=EnterpriseMetrics(meter=False))
+
+    assert await queue.read(count=1, block=5000) == []
+
+    try:
+        await queue.read(count=1, block=0)
+    except RedisTimeoutError:
+        pass
+    else:
+        raise AssertionError("non-blocking Redis timeout must be propagated")
 
 
 # ------------------------------------------------------------ gateway enqueue path
@@ -175,6 +212,7 @@ def test_gateway_enqueues_when_queue_provided():
     assert queue.enqueued[0].tenant_id == "t_a"
     # The worker must NOT have run in-process (decoupled mode).
     assert adapter.replies == []
+    assert _has_attributes(worker.metrics, "agent_callback_enqueue_total", outcome="success")
 
 
 def test_gateway_releases_idempotency_when_enqueue_fails():
@@ -207,6 +245,11 @@ def test_gateway_releases_idempotency_when_enqueue_fails():
     assert client.post("/webhook/t_a/fake", json=payload).status_code == 503
     assert client.post("/webhook/t_a/fake", json=payload).status_code == 200
     assert queue.calls == 2
+    assert _has_attributes(worker.metrics,
+                           "agent_callback_enqueue_total",
+                           outcome="error",
+                           error_type="ConnectionError")
+    assert _has_attributes(worker.metrics, "agent_callback_enqueue_total", outcome="success")
 
 
 # ------------------------------------------------------------ StreamWorker consume
@@ -214,7 +257,8 @@ def test_gateway_releases_idempotency_when_enqueue_fails():
 
 async def test_stream_worker_processes_and_acks():
     client = faioredis.FakeRedis(decode_responses=True)
-    queue = StreamQueue(client=client)
+    metrics = EnterpriseMetrics(meter=False)
+    queue = StreamQueue(client=client, metrics=metrics)
     await queue.ensure_group()
 
     manager = TenantConfigManager()
@@ -224,6 +268,7 @@ async def test_stream_worker_processes_and_acks():
         manager=manager,
         agent_factory=lambda t: EchoAgent(name="t_a"),
         session_service_factory=lambda t: shared,
+        metrics=metrics,
     )
     adapter = FakeAdapter()
     registry = ChannelRegistry(factories={"fake": lambda cfg: adapter})
@@ -239,6 +284,9 @@ async def test_stream_worker_processes_and_acks():
     stream_worker = StreamWorker(queue=queue, worker=worker, registry=registry)
     assert await stream_worker.run_once(count=1, block=0) == 1
     assert adapter.replies == ["echo:hi"]
+    assert _has_attributes(metrics, "agent_worker_task_total", outcome="success")
+    assert _has_attributes(metrics, "agent_result_cache_total", outcome="miss")
+    assert _has_attributes(metrics, "agent_im_delivery_total", outcome="success")
 
     # The message was acked, so a second read returns nothing.
     assert await stream_worker.run_once(count=1, block=0) == 0
@@ -247,7 +295,8 @@ async def test_stream_worker_processes_and_acks():
 
 async def test_failed_task_is_not_acked_and_is_reclaimed():
     client = faioredis.FakeRedis(decode_responses=True)
-    queue = StreamQueue(client=client)
+    metrics = EnterpriseMetrics(meter=False)
+    queue = StreamQueue(client=client, metrics=metrics)
     await queue.ensure_group()
     manager = TenantConfigManager()
     _make_tenant(manager)
@@ -256,6 +305,7 @@ async def test_failed_task_is_not_acked_and_is_reclaimed():
         manager=manager,
         agent_factory=lambda t: EchoAgent(name="t_a"),
         session_service_factory=lambda t: shared,
+        metrics=metrics,
     )
     adapter = FailOnceAdapter()
     registry = ChannelRegistry(factories={"fake": lambda cfg: adapter})
@@ -279,12 +329,18 @@ async def test_failed_task_is_not_acked_and_is_reclaimed():
     assert await stream_worker.run_once(count=1, block=0) == 1
     assert adapter.replies == ["echo:hi"]
     assert await queue.delivery_count(message_id) == 0
+    assert _has_attributes(metrics, "agent_worker_retry_total", error_type="RuntimeError")
+    assert _has_attributes(metrics, "agent_result_cache_total", outcome="miss")
+    assert _has_attributes(metrics, "agent_result_cache_total", outcome="hit")
+    assert _has_attributes(metrics, "agent_im_delivery_total", outcome="error")
+    assert _has_attributes(metrics, "agent_im_delivery_total", outcome="success")
     await queue.close()
 
 
 async def test_poison_task_moves_to_dead_letter_stream():
     client = faioredis.FakeRedis(decode_responses=True)
-    queue = StreamQueue(client=client)
+    metrics = EnterpriseMetrics(meter=False)
+    queue = StreamQueue(client=client, metrics=metrics)
     await queue.ensure_group()
     message_id = await client.xadd("agent:tasks", {"payload": "not-json"})
     stream_worker = StreamWorker(
@@ -293,6 +349,7 @@ async def test_poison_task_moves_to_dead_letter_stream():
         registry=object(),
         min_idle_ms=0,
         max_attempts=1,
+        metrics=metrics,
     )
 
     assert await stream_worker.run_once(count=1, block=0) == 1
@@ -300,4 +357,6 @@ async def test_poison_task_moves_to_dead_letter_stream():
     dead = await client.xrange("agent:tasks:dead")
     assert len(dead) == 1
     assert dead[0][1]["source_id"] == message_id
+    assert _has_attributes(metrics, "agent_queue_dlq_total")
+    assert _has_attributes(metrics, "agent_worker_task_total", outcome="dead_letter")
     await queue.close()

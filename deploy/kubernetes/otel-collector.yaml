@@ -14,17 +14,32 @@ data:
       memory_limiter:
         check_interval: 1s
         limit_mib: 400
+      transform/drop_high_cardinality_metrics:
+        error_mode: ignore
+        metric_statements:
+          - context: datapoint
+            statements:
+              - delete_key(attributes, "gen_ai.user.id")
     exporters:
       otlp:
         endpoint: jaeger-collector:4317
         tls:
           insecure: true
+      prometheus:
+        endpoint: 0.0.0.0:8889
+        translation_strategy: UnderscoreEscapingWithoutSuffixes
+        resource_to_telemetry_conversion:
+          enabled: true
     service:
       pipelines:
         traces:
           receivers: [otlp]
           processors: [memory_limiter, batch]
           exporters: [otlp]
+        metrics:
+          receivers: [otlp]
+          processors: [memory_limiter, transform/drop_high_cardinality_metrics, batch]
+          exporters: [prometheus]
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -47,6 +62,7 @@ spec:
           ports:
             - containerPort: 4317
             - containerPort: 4318
+            - containerPort: 8889
           resources:
             requests:
               cpu: 100m
@@ -67,6 +83,7 @@ kind: Service
 metadata:
   name: otel-collector
 spec:
+  clusterIP: None
   selector:
     app: otel-collector
   ports:
@@ -76,3 +93,6 @@ spec:
     - name: otlp-http
       port: 4318
       targetPort: 4318
+    - name: prometheus
+      port: 8889
+      targetPort: 8889

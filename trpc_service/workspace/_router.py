@@ -208,7 +208,11 @@ class TenantStorageRouter:
             config.embedding_model or "",
         )
         if identity not in self._vector_stores:
-            self._vector_stores[identity] = TenantVectorStore(factory(config), tenant.tenant_id)
+            self._vector_stores[identity] = TenantVectorStore(
+                factory(config),
+                tenant.tenant_id,
+                backend_name=config.backend,
+            )
         return self._vector_stores[identity]
 
     def object_store(self, tenant: Tenant) -> TenantObjectStore:
@@ -228,7 +232,11 @@ class TenantStorageRouter:
             config.local_path,
         )
         if identity not in self._object_stores:
-            self._object_stores[identity] = TenantObjectStore(factory(config), tenant.tenant_id)
+            self._object_stores[identity] = TenantObjectStore(
+                factory(config),
+                tenant.tenant_id,
+                backend_name=config.backend,
+            )
         return self._object_stores[identity]
 
     async def close(self) -> None:

@@ -18,6 +18,8 @@ import asyncio
 import os
 from typing import Optional
 
+os.environ.setdefault("OTEL_SERVICE_NAME", "trpc-agent-worker")
+
 from trpc_service.web.gateway import ChannelRegistry
 from trpc_service.tenant import TenantConfigManager
 from trpc_service.tenant import build_tenant_config_manager
@@ -35,6 +37,7 @@ from trpc_service.web.app import create_session_lock_manager
 from trpc_service.web.app import create_session_service
 from trpc_service.log import install_redacting_log_filter
 from trpc_service.metrics._observability import configure_telemetry
+from trpc_service.metrics._observability import shutdown_telemetry
 
 
 def build_stream_worker(manager: Optional[TenantConfigManager] = None,
@@ -77,7 +80,10 @@ def build_stream_worker(manager: Optional[TenantConfigManager] = None,
 
 async def main() -> None:
     worker = build_stream_worker(tenants_path=os.environ.get("TENANTS_CONFIG"))
-    await worker.run()
+    try:
+        await worker.run()
+    finally:
+        shutdown_telemetry()
 
 
 if __name__ == "__main__":

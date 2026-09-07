@@ -88,7 +88,7 @@ class RedisBudgetTracker:
                      model_name: str,
                      input_tokens: int,
                      output_tokens: int,
-                     date_str: Optional[str] = None) -> None:
+                     date_str: Optional[str] = None) -> float:
         pricing = self._pricing.get(model_name)
         cost = 0.0
         if pricing is not None:
@@ -100,6 +100,7 @@ class RedisBudgetTracker:
             pipe.hincrbyfloat(key, "cost", cost)
             pipe.expire(key, self._retention)
             await pipe.execute()
+        return cost
 
     async def usage(self, tenant_id: str, date_str: Optional[str] = None) -> dict[str, float]:
         raw = await self._redis.hgetall(self._key(tenant_id, date_str))

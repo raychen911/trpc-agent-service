@@ -181,7 +181,7 @@ Worker Deployment（至少 3 副本）
 | MySQL | 租户配置事实源、版本历史、审计和可选 Session/Memory | 写入延迟、连接数、存储量 |
 | Qdrant/向量库 | Knowledge embedding、元数据过滤和语义召回 | 查询延迟、索引积压、Recall@K |
 | S3/COS/MinIO | 附件、Artifact 和知识原文 | 请求延迟、失败率、容量 |
-| OTel Collector | 汇聚 trace | 接收速率、队列和导出失败率 |
+| OTel Collector | 汇聚 trace/metrics，向 Prometheus 暴露指标 | 接收速率、队列和导出失败率 |
 
 Gateway 和 Worker 都是无状态计算节点；Session/Memory 使用共享后端，因此不需要 sticky session。
 
@@ -271,10 +271,17 @@ kubectl -n trpc-agent apply \
 都改为来自 Secret 的外部高可用 Redis 连接串。
 
 如果已有 `jaeger-collector:4317` 等 OTLP 接收端，再按环境调整并应用
-[`otel-collector.yaml`](../../deploy/kubernetes/otel-collector.yaml)。最后审阅并应用
+[`otel-collector.yaml`](../../deploy/kubernetes/otel-collector.yaml)。示例 Collector 将 Trace 发往 Jaeger，并在
+`:8889` 暴露 Prometheus 指标；可继续应用 [`prometheus.yaml`](../../deploy/kubernetes/prometheus.yaml) 进行抓取和
+基础告警。示例 Prometheus 数据卷是 `emptyDir`，生产必须替换为 PVC、Prometheus Operator 或托管监控。
+最后审阅并应用
 [`production-hardening.yaml`](../../deploy/kubernetes/production-hardening.yaml)：
 
 ```bash
+kubectl -n trpc-agent apply \
+  -f deploy/kubernetes/otel-collector.yaml \
+  -f deploy/kubernetes/prometheus.yaml
+
 kubectl -n trpc-agent apply \
   -f deploy/kubernetes/production-hardening.yaml
 ```
@@ -322,10 +329,14 @@ kubectl -n trpc-agent apply \
 | `ADMIN_API_KEY` | `/admin/*` API 鉴权 | 强烈建议 | 必填，并叠加网络访问控制 |
 | `AGENT_QUEUE_ENABLED` | 是否通过 Redis Streams 解耦 | `0` 为进程内，默认 `1` | 推荐 `1` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP HTTP 上报地址 | 可选 | 推荐配置 |
+| `OTEL_SERVICE_NAME` | 区分 Gateway/Worker 指标与 Trace | 自动默认 | 每类进程使用稳定且不同的名字 |
+| `OTEL_SERVICE_INSTANCE_ID` | 区分进程或 Pod | HOSTNAME/主机名 | 使用 Pod UID 或稳定实例标识 |
+| `OTEL_METRIC_EXPORT_INTERVAL` | Metrics 导出周期（毫秒） | 60000 | 按流量和 Collector 容量调节 |
 | `VECTOR_URL` / `QDRANT_API_KEY` | Qdrant 地址与凭据 | 内存后端不需要 | Secret/KMS、TLS、最小权限 |
 | `OBJECT_STORE_*` | S3 兼容端点、区域与凭据 | 本地卷不需要 | Secret/KMS、加密、版本和生命周期 |
 
 渠道环境变量由租户配置里的 `${VAR}` 决定；同一集群可为不同租户设置不同的 `api_key_env` 和渠道变量。
+完整指标目录、PromQL 和排错步骤见 [`METRICS.md`](METRICS.md)。
 
 ## 5. 上线验收清单
 

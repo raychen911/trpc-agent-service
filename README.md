@@ -36,6 +36,7 @@ Gateway 和 Worker 不保存租户会话状态。会话与记忆通过共享 Red
 - [多后端适配方案](docs/enterprise/BACKEND_ADAPTERS.md)
 - [数据模型设计](docs/enterprise/DATA_MODEL.md)
 - [数据同步与幂等策略](docs/enterprise/SYNC_AND_IDEMPOTENCY.md)
+- [企业监控链路与指标调试](docs/enterprise/METRICS.md)
 - [验收测试方案](docs/enterprise/ACCEPTANCE_TEST_PLAN.md)
 - [完整方案与数据模型](docs/SUBMISSION_PROPOSAL.md)
 

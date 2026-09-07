@@ -4,6 +4,10 @@ from pathlib import Path
 import tomllib
 
 COMPOSE_FILE = Path(__file__).resolve().parents[2] / "deploy/docker-compose.minimal.yml"
+OBSERVABILITY_COMPOSE_FILE = COMPOSE_FILE.parent / "docker-compose.observability.yml"
+COMPOSE_COLLECTOR_FILE = COMPOSE_FILE.parent / "otel-collector.compose.yaml"
+PROMETHEUS_CONFIG_FILE = COMPOSE_FILE.parent / "prometheus/prometheus.yml"
+PROMETHEUS_ALERTS_FILE = COMPOSE_FILE.parent / "prometheus/alerts.yml"
 PYPROJECT_FILE = COMPOSE_FILE.parents[1] / "pyproject.toml"
 DOCKERFILE = COMPOSE_FILE.parent / "Dockerfile"
 KUBERNETES_DIR = COMPOSE_FILE.parent / "kubernetes"
@@ -70,3 +74,48 @@ def test_production_manifests_wire_vector_and_object_storage_secrets():
     assert "${VECTOR_URL}" in config
     assert "${OBJECT_STORE_ENDPOINT}" in config
     assert agent.count("name: agent-storage-secrets") == 2
+
+
+def test_observability_compose_exports_metrics_to_prometheus():
+    compose = OBSERVABILITY_COMPOSE_FILE.read_text(encoding="utf-8")
+    collector = COMPOSE_COLLECTOR_FILE.read_text(encoding="utf-8")
+    prometheus = PROMETHEUS_CONFIG_FILE.read_text(encoding="utf-8")
+    alerts = PROMETHEUS_ALERTS_FILE.read_text(encoding="utf-8")
+
+    assert compose.count("OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318") == 2
+    assert "PROMETHEUS_URL=http://prometheus:9090" in compose
+    assert "127.0.0.1:8889:8889" in compose
+    assert "127.0.0.1:9090:9090" in compose
+    assert "endpoint: 0.0.0.0:4317" in collector
+    assert "endpoint: 0.0.0.0:4318" in collector
+    assert "metrics:" in collector
+    assert "exporters: [prometheus]" in collector
+    assert "translation_strategy: UnderscoreEscapingWithoutSuffixes" in collector
+    assert "resource_to_telemetry_conversion:" in collector
+    assert 'delete_key(attributes, "gen_ai.user.id")' in collector
+    assert "otel-collector:8889" in prometheus
+    assert "AgentDeadLetterQueueGrowth" in alerts
+    assert "AgentImDeliveryErrors" in alerts
+    assert "AgentBudgetRejections" in alerts
+    assert "AgentTokenBudgetNearLimit" in alerts
+
+
+def test_kubernetes_observability_scrapes_every_collector_replica():
+    agent = (KUBERNETES_DIR / "agent.yaml").read_text(encoding="utf-8")
+    collector = (KUBERNETES_DIR / "otel-collector.yaml").read_text(encoding="utf-8")
+    prometheus = (KUBERNETES_DIR / "prometheus.yaml").read_text(encoding="utf-8")
+
+    assert agent.count("name: OTEL_SERVICE_NAME") == 2
+    assert "value: trpc-agent-gateway" in agent
+    assert "value: trpc-agent-worker" in agent
+    assert agent.count("name: OTEL_METRIC_EXPORT_INTERVAL") == 2
+    assert "endpoint: 0.0.0.0:8889" in collector
+    assert "resource_to_telemetry_conversion:" in collector
+    assert "translation_strategy: UnderscoreEscapingWithoutSuffixes" in collector
+    assert 'delete_key(attributes, "gen_ai.user.id")' in collector
+    assert "clusterIP: None" in collector
+    assert "metrics:" in collector
+    assert "dns_sd_configs:" in prometheus
+    assert "port: 8889" in prometheus
+    assert "PROMETHEUS_URL" in agent
+    assert "AgentTokenBudgetNearLimit" in prometheus

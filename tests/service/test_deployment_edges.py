@@ -105,6 +105,7 @@ def test_build_app_loads_tenants_and_mounts_admin(monkeypatch):
     client = TestClient(app)
     assert client.get("/healthz").status_code == 200
     assert client.get("/admin/tenants", headers={"x-admin-api-key": "admin"}).json()[0]["tenant_id"] == "deploy"
+    assert deployment_app.shutdown_telemetry in app.router.on_shutdown
 
 
 def test_stream_worker_assembly_and_main(monkeypatch):

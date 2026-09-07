@@ -16,6 +16,7 @@ from trpc_service.tenant import ObjectBackendConfig
 from trpc_service.tenant import StorageBackendConfig
 from trpc_service.tenant import Tenant
 from trpc_service.tenant import VectorBackendConfig
+from trpc_service import EnterpriseMetrics
 from trpc_service.workspace import InMemoryVectorStore
 from trpc_service.workspace import LocalObjectStore
 from trpc_service.workspace import QdrantVectorStore
@@ -59,7 +60,8 @@ async def test_in_memory_vector_store_search_filter_delete_and_validation():
 
 async def test_tenant_vector_store_namespaces_are_isolated_and_idempotent():
     backend = InMemoryVectorStore()
-    tenant_a = TenantVectorStore(backend, "tenant_a")
+    metrics = EnterpriseMetrics(meter=False)
+    tenant_a = TenantVectorStore(backend, "tenant_a", metrics=metrics, backend_name="memory")
     tenant_b = TenantVectorStore(backend, "tenant_b")
     record = VectorRecord(record_id="doc", embedding=[1.0], content="private")
 
@@ -68,6 +70,11 @@ async def test_tenant_vector_store_namespaces_are_isolated_and_idempotent():
     assert await tenant_b.search("knowledge", [1.0]) == []
     await tenant_a.delete("knowledge", ["doc"])
     assert await tenant_a.search("knowledge", [1.0]) == []
+    operations = {
+        item["attributes"]["operation"]
+        for item in metrics.snapshot("tenant_a")["counters"] if item["name"] == "agent_storage_operation_total"
+    }
+    assert operations == {"upsert", "search", "delete"}
     await tenant_b.close()
 
 
@@ -181,7 +188,8 @@ async def test_qdrant_vector_store_works_with_official_local_client():
 
 async def test_local_object_store_is_atomic_scoped_and_path_safe(tmp_path):
     backend = LocalObjectStore(str(tmp_path))
-    tenant_a = TenantObjectStore(backend, "tenant_a")
+    metrics = EnterpriseMetrics(meter=False)
+    tenant_a = TenantObjectStore(backend, "tenant_a", metrics=metrics, backend_name="local")
     tenant_b = TenantObjectStore(backend, "tenant_b")
 
     info = await tenant_a.put("reports/a.txt", b"hello", "text/plain", {"source": "test"})
@@ -198,6 +206,11 @@ async def test_local_object_store_is_atomic_scoped_and_path_safe(tmp_path):
     await tenant_a.delete("reports/a.txt")
     assert await tenant_a.get("reports/a.txt") is None
     await tenant_a.delete("missing.txt")
+    operations = {
+        item["attributes"]["operation"]
+        for item in metrics.snapshot("tenant_a")["counters"] if item["name"] == "agent_storage_operation_total"
+    }
+    assert operations == {"put", "get", "head", "delete"}
     await tenant_a.close()
 
     with pytest.raises(ValueError, match="relative POSIX"):

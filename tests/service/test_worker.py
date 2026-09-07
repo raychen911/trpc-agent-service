@@ -7,7 +7,11 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
+import pytest
 from trpc_agent_sdk.agents import BaseAgent
+from trpc_service import EnterpriseMetrics
 from trpc_service import InboundMessage
 from trpc_service import TenantConfigManager
 from trpc_service import TenantWorker
@@ -34,15 +38,31 @@ class EchoAgent(BaseAgent):
         yield Event(author=self.name, content=Content(parts=[Part.from_text(text=f"echo:{user_text}")]), partial=False)
 
 
+class FailingAgent(BaseAgent):
+
+    async def _run_async_impl(self, ctx):
+        if False:  # pragma: no cover - makes this an async generator
+            yield
+        raise RuntimeError("runner failed")
+
+
+def _has_metric(metrics, kind, name, **expected):
+    expected = {key: str(value) for key, value in expected.items()}
+    return any(item["name"] == name and all(item["attributes"].get(key) == value for key, value in expected.items())
+               for item in metrics.snapshot()[kind])
+
+
 def _worker() -> TenantWorker:
     manager = TenantConfigManager()
     manager.register(Tenant(tenant_id="t_a", name="A", model=ModelEndpoint(model_name="m")))
     manager.register(Tenant(tenant_id="t_b", name="B", model=ModelEndpoint(model_name="m")))
     shared = InMemorySessionService()
+    metrics = EnterpriseMetrics(meter=False)
     return manager, TenantWorker(
         manager=manager,
         agent_factory=lambda t: EchoAgent(name=t.tenant_id),
         session_service_factory=lambda t: shared,
+        metrics=metrics,
     )
 
 
@@ -56,6 +76,15 @@ async def test_worker_returns_agent_reply():
                              text="hi")
     reply = await worker.handle("t_a", "wecom", inbound)
     assert "echo:hi" in reply
+    assert _has_metric(worker.metrics, "counters", "agent_requests_total", outcome="success")
+    assert _has_metric(worker.metrics, "histograms", "agent_runner_latency_ms", outcome="success")
+    assert _has_metric(worker.metrics,
+                       "histograms",
+                       "agent_session_backend_latency_ms",
+                       operation="get_or_create",
+                       outcome="success")
+    assert _has_metric(worker.metrics, "histograms", "agent_session_lock_duration_ms", phase="wait")
+    assert _has_metric(worker.metrics, "histograms", "agent_session_lock_duration_ms", phase="hold")
 
 
 async def test_worker_redacts_sensitive_data_from_final_reply():
@@ -99,6 +128,63 @@ async def test_worker_rejects_unknown_tenant():
                              message_id="m1",
                              text="hi")
     assert await worker.handle("nope", "wecom", inbound) == ""
+    assert _has_metric(worker.metrics, "counters", "agent_requests_total", outcome="tenant_unavailable")
+
+
+async def test_worker_records_runner_failure():
+    manager = TenantConfigManager()
+    manager.register(Tenant(tenant_id="t_a", name="A", model=ModelEndpoint(model_name="m")))
+    metrics = EnterpriseMetrics(meter=False)
+    worker = TenantWorker(
+        manager=manager,
+        agent_factory=lambda tenant: FailingAgent(name=tenant.tenant_id),
+        session_service_factory=lambda tenant: InMemorySessionService(),
+        metrics=metrics,
+    )
+    inbound = InboundMessage(channel="wecom",
+                             chat_id="u1",
+                             chat_type=CHAT_PRIVATE,
+                             sender_id="u1",
+                             message_id="failed",
+                             text="fail")
+
+    with pytest.raises(AttributeError, match="has_content"):
+        await worker.handle("t_a", "wecom", inbound)
+
+    assert _has_metric(metrics, "histograms", "agent_runner_latency_ms", outcome="error", error_type="AttributeError")
+    assert _has_metric(metrics, "counters", "agent_requests_total", outcome="error", error_type="AttributeError")
+
+
+async def test_worker_records_session_lock_failure():
+
+    class FailingLocks:
+
+        @asynccontextmanager
+        async def acquire(self, key):
+            raise TimeoutError("lock unavailable")
+            yield  # pragma: no cover
+
+    manager = TenantConfigManager()
+    manager.register(Tenant(tenant_id="t_a", name="A", model=ModelEndpoint(model_name="m")))
+    metrics = EnterpriseMetrics(meter=False)
+    worker = TenantWorker(
+        manager=manager,
+        agent_factory=lambda tenant: EchoAgent(name=tenant.tenant_id),
+        session_service_factory=lambda tenant: InMemorySessionService(),
+        session_lock_manager=FailingLocks(),
+        metrics=metrics,
+    )
+    inbound = InboundMessage(channel="wecom", chat_id="u1", sender_id="u1", message_id="lock", text="hi")
+
+    with pytest.raises(TimeoutError, match="lock unavailable"):
+        await worker.handle("t_a", "wecom", inbound)
+
+    assert _has_metric(metrics,
+                       "histograms",
+                       "agent_session_lock_duration_ms",
+                       phase="wait",
+                       outcome="error",
+                       error_type="TimeoutError")
 
 
 def test_parse_confirmation_token():

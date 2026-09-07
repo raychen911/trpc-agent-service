@@ -37,6 +37,7 @@ from trpc_service.log import AuditLogger
 from trpc_service.log import SqlAuditSink
 from trpc_service.log import install_redacting_log_filter
 from trpc_service.metrics._observability import configure_telemetry
+from trpc_service.metrics._observability import shutdown_telemetry
 from trpc_service.tenant import Tenant
 from trpc_service.tenant import TenantConfigManager
 from trpc_service.tenant import build_tenant_config_manager
@@ -206,6 +207,7 @@ def build_app(manager: Optional[TenantConfigManager] = None,
         ))
     gateway.state.tenant_manager = manager
     gateway.state.audit_sink = audit_sink
+    gateway.router.add_event_handler("shutdown", shutdown_telemetry)
     return gateway
 
 
