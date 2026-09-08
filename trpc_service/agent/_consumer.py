@@ -19,6 +19,7 @@ import logging
 import time
 from contextlib import suppress
 from typing import Any
+from typing import Optional
 from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
@@ -30,6 +31,7 @@ from trpc_service.metrics import EnterpriseMetrics
 from trpc_service.metrics import get_enterprise_metrics
 from trpc_service.metrics import operation_span
 from ._results import LocalTaskResultStore
+from trpc_service.messaging._models import ClaimStatus
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +50,7 @@ class StreamWorker:
                  reconnect_delay_seconds: float = 1.0,
                  max_attempts: int = 3,
                  result_store: Any = None,
+                 message_store: Any = None,
                  metrics: EnterpriseMetrics | None = None) -> None:
         self._queue = queue
         self._worker = worker
@@ -59,6 +62,7 @@ class StreamWorker:
         self._reconnect_delay_seconds = max(0.0, reconnect_delay_seconds)
         self._max_attempts = max_attempts
         self._result_store = result_store or LocalTaskResultStore()
+        self._message_store = message_store
         self._metrics = metrics or getattr(worker, "metrics", None) or get_enterprise_metrics()
 
     async def _heartbeat(
@@ -66,15 +70,28 @@ class StreamWorker:
         message_id: str,
         owner_task: asyncio.Task,
         ownership_lost: asyncio.Event,
+        *,
+        task: Optional[TaskMessage] = None,
+        receipt_owner: str = "",
+        receipt_token: int = 0,
+        receipt_lease_seconds: float = 0,
     ) -> None:
         touch = getattr(self._queue, "touch", None)
-        if not callable(touch) or self._heartbeat_interval_ms <= 0:
+        renew_receipt = getattr(self._message_store, "renew_inbound", None)
+        if (not callable(touch) and not callable(renew_receipt)) or self._heartbeat_interval_ms <= 0:
             return
         interval = self._heartbeat_interval_ms / 1000
         while True:
             await asyncio.sleep(interval)
             try:
-                if await touch(message_id):
+                queue_owned = await touch(message_id) if callable(touch) else True
+                receipt_owned = (await renew_receipt(
+                    task,
+                    owner=receipt_owner,
+                    fencing_token=receipt_token,
+                    lease_seconds=receipt_lease_seconds,
+                ) if callable(renew_receipt) and task is not None and receipt_token else True)
+                if queue_owned and receipt_owned:
                     continue
                 logger.warning("task %s is no longer owned by this worker", message_id)
             except Exception:  # noqa: BLE001 - uncertain ownership must stop side effects
@@ -90,13 +107,46 @@ class StreamWorker:
         ownership_lost = asyncio.Event()
         outcome = "error"
         error_type = None
+        receipt_owner = getattr(self._queue, "consumer_name", "stream-worker")
+        receipt_token = 0
+        receipt_owned = False
+        receipt_lease_seconds = max(30.0, self._min_idle_ms / 1000 * 2)
         try:
             task = TaskMessage.model_validate_json(payload)
             inbound = task.to_inbound()
+            inbound.metadata = {
+                **inbound.metadata,
+                "turn_id": task.turn_id,
+                "config_revision": task.config_revision,
+            }
+            if self._message_store is not None:
+                claim = await self._message_store.claim_inbound(
+                    task,
+                    owner=receipt_owner,
+                    lease_seconds=receipt_lease_seconds,
+                )
+                receipt_token = claim.fencing_token
+                if claim.status == ClaimStatus.COMPLETED:
+                    await self._queue.ack(message_id)
+                    outcome = "duplicate"
+                    return True
+                if claim.status == ClaimStatus.BUSY:
+                    outcome = "busy"
+                    return False
+                receipt_owned = True
             owner_task = asyncio.current_task()
             if owner_task is None:  # pragma: no cover - an async function always has a current task
                 raise RuntimeError("stream task is not running inside an asyncio task")
-            heartbeat_task = asyncio.create_task(self._heartbeat(message_id, owner_task, ownership_lost))
+            heartbeat_task = asyncio.create_task(
+                self._heartbeat(
+                    message_id,
+                    owner_task,
+                    ownership_lost,
+                    task=task,
+                    receipt_owner=receipt_owner,
+                    receipt_token=receipt_token,
+                    receipt_lease_seconds=receipt_lease_seconds,
+                ))
             with extracted_trace_context(task.trace_headers):
                 with operation_span(
                         "worker.process_task",
@@ -123,14 +173,24 @@ class StreamWorker:
                         )
                         with operation_span("result_cache.put", **{"tenant.id": task.tenant_id}):
                             await self._result_store.put(task.idempotency_key, text)
-                    await reply_to_channel(
-                        tenant_id=task.tenant_id,
-                        channel=task.channel,
-                        inbound=inbound,
-                        text=text,
-                        worker=self._worker,
-                        registry=self._registry,
-                    )
+                    if self._message_store is not None:
+                        await self._message_store.complete_with_outbox(
+                            task,
+                            inbound,
+                            text,
+                            owner=receipt_owner,
+                            fencing_token=receipt_token,
+                        )
+                        receipt_owned = False
+                    else:
+                        await reply_to_channel(
+                            tenant_id=task.tenant_id,
+                            channel=task.channel,
+                            inbound=inbound,
+                            text=text,
+                            worker=self._worker,
+                            registry=self._registry,
+                        )
                     await self._queue.ack(message_id)
             outcome = "success"
             return True
@@ -144,6 +204,14 @@ class StreamWorker:
         except Exception as exc:  # noqa: BLE001 - a bad message must not stop the consumer
             error_type = type(exc).__name__
             logger.exception("failed to process task %s", message_id)
+            if receipt_owned and task is not None:
+                with suppress(Exception):
+                    await self._message_store.abandon_inbound(
+                        task,
+                        owner=receipt_owner,
+                        fencing_token=receipt_token,
+                        error=str(exc),
+                    )
             attempts = await self._queue.delivery_count(message_id)
             if attempts >= self._max_attempts:
                 await self._queue.dead_letter(message_id, payload, "task processing failed")

@@ -1,0 +1,36 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: agent-schema-migration
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: agent-schema-migration
+        app.kubernetes.io/part-of: trpc-agent-enterprise
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: agent-runtime
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migrate
+          image: trpc-agent-enterprise:latest
+          command: ["python", "-m", "trpc_service.migrations.run", "--schema-file", "/src/data/schema.mysql.sql", "--migrations-dir", "/src/data/migrations"]
+          env:
+            - name: TRPC_SERVICE_MYSQL_URL
+              valueFrom:
+                secretKeyRef:
+                  name: agent-secrets
+                  key: mysql-url
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]

@@ -7,10 +7,10 @@
 
 from trpc_service.agent._queue import StreamQueue
 from trpc_service.agent._queue import TaskMessage
-from ._app import ChannelAdapterFactory
-from ._app import ChannelRegistry
 from ._app import create_gateway_app
-from ._app import default_channel_factories
+from ._registry import ChannelAdapterFactory
+from ._registry import ChannelRegistry
+from ._registry import default_channel_factories
 from ._idempotency import LocalIdempotencyStore
 from ._idempotency import RedisIdempotencyStore
 from ._idempotency import build_idempotency_store

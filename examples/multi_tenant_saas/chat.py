@@ -8,7 +8,7 @@
 Lets you chat with each tenant's agent interactively, demonstrating
 multi-tenant isolation (separate session / instruction / tools per tenant).
 
-Runs fully offline with a deterministic mock agent. Set TRPC_AGENT_API_KEY to
+Runs fully offline with a deterministic mock agent. Set TRPC_SERVICE_MODEL_API_KEY to
 talk to a real LLM instead.
 
 Run::
@@ -66,7 +66,7 @@ async def main() -> None:
         tenant_by_key.setdefault(t.name, t)
 
     current = tenants[0]
-    real_llm = bool(os.environ.get("TRPC_AGENT_API_KEY"))
+    real_llm = bool(os.environ.get("TRPC_SERVICE_MODEL_API_KEY"))
 
     def render_tenants() -> str:
         lines = []
@@ -101,20 +101,18 @@ async def main() -> None:
                 print("再见。")
                 break
             elif cmd == "help":
-                print(
-                    "命令:\n"
-                    "  /tenant            列出租户并显示当前\n"
-                    "  /switch <id|name>  切换当前租户\n"
-                    "  /model             显示当前模型模式\n"
-                    "  /help              显示帮助\n"
-                    "  /quit              退出"
-                )
+                print("命令:\n"
+                      "  /tenant            列出租户并显示当前\n"
+                      "  /switch <id|name>  切换当前租户\n"
+                      "  /model             显示当前模型模式\n"
+                      "  /help              显示帮助\n"
+                      "  /quit              退出")
             elif cmd == "tenant":
                 print("可用租户:")
                 print(render_tenants())
                 print(f"当前: {current.tenant_id} ({current.name})")
             elif cmd == "model":
-                print("真实 LLM" if real_llm else "离线 Mock（设置 TRPC_AGENT_API_KEY 切换）")
+                print("真实 LLM" if real_llm else "离线 Mock（设置 TRPC_SERVICE_MODEL_API_KEY 切换）")
             elif cmd == "switch":
                 target = tenant_by_key.get(arg.strip())
                 if not target:

@@ -40,7 +40,7 @@ async def reply_to_channel(*, tenant_id: str, channel: str, inbound: Any, text: 
                 outcome="skipped_empty",
             )
         return
-    tenant = worker.resolve_tenant(tenant_id)
+    tenant = worker.resolve_tenant(tenant_id, inbound.metadata.get("config_revision"))
     if tenant is None:
         if metrics is not None:
             metrics.increment(

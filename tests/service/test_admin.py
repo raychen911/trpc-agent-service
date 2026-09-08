@@ -117,7 +117,18 @@ def test_admin_tenant_crud_history_and_rollback_masks_secrets():
     assert client.post("/admin/tenants", json=_payload(), headers=headers).status_code == 409
 
     update = _payload(model_name="model-b")
-    updated = client.put("/admin/tenants/tenant_a", json=update, headers=headers)
+    staged = client.put("/admin/tenants/tenant_a/draft", json=update, headers=headers)
+    assert staged.status_code == 200
+    assert staged.json()["based_on_version"] == 1
+    assert client.get("/admin/tenants/tenant_a", headers=headers).json()["model"]["model_name"] == "model-a"
+    updated = client.post(
+        "/admin/tenants/tenant_a/publish",
+        json={
+            "expected_version": 1,
+            "by": "tester"
+        },
+        headers=headers,
+    )
     assert updated.status_code == 200
     assert updated.json()["model"]["model_name"] == "model-b"
 
@@ -141,7 +152,7 @@ def test_admin_tenant_crud_history_and_rollback_masks_secrets():
 def test_admin_rejects_path_body_mismatch_and_missing_tenant():
     client = _client()
     headers = {"X-Admin-API-Key": "admin-secret"}
-    assert client.put("/admin/tenants/other", json=_payload(), headers=headers).status_code == 400
+    assert client.put("/admin/tenants/other/draft", json=_payload(), headers=headers).status_code == 400
     assert client.delete("/admin/tenants/missing", headers=headers).status_code == 404
     assert client.post(
         "/admin/tenants/missing/rollback",
@@ -150,6 +161,31 @@ def test_admin_rejects_path_body_mismatch_and_missing_tenant():
         },
         headers=headers,
     ).status_code == 404
+
+
+def test_admin_draft_query_conflict_and_discard():
+    manager = TenantConfigManager()
+    client = _client(manager=manager)
+    headers = {"X-Admin-API-Key": "admin-secret"}
+    assert client.post("/admin/tenants", json=_payload(), headers=headers).status_code == 201
+    update = _payload(model_name="model-b")
+    update["metadata"]["expected_version"] = 9
+    assert client.put("/admin/tenants/tenant_a/draft", json=update, headers=headers).status_code == 409
+    update["metadata"]["expected_version"] = 1
+    assert client.put("/admin/tenants/tenant_a/draft", json=update, headers=headers).status_code == 200
+    draft = client.get("/admin/tenants/tenant_a/draft", headers=headers)
+    assert draft.status_code == 200
+    assert draft.json()["config_snapshot"]["model"]["model_name"] == "model-b"
+    assert client.post(
+        "/admin/tenants/tenant_a/publish",
+        json={
+            "expected_version": 9
+        },
+        headers=headers,
+    ).status_code == 409
+    assert client.delete("/admin/tenants/tenant_a/draft", headers=headers).status_code == 204
+    assert client.get("/admin/tenants/tenant_a/draft", headers=headers).status_code == 404
+    assert client.delete("/admin/tenants/tenant_a/draft", headers=headers).status_code == 404
 
 
 async def test_admin_queries_audit_by_tenant():

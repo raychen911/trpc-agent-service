@@ -9,7 +9,9 @@ from ._loader import expand_env_vars
 from ._loader import load_tenants
 from ._factory import build_tenant_config_manager
 from ._manager import ConfigVersion
+from ._manager import ConfigDraft
 from ._manager import TenantConfigManager
+from ._manager import tenant_config_checksum
 from ._models import AppConfig
 from ._models import AppInfo
 from ._models import AuditPolicy
@@ -44,6 +46,7 @@ __all__ = [
     "BudgetConfig",
     "ChannelConfig",
     "ConfigVersion",
+    "ConfigDraft",
     "ConfigOutboxPublisher",
     "DesensitizeRule",
     "DingTalkChannelConfig",
@@ -67,4 +70,5 @@ __all__ = [
     "build_tenant_config_manager",
     "expand_env_vars",
     "load_tenants",
+    "tenant_config_checksum",
 ]

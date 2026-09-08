@@ -67,8 +67,8 @@ class ModelEndpoint(BaseModel):
     """Number of retries on transient failures."""
     fallback_model: Optional[str] = None
     """Fallback model used when the primary model times out."""
-    api_key_env: str = "TRPC_AGENT_API_KEY"
-    """Environment/Kubernetes Secret key containing this tenant's model credential."""
+    api_key_ref: str = "env://TRPC_SERVICE_MODEL_API_KEY"
+    """Runtime secret reference, for example ``env://TENANT_A_MODEL_API_KEY``."""
     pricing: dict[str, ModelPricingConfig] = Field(default_factory=dict)
     """Prices keyed by configured model name, used for cost accounting and limits."""
 

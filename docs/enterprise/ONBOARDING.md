@@ -64,7 +64,7 @@ for tenant in load_tenants("tenants.yaml"):
 模型 API Key **不写入配置**，从环境变量注入：
 
 ```bash
-export TRPC_AGENT_API_KEY=sk-xxx
+export TRPC_SERVICE_MODEL_API_KEY=sk-xxx
 ```
 
 `create_agent(tenant)` 用 `tenant.model` 构建 `OpenAIModel`，Key 读取环境变量。多租户共用
@@ -91,8 +91,8 @@ tool_permissions:
 channel_configs:
   wecom:
     channel_type: wecom
-    token: ${WECOM_TOKEN}          # 回调 token
-    aes_key: ${WECOM_AES_KEY}      # EncodingAESKey（43 位 base64）
+    token: env://TRPC_SERVICE_WECOM_TOKEN          # 回调 token
+    aes_key: env://TRPC_SERVICE_WECOM_AES_KEY      # EncodingAESKey（43 位 base64）
     corp_id: wx123456
     agent_id: "1000001"
 ```
@@ -106,20 +106,20 @@ channel_configs:
 channel_configs:
   wechat_kf:
     channel_type: wechat_kf
-    corp_id: ${WECHAT_KF_CORP_ID}
-    open_kfid: ${WECHAT_KF_OPEN_KFID}
-    token: ${WECHAT_KF_TOKEN}
-    aes_key: ${WECHAT_KF_AES_KEY}
+    corp_id: ${TRPC_SERVICE_WECHAT_KF_CORP_ID}
+    open_kfid: ${TRPC_SERVICE_WECHAT_KF_OPEN_KFID}
+    token: env://TRPC_SERVICE_WECHAT_KF_TOKEN
+    aes_key: env://TRPC_SERVICE_WECHAT_KF_AES_KEY
   dingtalk:
     channel_type: dingtalk
-    app_id: ${DINGTALK_CLIENT_ID}
-    robot_code: ${DINGTALK_ROBOT_CODE}
-    secret: ${DINGTALK_CLIENT_SECRET}
+    app_id: ${TRPC_SERVICE_DINGTALK_CLIENT_ID}
+    robot_code: ${TRPC_SERVICE_DINGTALK_ROBOT_CODE}
+    secret: env://TRPC_SERVICE_DINGTALK_CLIENT_SECRET
   feishu:
     channel_type: feishu
-    app_id: ${FEISHU_APP_ID}
-    verification_token: ${FEISHU_VERIFICATION_TOKEN}
-    encrypt_key: ${FEISHU_ENCRYPT_KEY}
+    app_id: ${TRPC_SERVICE_FEISHU_APP_ID}
+    verification_token: env://TRPC_SERVICE_FEISHU_VERIFICATION_TOKEN
+    encrypt_key: env://TRPC_SERVICE_FEISHU_ENCRYPT_KEY
 ```
 
 回调地址分别使用 `/wechat_kf`、`/dingtalk`、`/feishu`。没有真实凭据时，可通过
@@ -131,8 +131,8 @@ channel_configs:
 channel_configs:
   qq:
     channel_type: qq
-    app_id: ${QQBOT_APP_ID}
-    secret: ${QQBOT_APP_SECRET}
+    app_id: ${TRPC_SERVICE_QQ_APP_ID}
+    secret: env://TRPC_SERVICE_QQ_APP_SECRET
 ```
 
 在 QQ 机器人开放平台将公网 HTTPS 回调配置为
@@ -159,20 +159,20 @@ storage_config:
   memory_backend: mysql      # redis | mysql
   summary_backend: redis     # 兼容字段，自动跟随 session_backend
   audit_backend: mysql       # 固定 mysql
-  redis_url: ${REDIS_URL}
-  mysql_url: ${MYSQL_URL}
+  redis_url: env://TRPC_SERVICE_REDIS_URL
+  mysql_url: env://TRPC_SERVICE_MYSQL_URL
   vector:
     backend: qdrant
-    url: ${VECTOR_URL}
-    api_key: ${QDRANT_API_KEY}
+    url: env://TRPC_SERVICE_VECTOR_URL
+    api_key: env://TRPC_SERVICE_QDRANT_API_KEY
     collection: tenant_demo_knowledge
     dimensions: 1536
   object:
     backend: s3
-    endpoint_url: ${OBJECT_STORE_ENDPOINT}
+    endpoint_url: ${TRPC_SERVICE_OBJECT_STORE_ENDPOINT}
     bucket: tenant-demo-artifacts
-    access_key: ${OBJECT_STORE_ACCESS_KEY}
-    secret_key: ${OBJECT_STORE_SECRET_KEY}
+    access_key: env://TRPC_SERVICE_OBJECT_STORE_ACCESS_KEY
+    secret_key: env://TRPC_SERVICE_OBJECT_STORE_SECRET_KEY
 ```
 
 - 多节点共享会话使用 `redis` 或 `mysql`，Worker 无状态，无需 sticky session。
@@ -228,7 +228,7 @@ curl -X POST http://localhost:8080/webhook/tenant_demo/dingtalk
 ### 本地管理后台
 
 Gateway 启动后访问 `http://127.0.0.1:8080/admin`，页面会跳转到只读管理台。输入启动时配置的
-`ADMIN_API_KEY`，可以查看租户、渠道、最近审计记录和运行指标。完整聊天正文不通过 Admin API 暴露。
+`TRPC_SERVICE_ADMIN_API_KEY`，可以查看租户、渠道、最近审计记录和运行指标。完整聊天正文不通过 Admin API 暴露。
 
 ### 隔离自检清单
 

@@ -293,7 +293,7 @@
     </header>
 
     <section class="panel auth" aria-label="管理凭证">
-      <input id="apiKey" type="password" autocomplete="off" placeholder="输入 ADMIN_API_KEY">
+      <input id="apiKey" type="password" autocomplete="off" placeholder="输入 TRPC_SERVICE_ADMIN_API_KEY">
       <button id="connect" class="primary">连接后台</button>
       <button id="refresh">刷新数据</button>
     </section>
@@ -510,7 +510,7 @@
         headers: key ? { "X-Admin-API-Key": key } : {}
       });
       if (!response.ok) {
-        if (response.status === 401) throw new Error("ADMIN_API_KEY 不正确");
+        if (response.status === 401) throw new Error("TRPC_SERVICE_ADMIN_API_KEY 不正确");
         throw new Error(`${response.status} ${response.statusText}`);
       }
       return response.json();

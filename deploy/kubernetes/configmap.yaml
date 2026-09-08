@@ -13,6 +13,7 @@ data:
           timeout: 30
           retry: 2
           fallback_model: gpt-4o-mini
+          api_key_ref: env://TRPC_SERVICE_MODEL_API_KEY
           # 示例价格；上线前按供应商合同价格更新。
           pricing:
             gpt-4o:
@@ -27,46 +28,46 @@ data:
         channel_configs:
           wecom:
             channel_type: wecom
-            token: ${WECOM_TOKEN}
-            secret: ${WECOM_CORP_SECRET}
-            aes_key: ${WECOM_AES_KEY}
+            token: env://TRPC_SERVICE_WECOM_TOKEN
+            secret: env://TRPC_SERVICE_WECOM_CORP_SECRET
+            aes_key: env://TRPC_SERVICE_WECOM_AES_KEY
             corp_id: wx123456
             agent_id: "1000001"
           wechat_kf:
             channel_type: wechat_kf
-            token: ${WECHAT_KF_TOKEN}
-            aes_key: ${WECHAT_KF_AES_KEY}
+            token: env://TRPC_SERVICE_WECHAT_KF_TOKEN
+            aes_key: env://TRPC_SERVICE_WECHAT_KF_AES_KEY
             corp_id: wx123456
             open_kfid: wk123456
           dingtalk:
             channel_type: dingtalk
-            app_id: ${DINGTALK_CLIENT_ID}
-            robot_code: ${DINGTALK_ROBOT_CODE}
-            secret: ${DINGTALK_CLIENT_SECRET}
+            app_id: ${TRPC_SERVICE_DINGTALK_CLIENT_ID}
+            robot_code: ${TRPC_SERVICE_DINGTALK_ROBOT_CODE}
+            secret: env://TRPC_SERVICE_DINGTALK_CLIENT_SECRET
           feishu:
             channel_type: feishu
-            app_id: ${FEISHU_APP_ID}
-            verification_token: ${FEISHU_VERIFICATION_TOKEN}
-            encrypt_key: ${FEISHU_ENCRYPT_KEY}
+            app_id: ${TRPC_SERVICE_FEISHU_APP_ID}
+            verification_token: env://TRPC_SERVICE_FEISHU_VERIFICATION_TOKEN
+            encrypt_key: env://TRPC_SERVICE_FEISHU_ENCRYPT_KEY
         storage_config:
           session_backend: redis
           memory_backend: redis
           summary_backend: redis
           audit_backend: mysql
-          redis_url: ${REDIS_URL}
-          mysql_url: ${MYSQL_URL}
+          redis_url: env://TRPC_SERVICE_REDIS_URL
+          mysql_url: env://TRPC_SERVICE_MYSQL_URL
           vector:
             backend: qdrant
-            url: ${VECTOR_URL}
-            api_key: ${QDRANT_API_KEY}
+            url: env://TRPC_SERVICE_VECTOR_URL
+            api_key: env://TRPC_SERVICE_QDRANT_API_KEY
             collection: tenant_a_knowledge
           object:
             backend: s3
-            endpoint_url: ${OBJECT_STORE_ENDPOINT}
+            endpoint_url: ${TRPC_SERVICE_OBJECT_STORE_ENDPOINT}
             bucket: tenant-a-artifacts
-            region: ${OBJECT_STORE_REGION}
-            access_key: ${OBJECT_STORE_ACCESS_KEY}
-            secret_key: ${OBJECT_STORE_SECRET_KEY}
+            region: ${TRPC_SERVICE_OBJECT_STORE_REGION}
+            access_key: env://TRPC_SERVICE_OBJECT_STORE_ACCESS_KEY
+            secret_key: env://TRPC_SERVICE_OBJECT_STORE_SECRET_KEY
         audit_policy:
           enabled: true
           retention_days: 90
@@ -78,28 +79,29 @@ data:
         name: 物流公司
         model:
           model_name: gpt-4o-mini
+          api_key_ref: env://TRPC_SERVICE_MODEL_API_KEY
         channel_configs:
           feishu:
             channel_type: feishu
-            app_id: ${FEISHU_APP_ID_B}
-            verification_token: ${FEISHU_VERIFICATION_TOKEN_B}
-            encrypt_key: ${FEISHU_ENCRYPT_KEY_B}
+            app_id: ${TRPC_SERVICE_FEISHU_APP_ID_B}
+            verification_token: env://TRPC_SERVICE_FEISHU_VERIFICATION_TOKEN_B
+            encrypt_key: env://TRPC_SERVICE_FEISHU_ENCRYPT_KEY_B
         storage_config:
           session_backend: mysql
           memory_backend: mysql
           summary_backend: mysql
           audit_backend: mysql
-          redis_url: ${REDIS_URL}
-          mysql_url: ${MYSQL_URL}
+          redis_url: env://TRPC_SERVICE_REDIS_URL
+          mysql_url: env://TRPC_SERVICE_MYSQL_URL
           vector:
             backend: qdrant
-            url: ${VECTOR_URL}
-            api_key: ${QDRANT_API_KEY}
+            url: env://TRPC_SERVICE_VECTOR_URL
+            api_key: env://TRPC_SERVICE_QDRANT_API_KEY
             collection: tenant_b_knowledge
           object:
             backend: s3
-            endpoint_url: ${OBJECT_STORE_ENDPOINT}
+            endpoint_url: ${TRPC_SERVICE_OBJECT_STORE_ENDPOINT}
             bucket: tenant-b-artifacts
-            region: ${OBJECT_STORE_REGION}
-            access_key: ${OBJECT_STORE_ACCESS_KEY}
-            secret_key: ${OBJECT_STORE_SECRET_KEY}
+            region: ${TRPC_SERVICE_OBJECT_STORE_REGION}
+            access_key: env://TRPC_SERVICE_OBJECT_STORE_ACCESS_KEY
+            secret_key: env://TRPC_SERVICE_OBJECT_STORE_SECRET_KEY

@@ -55,26 +55,30 @@ spec:
               cpu: "2"
               memory: 2Gi
           env:
-            - name: TENANTS_CONFIG
+            - name: TRPC_SERVICE_ENVIRONMENT
+              value: production
+            - name: TRPC_SERVICE_ROLE
+              value: gateway
+            - name: TRPC_SERVICE_TENANTS_CONFIG
               value: /etc/agent/tenants.yaml
-            - name: REDIS_URL
+            - name: TRPC_SERVICE_REDIS_URL
               value: redis://redis:6379
-            - name: MYSQL_URL
+            - name: TRPC_SERVICE_MYSQL_URL
               valueFrom:
                 secretKeyRef:
                   name: agent-secrets
                   key: mysql-url
-            - name: TRPC_AGENT_API_KEY
+            - name: TRPC_SERVICE_MODEL_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: agent-secrets
                   key: api-key
-            - name: TENANT_CONFIG_ENCRYPTION_KEY
+            - name: TRPC_SERVICE_TENANT_CONFIG_ENCRYPTION_KEY
               valueFrom:
                 secretKeyRef:
                   name: agent-secrets
                   key: tenant-config-encryption-key
-            - name: ADMIN_API_KEY
+            - name: TRPC_SERVICE_ADMIN_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: agent-secrets
@@ -122,21 +126,25 @@ spec:
           image: trpc-agent-enterprise:latest
           command: ["python", "-m", "trpc_service.agent.run_worker"]
           env:
-            - name: TENANTS_CONFIG
+            - name: TRPC_SERVICE_ENVIRONMENT
+              value: production
+            - name: TRPC_SERVICE_ROLE
+              value: worker
+            - name: TRPC_SERVICE_TENANTS_CONFIG
               value: /etc/agent/tenants.yaml
-            - name: REDIS_URL
+            - name: TRPC_SERVICE_REDIS_URL
               value: redis://redis:6379
-            - name: MYSQL_URL
+            - name: TRPC_SERVICE_MYSQL_URL
               valueFrom:
                 secretKeyRef:
                   name: agent-secrets
                   key: mysql-url
-            - name: TRPC_AGENT_API_KEY
+            - name: TRPC_SERVICE_MODEL_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: agent-secrets
                   key: api-key
-            - name: TENANT_CONFIG_ENCRYPTION_KEY
+            - name: TRPC_SERVICE_TENANT_CONFIG_ENCRYPTION_KEY
               valueFrom:
                 secretKeyRef:
                   name: agent-secrets
@@ -147,7 +155,9 @@ spec:
               value: trpc-agent-worker
             - name: OTEL_METRIC_EXPORT_INTERVAL
               value: "15000"
-            - name: AGENT_WORKER_ID
+            - name: TRPC_SERVICE_DURABLE_DELIVERY_ENABLED
+              value: "true"
+            - name: TRPC_SERVICE_NODE_ID
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.uid
@@ -168,7 +178,7 @@ spec:
               command:
                 - python
                 - -c
-                - "import os, redis, time; r=redis.Redis.from_url(os.environ['REDIS_URL']); score=r.zscore('agent:tasks:agent-workers:worker-heartbeats', os.environ['AGENT_WORKER_ID']); assert score and time.time()*1000-score < 30000"
+                - "import os, redis; r=redis.Redis.from_url(os.environ['TRPC_SERVICE_REDIS_URL']); assert r.get('trpc-service:nodes:node:' + os.environ['TRPC_SERVICE_NODE_ID'])"
             periodSeconds: 5
             timeoutSeconds: 2
           livenessProbe:

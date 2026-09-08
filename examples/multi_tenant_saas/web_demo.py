@@ -13,7 +13,7 @@ Run::
 
     python web_demo.py          # then open http://127.0.0.1:8081
 
-Real LLM mode: set TRPC_AGENT_API_KEY first (falls back to mock otherwise).
+Real LLM mode: set TRPC_SERVICE_MODEL_API_KEY first (falls back to mock otherwise).
 """
 
 from __future__ import annotations
@@ -49,16 +49,13 @@ worker = TenantWorker(
     session_service_factory=create_session_service,
 )
 
-TENANT_META = [
-    {
-        "tenant_id": t.tenant_id,
-        "name": t.name,
-        "model": t.model.model_name,
-        "instruction": t.app_config.default_instruction or "",
-        "tools": list(t.tool_permissions.tool_whitelist or []),
-    }
-    for t in load_tenants(TENANTS_CONFIG)
-]
+TENANT_META = [{
+    "tenant_id": t.tenant_id,
+    "name": t.name,
+    "model": t.model.model_name,
+    "instruction": t.app_config.default_instruction or "",
+    "tools": list(t.tool_permissions.tool_whitelist or []),
+} for t in load_tenants(TENANTS_CONFIG)]
 
 app = FastAPI(title="Multi-Tenant SaaS Demo (local)")
 
@@ -103,7 +100,7 @@ PAGE = """<!doctype html>
 <body>
 <header>
   <h1>多租户 SaaS 客服中台 · 本地体验</h1>
-  <p>离线 Mock 模式（无需 API key）。设置 TRPC_AGENT_API_KEY 后重启可切换真实 LLM。</p>
+  <p>离线 Mock 模式（无需 API key）。设置 TRPC_SERVICE_MODEL_API_KEY 后重启可切换真实 LLM。</p>
 </header>
 <div class="wrap">
   <div class="tenants" id="tenants"></div>

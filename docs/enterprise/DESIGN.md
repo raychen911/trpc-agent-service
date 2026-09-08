@@ -72,7 +72,7 @@ core 现有文件**。租户隔离复用框架既有的 `app_name → user_id �
   工具清单拦截。
 - **密钥管理**：密钥字段用 `pydantic.SecretStr`（repr 不泄露明文）；写 MySQL/Redis 前由
   `TenantConfigCodec` 将密钥从公开 JSON 中剥离，并使用
-  `TENANT_CONFIG_ENCRYPTION_KEY` 派生的 Fernet 密钥加密。生产密钥来自 KMS/Secret；
+  `TRPC_SERVICE_TENANT_CONFIG_ENCRYPTION_KEY` 派生的 Fernet 密钥加密。生产密钥来自 KMS/Secret；
   `SecretMasker` 对日志/trace/异常做 `sk-*`/`Bearer`/`password=` 遮蔽。
 
 ---
@@ -252,7 +252,7 @@ Jaeger/Tempo 等后端，并通过 Prometheus exporter 暴露指标。
 
 `AuditLogEntry` 字段：`tenant_id, channel, user_id, session_id, agent_name, tool_name,
 decision, latency_ms, error_type, cost, trace_id, detail`。
-部署配置了 `MYSQL_URL` 时，`SqlAuditSink` append-only 持久化且 Admin 查询直接回读 MySQL，
+部署配置了 `TRPC_SERVICE_MYSQL_URL` 时，`SqlAuditSink` append-only 持久化且 Admin 查询直接回读 MySQL，
 所以进程重启不会丢失审计记录。
 
 ### 6.5 密钥脱敏
@@ -305,7 +305,7 @@ decision, latency_ms, error_type, cost, trace_id, detail`。
 
 最小方案使用 `deploy/docker-compose.minimal.yml`：一个 Gateway、一个 Worker、单节点 Redis、
 单节点 MySQL以及共享 `artifact-data` 卷。Gateway 负责验签与入队，Worker 调用 Agent；内存
-向量索引和本地对象存储仅适合功能验证。也可以设置 `AGENT_QUEUE_ENABLED=0`，让 Gateway
+向量索引和本地对象存储仅适合功能验证。也可以设置 `TRPC_SERVICE_QUEUE_ENABLED=0`，让 Gateway
 进程内执行 Agent，进一步减少进程数，但进程重启会中断正在运行的任务。
 
 生产方案使用 `deploy/kubernetes/`：Gateway 至少 2 副本、Worker 至少 3 副本并分别 HPA；

@@ -1,7 +1,7 @@
 -- Minimal MySQL 8 tenant-owned persistence schema.
 -- Sensitive config values are encrypted by TenantConfigCodec before insert.
 
-CREATE TABLE tenant (
+CREATE TABLE IF NOT EXISTS tenant (
     tenant_id VARCHAR(128) PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
     status VARCHAR(32) NOT NULL,
@@ -13,7 +13,7 @@ CREATE TABLE tenant (
         ON UPDATE CURRENT_TIMESTAMP(6)
 ) ENGINE=InnoDB;
 
-CREATE TABLE tenant_config_version (
+CREATE TABLE IF NOT EXISTS tenant_config_version (
     tenant_id VARCHAR(128) NOT NULL,
     version BIGINT NOT NULL,
     config_snapshot JSON NOT NULL,
@@ -27,7 +27,21 @@ CREATE TABLE tenant_config_version (
     KEY idx_tenant_config_time (tenant_id, created_at)
 ) ENGINE=InnoDB;
 
-CREATE TABLE config_outbox (
+CREATE TABLE IF NOT EXISTS tenant_config_draft (
+    tenant_id VARCHAR(128) PRIMARY KEY,
+    based_on_version BIGINT NOT NULL,
+    checksum VARCHAR(64) NOT NULL,
+    config_snapshot JSON NOT NULL,
+    encrypted_secrets LONGTEXT,
+    created_by VARCHAR(128) NOT NULL,
+    reason VARCHAR(512) NOT NULL DEFAULT '',
+    created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+        ON UPDATE CURRENT_TIMESTAMP(6),
+    CONSTRAINT fk_draft_tenant FOREIGN KEY (tenant_id) REFERENCES tenant(tenant_id)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS config_outbox (
     event_id VARCHAR(64) PRIMARY KEY,
     tenant_id VARCHAR(128) NOT NULL,
     config_version BIGINT NOT NULL,
@@ -40,7 +54,7 @@ CREATE TABLE config_outbox (
     KEY idx_outbox_tenant (tenant_id)
 ) ENGINE=InnoDB;
 
-CREATE TABLE agent_app (
+CREATE TABLE IF NOT EXISTS agent_app (
     tenant_id VARCHAR(128) NOT NULL,
     app_id VARCHAR(128) NOT NULL,
     agent_name VARCHAR(128) NOT NULL,
@@ -51,7 +65,7 @@ CREATE TABLE agent_app (
     CONSTRAINT fk_app_tenant FOREIGN KEY (tenant_id) REFERENCES tenant(tenant_id)
 ) ENGINE=InnoDB;
 
-CREATE TABLE agent_session (
+CREATE TABLE IF NOT EXISTS agent_session (
     tenant_id VARCHAR(128) NOT NULL,
     app_id VARCHAR(128) NOT NULL,
     user_id VARCHAR(255) NOT NULL,
@@ -66,7 +80,7 @@ CREATE TABLE agent_session (
         REFERENCES agent_app(tenant_id, app_id)
 ) ENGINE=InnoDB;
 
-CREATE TABLE message_event (
+CREATE TABLE IF NOT EXISTS message_event (
     tenant_id VARCHAR(128) NOT NULL,
     app_id VARCHAR(128) NOT NULL,
     user_id VARCHAR(255) NOT NULL,
@@ -77,6 +91,9 @@ CREATE TABLE message_event (
     event_type VARCHAR(64) NOT NULL,
     payload JSON NOT NULL,
     idempotency_key VARCHAR(255),
+    turn_id VARCHAR(64),
+    config_revision BIGINT,
+    fencing_token BIGINT,
     trace_id VARCHAR(64),
     created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     PRIMARY KEY (tenant_id, app_id, user_id, session_id, sequence_no),
@@ -85,7 +102,7 @@ CREATE TABLE message_event (
         REFERENCES agent_session(tenant_id, app_id, user_id, session_id)
 ) ENGINE=InnoDB;
 
-CREATE TABLE memory (
+CREATE TABLE IF NOT EXISTS memory (
     tenant_id VARCHAR(128) NOT NULL,
     memory_id VARCHAR(128) NOT NULL,
     app_id VARCHAR(128) NOT NULL,
@@ -100,7 +117,7 @@ CREATE TABLE memory (
     KEY idx_memory_lookup (tenant_id, app_id, user_id, updated_at)
 ) ENGINE=InnoDB;
 
-CREATE TABLE summary (
+CREATE TABLE IF NOT EXISTS summary (
     tenant_id VARCHAR(128) NOT NULL,
     app_id VARCHAR(128) NOT NULL,
     user_id VARCHAR(255) NOT NULL,
@@ -117,7 +134,7 @@ CREATE TABLE summary (
         REFERENCES agent_session(tenant_id, app_id, user_id, session_id)
 ) ENGINE=InnoDB;
 
-CREATE TABLE channel_binding (
+CREATE TABLE IF NOT EXISTS channel_binding (
     tenant_id VARCHAR(128) NOT NULL,
     channel VARCHAR(64) NOT NULL,
     account_id VARCHAR(255) NOT NULL,
@@ -131,14 +148,21 @@ CREATE TABLE channel_binding (
     CONSTRAINT fk_channel_tenant FOREIGN KEY (tenant_id) REFERENCES tenant(tenant_id)
 ) ENGINE=InnoDB;
 
-CREATE TABLE inbound_receipt (
+CREATE TABLE IF NOT EXISTS inbound_receipt (
     tenant_id VARCHAR(128) NOT NULL,
     channel VARCHAR(64) NOT NULL,
     message_id VARCHAR(255) NOT NULL,
     request_id VARCHAR(128) NOT NULL,
     trace_id VARCHAR(64),
     task_id VARCHAR(128),
+    turn_id VARCHAR(64) NOT NULL,
+    config_revision BIGINT,
     status VARCHAR(32) NOT NULL,
+    lease_owner VARCHAR(255),
+    lease_until TIMESTAMP(6) NOT NULL,
+    fencing_token BIGINT NOT NULL DEFAULT 0,
+    attempt_count INT NOT NULL DEFAULT 0,
+    last_error VARCHAR(1024),
     result_checksum VARCHAR(64),
     reply_status VARCHAR(32),
     expires_at TIMESTAMP(6) NOT NULL,
@@ -150,7 +174,42 @@ CREATE TABLE inbound_receipt (
     KEY idx_receipt_trace (trace_id)
 ) ENGINE=InnoDB;
 
-CREATE TABLE artifact (
+CREATE TABLE IF NOT EXISTS delivery_outbox (
+    event_id VARCHAR(64) PRIMARY KEY,
+    tenant_id VARCHAR(128) NOT NULL,
+    channel VARCHAR(64) NOT NULL,
+    message_id VARCHAR(255) NOT NULL,
+    turn_id VARCHAR(64) NOT NULL,
+    config_revision BIGINT,
+    inbound JSON NOT NULL,
+    parts JSON NOT NULL,
+    next_part INT NOT NULL DEFAULT 0,
+    attempt_count INT NOT NULL DEFAULT 0,
+    status VARCHAR(32) NOT NULL DEFAULT 'pending',
+    lease_owner VARCHAR(255),
+    available_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    last_error VARCHAR(1024),
+    created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    delivered_at TIMESTAMP(6),
+    UNIQUE KEY uq_delivery_message (tenant_id, channel, message_id),
+    KEY idx_delivery_pending (status, available_at),
+    KEY idx_delivery_turn (tenant_id, turn_id)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS delivery_attempt (
+    attempt_id VARCHAR(64) PRIMARY KEY,
+    event_id VARCHAR(64) NOT NULL,
+    part_index INT NOT NULL,
+    outcome VARCHAR(32) NOT NULL,
+    provider_message_id VARCHAR(255),
+    error VARCHAR(1024),
+    created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    KEY idx_delivery_attempt_event (event_id, created_at),
+    CONSTRAINT fk_delivery_attempt_outbox FOREIGN KEY (event_id)
+        REFERENCES delivery_outbox(event_id)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS artifact (
     tenant_id VARCHAR(128) NOT NULL,
     artifact_id VARCHAR(128) NOT NULL,
     version BIGINT NOT NULL,
@@ -171,7 +230,7 @@ CREATE TABLE artifact (
     KEY idx_artifact_scope (tenant_id, app_id, user_id, session_id, filename)
 ) ENGINE=InnoDB;
 
-CREATE TABLE knowledge_document (
+CREATE TABLE IF NOT EXISTS knowledge_document (
     tenant_id VARCHAR(128) NOT NULL,
     document_id VARCHAR(128) NOT NULL,
     app_id VARCHAR(128) NOT NULL,
@@ -187,7 +246,7 @@ CREATE TABLE knowledge_document (
     KEY idx_knowledge_app (tenant_id, app_id, status)
 ) ENGINE=InnoDB;
 
-CREATE TABLE knowledge_chunk (
+CREATE TABLE IF NOT EXISTS knowledge_chunk (
     tenant_id VARCHAR(128) NOT NULL,
     document_id VARCHAR(128) NOT NULL,
     chunk_id VARCHAR(128) NOT NULL,
@@ -206,7 +265,7 @@ CREATE TABLE knowledge_chunk (
         ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
-CREATE TABLE storage_outbox (
+CREATE TABLE IF NOT EXISTS storage_outbox (
     event_id VARCHAR(64) PRIMARY KEY,
     tenant_id VARCHAR(128) NOT NULL,
     entity_type VARCHAR(32) NOT NULL,
@@ -224,12 +283,15 @@ CREATE TABLE storage_outbox (
     KEY idx_storage_outbox_entity (tenant_id, entity_type, entity_id)
 ) ENGINE=InnoDB;
 
-CREATE TABLE audit_log (
+CREATE TABLE IF NOT EXISTS audit_log (
     id VARCHAR(255) NOT NULL,
     tenant_id VARCHAR(128) NOT NULL,
     channel VARCHAR(64),
     user_id VARCHAR(255),
     session_id VARCHAR(128),
+    message_id VARCHAR(255),
+    turn_id VARCHAR(64),
+    config_revision BIGINT,
     agent_name VARCHAR(128),
     tool_name VARCHAR(128),
     decision VARCHAR(64) NOT NULL,

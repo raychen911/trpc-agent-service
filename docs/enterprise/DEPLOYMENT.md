@@ -49,7 +49,9 @@ Gateway 暴露以下主要端点：
 现有 [`docker-compose.minimal.yml`](../../deploy/docker-compose.minimal.yml) 包含：
 
 - `gateway`：FastAPI webhook 和 Admin API；
-- `worker`：Redis Streams 消费者；
+- `worker`：Redis Streams 消费者，只执行 Agent turn；
+- `outbox`：领取持久化出站意图、分片投递、重试和 checkpoint；
+- `migrate`：独立执行带版本 ledger 的数据库迁移；
 - `redis`：队列、会话、幂等、分布式锁、预算和 HITL 状态；
 - `mysql`：租户配置和审计等持久化数据。
 - `artifact-data`：Gateway/Worker 共享的本地 Artifact 卷；向量检索默认使用单 Worker 内存实现。
@@ -62,16 +64,16 @@ Gateway 暴露以下主要端点：
 至少为真实模型调用设置模型密钥，并覆盖示例中的本地密钥：
 
 ```bash
-export TRPC_AGENT_API_KEY='<model-api-key>'
-export TENANT_CONFIG_ENCRYPTION_KEY='<stable-random-secret>'
-export ADMIN_API_KEY='<admin-api-key>'
+export TRPC_SERVICE_MODEL_API_KEY='<model-api-key>'
+export TRPC_SERVICE_TENANT_CONFIG_ENCRYPTION_KEY='<stable-random-secret>'
+export TRPC_SERVICE_ADMIN_API_KEY='<admin-api-key>'
 ```
 
 按实际接入渠道补充对应环境变量，例如 QQ：
 
 ```bash
-export QQBOT_APP_ID='<qq-app-id>'
-export QQBOT_APP_SECRET='<qq-app-secret>'
+export TRPC_SERVICE_QQ_GREETING_APP_ID='<qq-app-id>'
+export TRPC_SERVICE_QQ_GREETING_APP_SECRET='<qq-app-secret>'
 ```
 
 企业微信、微信客服、钉钉和飞书所需变量可从
@@ -84,7 +86,7 @@ export QQBOT_APP_SECRET='<qq-app-secret>'
 适合本地验证或低流量单机环境。关闭队列且不启动独立 Worker：
 
 ```bash
-AGENT_QUEUE_ENABLED=0 docker compose \
+TRPC_SERVICE_QUEUE_ENABLED=0 docker compose \
   -f deploy/docker-compose.minimal.yml \
   up --build gateway
 ```
@@ -130,7 +132,7 @@ docker compose \
 ```bash
 curl --fail http://127.0.0.1:8080/healthz
 curl --fail \
-  -H "X-Admin-API-Key: ${ADMIN_API_KEY}" \
+  -H "X-Admin-API-Key: ${TRPC_SERVICE_ADMIN_API_KEY}" \
   http://127.0.0.1:8080/admin/health
 ```
 
@@ -210,7 +212,7 @@ docker push registry.example.com/trpc-agent-enterprise:<version>
 - 可用的 OTLP 后端；
 - Ingress Controller 或云负载均衡器，用于终止 TLS 并公开 webhook。
 
-[`redis.yaml`](../../deploy/kubernetes/redis.yaml) 只有一个无认证 Redis StatefulSet，适合开发或演示，不属于高可用生产 Redis。仓库没有部署生产 MySQL，`MYSQL_URL` 应指向外部数据库。
+[`redis.yaml`](../../deploy/kubernetes/redis.yaml) 只有一个无认证 Redis StatefulSet，适合开发或演示，不属于高可用生产 Redis。仓库没有部署生产 MySQL，`TRPC_SERVICE_MYSQL_URL` 应指向外部数据库。
 
 ### 3.4 Secret 与租户配置
 
@@ -229,8 +231,8 @@ kubectl -n trpc-agent create secret generic agent-secrets \
 
 ```bash
 kubectl -n trpc-agent create secret generic agent-channel-secrets \
-  --from-literal=QQBOT_APP_ID='<qq-app-id>' \
-  --from-literal=QQBOT_APP_SECRET='<qq-app-secret>'
+  --from-literal=TRPC_SERVICE_QQ_GREETING_APP_ID='<qq-app-id>' \
+  --from-literal=TRPC_SERVICE_QQ_GREETING_APP_SECRET='<qq-app-secret>'
 ```
 
 向量库和对象存储凭据放入 `agent-storage-secrets`；键名会作为环境变量注入：
@@ -247,7 +249,7 @@ kubectl -n trpc-agent create secret generic agent-storage-secrets \
 
 正式环境建议由 External Secrets、Vault 或云 KMS 同步 Secret，而不是把明文命令写进脚本或终端历史。
 
-租户非敏感配置放在 ConfigMap 的 `tenants.yaml` 中。`${VAR}` 由应用加载配置时展开，不是由 Kubernetes ConfigMap 自动展开。`TENANT_CONFIG_ENCRYPTION_KEY` 必须长期稳定；更换前需要制定已有租户密文的轮换/重加密方案。
+租户非敏感配置放在 ConfigMap 的 `tenants.yaml` 中。`${VAR}` 由应用加载配置时展开，不是由 Kubernetes ConfigMap 自动展开。`TRPC_SERVICE_TENANT_CONFIG_ENCRYPTION_KEY` 必须长期稳定；更换前需要制定已有租户密文的轮换/重加密方案。
 
 ### 3.5 部署顺序
 
@@ -267,7 +269,7 @@ kubectl -n trpc-agent apply \
   -f deploy/kubernetes/agent.yaml
 ```
 
-正式生产部署应跳过 `redis.yaml`，并在 `agent.yaml` 中将 Gateway 和 Worker 的 `REDIS_URL`
+正式生产部署应跳过 `redis.yaml`，并在 `agent.yaml` 中将 Gateway、Worker 和 Outbox 的 `TRPC_SERVICE_REDIS_URL`
 都改为来自 Secret 的外部高可用 Redis 连接串。
 
 如果已有 `jaeger-collector:4317` 等 OTLP 接收端，再按环境调整并应用
@@ -303,7 +305,7 @@ kubectl -n trpc-agent apply \
 - 强制 HTTPS，使用受信任证书；
 - 将 `/webhook/*` 暴露给 IM 平台；
 - 对 `/admin/*` 额外设置企业 SSO、VPN、IP allowlist 或独立内网 Ingress；
-- 保留应用层 `ADMIN_API_KEY`，不要只依赖网络边界；
+- 保留应用层 `TRPC_SERVICE_ADMIN_API_KEY`，不要只依赖网络边界；
 - 配置请求体大小、超时和限速，但 webhook ACK 超时应小于平台要求。
 
 ### 3.7 扩缩容与发布
@@ -321,21 +323,22 @@ kubectl -n trpc-agent apply \
 
 | 变量 | 用途 | 最小环境 | 生产要求 |
 |---|---|---|---|
-| `TENANTS_CONFIG` | 启动时租户 YAML/JSON 路径 | 必填 | 使用只读 ConfigMap 或受控配置文件 |
-| `TRPC_AGENT_API_KEY` | 默认模型密钥 | 真实 LLM 必填 | Secret/KMS；也可由租户 `api_key_env` 指向其他变量 |
-| `REDIS_URL` | 队列、共享锁、幂等、预算/HITL 和 Redis 存储 | Compose 已配置 | 高可用、认证、TLS |
-| `MYSQL_URL` | 租户配置、审计和 MySQL 存储 | Compose 已配置 | 高可用、备份、最小权限账号 |
-| `TENANT_CONFIG_ENCRYPTION_KEY` | 加密持久化租户密钥字段 | 使用持久化配置时必填 | 强随机、稳定保存、受控轮换 |
-| `ADMIN_API_KEY` | `/admin/*` API 鉴权 | 强烈建议 | 必填，并叠加网络访问控制 |
-| `AGENT_QUEUE_ENABLED` | 是否通过 Redis Streams 解耦 | `0` 为进程内，默认 `1` | 推荐 `1` |
+| `TRPC_SERVICE_TENANTS_CONFIG` | 启动时租户 YAML/JSON 路径 | 必填 | 使用只读 ConfigMap 或受控配置文件 |
+| `TRPC_SERVICE_MODEL_API_KEY` | 默认模型密钥 | 真实 LLM 必填 | Secret/KMS；租户以 `api_key_ref` 引用 |
+| `TRPC_SERVICE_REDIS_URL` | 队列、共享锁、幂等、预算/HITL 和 Redis 存储 | Compose 已配置 | 高可用、认证、TLS |
+| `TRPC_SERVICE_MYSQL_URL` | 配置、receipt、Outbox、审计和 MySQL 存储 | Compose 已配置 | 高可用、备份、最小权限账号 |
+| `TRPC_SERVICE_TENANT_CONFIG_ENCRYPTION_KEY` | 加密持久化的内联租户密钥 | 使用内联密钥时必填 | 强随机、稳定保存、受控轮换 |
+| `TRPC_SERVICE_ADMIN_API_KEY` | `/admin/*` API 鉴权 | 强烈建议 | 必填，并叠加网络访问控制 |
+| `TRPC_SERVICE_QUEUE_ENABLED` | Gateway 是否通过 Redis Streams 解耦 | 默认 `true` | 推荐 `true` |
+| `TRPC_SERVICE_DURABLE_DELIVERY_ENABLED` | Worker 是否事务提交 receipt + Outbox | 默认 `false` | 生产必须 `true` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP HTTP 上报地址 | 可选 | 推荐配置 |
 | `OTEL_SERVICE_NAME` | 区分 Gateway/Worker 指标与 Trace | 自动默认 | 每类进程使用稳定且不同的名字 |
 | `OTEL_SERVICE_INSTANCE_ID` | 区分进程或 Pod | HOSTNAME/主机名 | 使用 Pod UID 或稳定实例标识 |
 | `OTEL_METRIC_EXPORT_INTERVAL` | Metrics 导出周期（毫秒） | 60000 | 按流量和 Collector 容量调节 |
-| `VECTOR_URL` / `QDRANT_API_KEY` | Qdrant 地址与凭据 | 内存后端不需要 | Secret/KMS、TLS、最小权限 |
-| `OBJECT_STORE_*` | S3 兼容端点、区域与凭据 | 本地卷不需要 | Secret/KMS、加密、版本和生命周期 |
+| `TRPC_SERVICE_VECTOR_URL` / `TRPC_SERVICE_QDRANT_API_KEY` | Qdrant 地址与凭据 | 内存后端不需要 | Secret/KMS、TLS、最小权限 |
+| `TRPC_SERVICE_OBJECT_STORE_*` | S3 兼容端点、区域与凭据 | 本地卷不需要 | Secret/KMS、加密、版本和生命周期 |
 
-渠道环境变量由租户配置里的 `${VAR}` 决定；同一集群可为不同租户设置不同的 `api_key_env` 和渠道变量。
+渠道环境变量由租户配置里的 SecretRef 决定；同一集群可为不同租户设置不同的 `api_key_ref` 和渠道变量。
 完整指标目录、PromQL 和排错步骤见 [`METRICS.md`](METRICS.md)。
 
 ## 5. 上线验收清单

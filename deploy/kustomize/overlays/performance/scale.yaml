@@ -1,0 +1,20 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-gateway
+spec:
+  replicas: 4
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-worker
+spec:
+  replicas: 8
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-outbox
+spec:
+  replicas: 4

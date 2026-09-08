@@ -38,6 +38,7 @@ Gateway 和 Worker 不保存租户会话状态。会话与记忆通过共享 Red
 - [数据同步与幂等策略](docs/enterprise/SYNC_AND_IDEMPOTENCY.md)
 - [企业监控链路与指标调试](docs/enterprise/METRICS.md)
 - [验收测试方案](docs/enterprise/ACCEPTANCE_TEST_PLAN.md)
+- [PR7 / PR8 / PR9 架构整合与运维手册](docs/enterprise/ARCHITECTURE_EVOLUTION.md)
 - [完整方案与数据模型](docs/SUBMISSION_PROPOSAL.md)
 
 ## 代码结构
@@ -95,10 +96,10 @@ python -m pip install -r requirements-test.txt
 准备模型密钥和租户配置：
 
 ```bash
-export TRPC_AGENT_API_KEY='<model-api-key>'
-export TENANTS_CONFIG="$PWD/deploy/tenants.yaml"
-export ADMIN_API_KEY='<admin-api-key>'
-export TENANT_CONFIG_ENCRYPTION_KEY='<stable-random-secret>'
+export TRPC_SERVICE_MODEL_API_KEY='<model-api-key>'
+export TRPC_SERVICE_TENANTS_CONFIG="$PWD/deploy/tenants.yaml"
+export TRPC_SERVICE_ADMIN_API_KEY='<admin-api-key>'
+export TRPC_SERVICE_TENANT_CONFIG_ENCRYPTION_KEY='<stable-random-secret>'
 ```
 
 直接运行 Gateway：
@@ -135,7 +136,7 @@ curl --fail http://127.0.0.1:8080/healthz
 `stop.sh` 默认保留命名卷。如果只需要低流量单进程验证，可关闭 Redis Streams Worker：
 
 ```bash
-AGENT_QUEUE_ENABLED=0 docker compose \
+TRPC_SERVICE_QUEUE_ENABLED=0 docker compose \
   -f deploy/docker-compose.minimal.yml \
   up --build gateway
 ```

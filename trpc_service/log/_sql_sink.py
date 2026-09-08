@@ -49,6 +49,9 @@ class AuditLogRecord(AuditStorageData):
     channel: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     user_id: Mapped[Optional[str]] = mapped_column(String(DEFAULT_MAX_KEY_LENGTH), nullable=True)
     session_id: Mapped[Optional[str]] = mapped_column(String(DEFAULT_MAX_KEY_LENGTH), nullable=True)
+    message_id: Mapped[Optional[str]] = mapped_column(String(DEFAULT_MAX_KEY_LENGTH), nullable=True)
+    turn_id: Mapped[Optional[str]] = mapped_column(String(DEFAULT_MAX_KEY_LENGTH), nullable=True)
+    config_revision: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     agent_name: Mapped[Optional[str]] = mapped_column(String(DEFAULT_MAX_KEY_LENGTH), nullable=True)
     tool_name: Mapped[Optional[str]] = mapped_column(String(DEFAULT_MAX_KEY_LENGTH), nullable=True)
     decision: Mapped[str] = mapped_column(String(32), default="allow")
@@ -66,6 +69,9 @@ class AuditLogRecord(AuditStorageData):
             channel=entry.channel,
             user_id=entry.user_id,
             session_id=entry.session_id,
+            message_id=entry.message_id,
+            turn_id=entry.turn_id,
+            config_revision=entry.config_revision,
             agent_name=entry.agent_name,
             tool_name=entry.tool_name,
             decision=entry.decision,
@@ -83,6 +89,9 @@ class AuditLogRecord(AuditStorageData):
             channel=self.channel,
             user_id=self.user_id,
             session_id=self.session_id,
+            message_id=self.message_id,
+            turn_id=self.turn_id,
+            config_revision=self.config_revision,
             agent_name=self.agent_name,
             tool_name=self.tool_name,
             decision=self.decision,

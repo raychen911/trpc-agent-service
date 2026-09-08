@@ -1,0 +1,11 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - service-account.yaml
+  - configmap.yaml
+  - redis.yaml
+  - otel-collector.yaml
+  - prometheus.yaml
+  - agent.yaml
+  - outbox.yaml
+  - migration-job.yaml

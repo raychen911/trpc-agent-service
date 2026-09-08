@@ -451,8 +451,9 @@ class FakeQQWorker:
         self.manager = manager
         self.handled = []
 
-    def resolve_tenant(self, tenant_id):
-        tenant = self.manager.get(tenant_id)
+    def resolve_tenant(self, tenant_id, config_revision=None):
+        tenant = (self.manager.get_version(tenant_id, config_revision)
+                  if config_revision is not None else self.manager.get(tenant_id))
         if tenant is None or tenant.status != TenantStatus.ACTIVE:
             return None
         return tenant

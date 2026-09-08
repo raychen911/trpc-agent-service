@@ -95,10 +95,10 @@ async def test_storage_router_all_builtin_routes_environment_and_close(monkeypat
     monkeypatch.setattr(router_module, "_mysql_session_builder", builder("session-mysql"))
     monkeypatch.setattr(router_module, "_redis_memory_builder", builder("memory-redis"))
     monkeypatch.setattr(router_module, "_mysql_memory_builder", builder("memory-mysql"))
-    monkeypatch.setenv("REDIS_URL", "redis://shared/0")
-    monkeypatch.setenv("MYSQL_URL", "mysql+aiomysql://user:pass@shared/db")
-
-    router = TenantStorageRouter()
+    router = TenantStorageRouter(
+        redis_url="redis://shared/0",
+        mysql_url="mysql+aiomysql://user:pass@shared/db",
+    )
     default_service = router.session_service(None)
     assert router.session_service(None) is default_service
     assert router.session_service(tenant()) is default_service
@@ -168,7 +168,9 @@ class EdgeWorker:
         self.manager = manager
         self.fail = fail
 
-    def resolve_tenant(self, tenant_id):
+    def resolve_tenant(self, tenant_id, config_revision=None):
+        if config_revision is not None:
+            return self.manager.get_version(tenant_id, config_revision)
         return self.manager.get(tenant_id)
 
     async def handle(self, tenant_id, channel, inbound):

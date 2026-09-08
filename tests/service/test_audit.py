@@ -24,6 +24,9 @@ async def test_audit_entry_fields():
         channel="wecom",
         user_id="u1",
         session_id="s1",
+        message_id="m1",
+        turn_id="turn1",
+        config_revision=3,
         agent_name="cs_agent",
         tool_name="query_order",
         decision="allow",
@@ -36,6 +39,7 @@ async def test_audit_entry_fields():
     assert entry.decision == "allow"
     assert entry.tool_name == "query_order"
     assert entry.cost == 0.0032
+    assert (entry.message_id, entry.turn_id, entry.config_revision) == ("m1", "turn1", 3)
 
 
 async def test_audit_logger_append_and_query():
@@ -98,13 +102,24 @@ async def test_sql_audit_sink_persists_and_queries():
     from trpc_service.log import SqlAuditSink
 
     sink = SqlAuditSink("sqlite+aiosqlite:///:memory:")
-    await sink(AuditLogEntry(tenant_id="tenant_a", tool_name="t1", decision="deny"))
+    await sink(
+        AuditLogEntry(
+            tenant_id="tenant_a",
+            tool_name="t1",
+            decision="deny",
+            message_id="message-1",
+            turn_id="turn-1",
+            config_revision=7,
+        ))
     await sink(AuditLogEntry(tenant_id="tenant_b", tool_name="t2", decision="allow"))
 
     tenant_a = await sink.query(tenant_id="tenant_a")
     assert len(tenant_a) == 1
     assert tenant_a[0].tool_name == "t1"
     assert tenant_a[0].decision == "deny"
+    assert tenant_a[0].message_id == "message-1"
+    assert tenant_a[0].turn_id == "turn-1"
+    assert tenant_a[0].config_revision == 7
 
     all_records = await sink.query()
     assert len(all_records) == 2

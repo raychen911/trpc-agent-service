@@ -36,6 +36,9 @@ class AuditLogEntry(BaseModel):
     """Originating IM channel (WeCom/WeChat KF/DingTalk/Feishu)."""
     user_id: Optional[str] = None
     session_id: Optional[str] = None
+    message_id: Optional[str] = None
+    turn_id: Optional[str] = None
+    config_revision: Optional[int] = None
     agent_name: Optional[str] = None
     tool_name: Optional[str] = None
     decision: str = "allow"

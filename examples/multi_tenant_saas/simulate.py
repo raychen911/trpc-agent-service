@@ -79,7 +79,7 @@ async def main() -> None:
 
     print("\n" + "=" * 60)
     print("演示完成。")
-    print("接入真实 IM/LLM：设置 TRPC_AGENT_API_KEY 后运行 run_gateway.py，")
+    print("接入真实 IM/LLM：设置 TRPC_SERVICE_MODEL_API_KEY 后运行 run_gateway.py，")
 
 
 if __name__ == "__main__":

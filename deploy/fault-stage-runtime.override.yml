@@ -1,0 +1,55 @@
+# Repeatable Redis/MySQL fault stage for the minimal Compose topology.
+#
+# Start with:
+#   docker compose -f deploy/docker-compose.minimal.yml \
+#     -f deploy/fault-stage-runtime.override.yml up --build
+services:
+  gateway:
+    environment:
+      - TRPC_SERVICE_REDIS_URL=redis://toxiproxy:6380/0
+      - TRPC_SERVICE_MYSQL_URL=mysql+aiomysql://agent:agent_local@toxiproxy:3307/trpc_agent
+    depends_on:
+      toxiproxy-init:
+        condition: service_completed_successfully
+
+  worker:
+    environment:
+      - TRPC_SERVICE_REDIS_URL=redis://toxiproxy:6380/0
+      - TRPC_SERVICE_MYSQL_URL=mysql+aiomysql://agent:agent_local@toxiproxy:3307/trpc_agent
+    depends_on:
+      toxiproxy-init:
+        condition: service_completed_successfully
+
+  outbox:
+    environment:
+      - TRPC_SERVICE_REDIS_URL=redis://toxiproxy:6380/0
+      - TRPC_SERVICE_MYSQL_URL=mysql+aiomysql://agent:agent_local@toxiproxy:3307/trpc_agent
+    depends_on:
+      toxiproxy-init:
+        condition: service_completed_successfully
+
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.9.0
+    ports:
+      - "127.0.0.1:8474:8474"
+    depends_on:
+      redis:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+
+  toxiproxy-init:
+    image: curlimages/curl:8.10.1
+    depends_on:
+      - toxiproxy
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        until curl -fsS http://toxiproxy:8474/version >/dev/null; do sleep 1; done
+        curl -fsS -X POST -H 'Content-Type: application/json' \
+          -d '{"name":"redis","listen":"0.0.0.0:6380","upstream":"redis:6379"}' \
+          http://toxiproxy:8474/proxies
+        curl -fsS -X POST -H 'Content-Type: application/json' \
+          -d '{"name":"mysql","listen":"0.0.0.0:3307","upstream":"mysql:3306"}' \
+          http://toxiproxy:8474/proxies

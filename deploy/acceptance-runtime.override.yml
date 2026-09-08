@@ -1,0 +1,14 @@
+services:
+  gateway:
+    environment:
+      - TRPC_SERVICE_QUEUE_ENABLED=0
+      - TRPC_SERVICE_TEST_API_ENABLED=1
+      - TRPC_SERVICE_TEST_API_KEY=${TRPC_SERVICE_TEST_API_KEY:?set a private acceptance key}
+    ports:
+      - "127.0.0.1:18080:8080"
+
+  worker:
+    profiles: ["disabled-for-in-process-acceptance"]
+
+  outbox:
+    profiles: ["disabled-for-in-process-acceptance"]

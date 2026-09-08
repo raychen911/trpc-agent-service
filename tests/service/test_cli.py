@@ -13,7 +13,7 @@ from trpc_service import _cli
 def test_cli_runs_gateway_with_selected_options(monkeypatch, tmp_path):
     calls = []
     tenants_path = tmp_path / "tenants.yaml"
-    monkeypatch.setenv("TENANTS_CONFIG", "previous.yaml")
+    monkeypatch.setenv("TRPC_SERVICE_TENANTS_CONFIG", "previous.yaml")
     monkeypatch.setattr(uvicorn, "run", lambda *args, **kwargs: calls.append((args, kwargs)))
 
     _cli.main([
@@ -31,7 +31,7 @@ def test_cli_runs_gateway_with_selected_options(monkeypatch, tmp_path):
         "port": 9090,
         "reload": True,
     })]
-    assert _cli.os.environ["TENANTS_CONFIG"] == str(tenants_path)
+    assert _cli.os.environ["TRPC_SERVICE_TENANTS_CONFIG"] == str(tenants_path)
 
 
 def test_service_packages_are_importable_without_vendored_sdk():

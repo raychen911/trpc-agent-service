@@ -61,6 +61,8 @@ dev = [
 
 [project.scripts]
 trpc-service = "trpc_service._cli:main"
+trpc-service-outbox = "trpc_service.agent.run_outbox:main"
+trpc-service-migrate = "trpc_service.migrations.run:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["trpc_service"]

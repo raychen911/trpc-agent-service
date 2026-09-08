@@ -78,11 +78,26 @@ class _RedactingRecordData(dict[str, Any]):
 class SecretMasker:
     """Applies secret-redaction patterns to arbitrary text."""
 
+    _exact_secrets: set[str] = set()
+    _lock = threading.RLock()
+
+    @classmethod
+    def register_secret(cls, value: str) -> None:
+        """Register a resolved value for exact redaction in logs and errors."""
+        if len(value) < 4:
+            return
+        with cls._lock:
+            cls._exact_secrets.add(value)
+
     @classmethod
     def mask_value(cls, value: Any) -> Any:
         """Mask a string in place; pass non-strings through untouched."""
         if not isinstance(value, str):
             return value
+        with cls._lock:
+            exact = sorted(cls._exact_secrets, key=len, reverse=True)
+        for secret in exact:
+            value = value.replace(secret, "***")
         for pattern, replace in _SECRET_PATTERNS:
             value = pattern.sub(replace, value)
         return value

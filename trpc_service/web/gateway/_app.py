@@ -17,14 +17,13 @@ import json
 import logging
 import time
 from typing import Any
-from typing import Callable
 from typing import Optional
 
-from fastapi import FastAPI
-from fastapi import Request
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from .._dispatch import run_and_reply
+from ..testing import create_test_message_router
 from trpc_service.agent._queue import TaskMessage
 from trpc_service.metrics._observability import callback_span
 from trpc_service.metrics._observability import inject_trace_headers
@@ -32,122 +31,13 @@ from trpc_service.metrics._observability import operation_span
 from trpc_service.metrics import EnterpriseMetrics
 from trpc_service.metrics import get_enterprise_metrics
 from trpc_service.log import safe_error_message
-from trpc_service.channels import ChannelAdapter
-from trpc_service.channels import DingTalkAdapter
-from trpc_service.channels import FeishuAdapter
-from trpc_service.channels import QQAdapter
-from trpc_service.channels import WecomAdapter
-from trpc_service.channels import WechatCustomerServiceAdapter
-from trpc_service.tenant import ChannelConfig
-from trpc_service.tenant import DingTalkChannelConfig
-from trpc_service.tenant import FeishuChannelConfig
-from trpc_service.tenant import QQChannelConfig
-from trpc_service.tenant import Tenant
 from trpc_service.tenant import TenantConfigManager
-from trpc_service.tenant import WeComChannelConfig
-from trpc_service.tenant import WechatCustomerServiceChannelConfig
 from trpc_service.agent import TenantWorker
 from ._idempotency import LocalIdempotencyStore
 from ._idempotency import build_idempotency_store
-
-ChannelAdapterFactory = Callable[[ChannelConfig], ChannelAdapter]
+from ._registry import ChannelRegistry
 
 logger = logging.getLogger(__name__)
-
-
-def _wecom_factory(cfg: WeComChannelConfig) -> WecomAdapter:
-    return WecomAdapter(
-        token=cfg.token.get_secret_value(),
-        encoding_aes_key=cfg.aes_key.get_secret_value(),
-        corp_id=cfg.corp_id,
-        agent_id=cfg.agent_id,
-        access_token=cfg.access_token.get_secret_value() if cfg.access_token else None,
-        corp_secret=cfg.secret.get_secret_value() if cfg.secret else None,
-    )
-
-
-def _wechat_kf_factory(cfg: WechatCustomerServiceChannelConfig) -> WechatCustomerServiceAdapter:
-    return WechatCustomerServiceAdapter(
-        corp_id=cfg.corp_id,
-        open_kfid=cfg.open_kfid,
-        token=cfg.token.get_secret_value(),
-        webhook_url=cfg.webhook_url,
-    )
-
-
-def _dingtalk_factory(cfg: DingTalkChannelConfig) -> DingTalkAdapter:
-    return DingTalkAdapter(
-        client_id=cfg.app_id,
-        robot_code=cfg.robot_code,
-        secret=cfg.secret.get_secret_value(),
-        webhook_url=cfg.webhook_url,
-    )
-
-
-def _feishu_factory(cfg: FeishuChannelConfig) -> FeishuAdapter:
-    return FeishuAdapter(
-        app_id=cfg.app_id,
-        verification_token=(cfg.verification_token.get_secret_value() if cfg.verification_token else ""),
-        encrypt_key=cfg.encrypt_key.get_secret_value() if cfg.encrypt_key else "",
-        secret=cfg.secret.get_secret_value() if cfg.secret else None,
-        webhook_url=cfg.webhook_url,
-    )
-
-
-def _qq_factory(cfg: QQChannelConfig) -> QQAdapter:
-    return QQAdapter(
-        app_id=cfg.app_id,
-        app_secret=cfg.secret.get_secret_value(),
-        access_token=cfg.access_token.get_secret_value() if cfg.access_token else None,
-    )
-
-
-def default_channel_factories() -> dict[str, ChannelAdapterFactory]:
-    """Return the built-in adapter factories keyed by channel type."""
-    return {
-        "wecom": _wecom_factory,
-        "wechat_kf": _wechat_kf_factory,
-        "dingtalk": _dingtalk_factory,
-        "feishu": _feishu_factory,
-        "qq": _qq_factory,
-    }
-
-
-class ChannelRegistry:
-    """Maps ``(tenant_id, channel)`` to a cached adapter instance."""
-
-    def __init__(self, factories: Optional[dict[str, ChannelAdapterFactory]] = None) -> None:
-        self._factories = factories or default_channel_factories()
-        self._cache: dict[tuple[str, str], ChannelAdapter] = {}
-
-    def register_factory(self, channel: str, factory: ChannelAdapterFactory) -> None:
-        self._factories[channel] = factory
-
-    def invalidate(self, tenant_id: Optional[str] = None) -> None:
-        """Drop cached adapters after a tenant configuration change."""
-        if tenant_id is None:
-            self._cache.clear()
-            return
-        for key in [key for key in self._cache if key[0] == tenant_id]:
-            self._cache.pop(key, None)
-
-    def get(self, tenant: Tenant, channel: str) -> Optional[ChannelAdapter]:
-        key = (tenant.tenant_id, channel)
-        if key in self._cache:
-            return self._cache[key]
-        cfg = tenant.channel_configs.get(channel)
-        if cfg is None:
-            return None
-        # Prefer an explicit binding-specific factory for backwards-compatible
-        # tests/extensions, then resolve by the configured channel type. This
-        # makes ``channel`` a binding id rather than limiting one account per
-        # IM platform and tenant.
-        factory = self._factories.get(channel) or self._factories.get(cfg.channel_type)
-        if factory is None:
-            return None
-        adapter = factory(cfg)
-        self._cache[key] = adapter
-        return adapter
 
 
 def create_gateway_app(
@@ -159,6 +49,7 @@ def create_gateway_app(
     async_dispatch: bool = True,
     queue: Any = None,
     metrics: Optional[EnterpriseMetrics] = None,
+    test_api_key: Optional[str] = None,
 ) -> FastAPI:
     """Build the gateway FastAPI application.
 
@@ -302,6 +193,7 @@ def create_gateway_app(
                             channel,
                             inbound,
                             trace_headers=inject_trace_headers(),
+                            config_revision=manager.current_version(tenant_id),
                         ))
                 metrics.increment(
                     "agent_callback_enqueue_total",
@@ -352,5 +244,8 @@ def create_gateway_app(
                 channel=channel,
                 outcome=outcome,
             )
+
+    if test_api_key:
+        app.include_router(create_test_message_router(worker=worker, api_key=test_api_key, queue=queue))
 
     return app

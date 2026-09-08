@@ -51,22 +51,22 @@ Milvus 和 pgvector 可通过 `register_vector_factory()` 注册，私有云对�
 storage_config:
   session_backend: redis
   memory_backend: mysql
-  redis_url: ${REDIS_URL}
-  mysql_url: ${MYSQL_URL}
+  redis_url: env://TRPC_SERVICE_REDIS_URL
+  mysql_url: env://TRPC_SERVICE_MYSQL_URL
   vector:
     backend: qdrant
-    url: ${VECTOR_URL}
-    api_key: ${QDRANT_API_KEY}
+    url: env://TRPC_SERVICE_VECTOR_URL
+    api_key: env://TRPC_SERVICE_QDRANT_API_KEY
     collection: tenant_a_knowledge
     dimensions: 1536
     embedding_model: text-embedding-v3
   object:
     backend: s3
-    endpoint_url: ${OBJECT_STORE_ENDPOINT}
+    endpoint_url: ${TRPC_SERVICE_OBJECT_STORE_ENDPOINT}
     bucket: tenant-a-artifacts
-    region: ${OBJECT_STORE_REGION}
-    access_key: ${OBJECT_STORE_ACCESS_KEY}
-    secret_key: ${OBJECT_STORE_SECRET_KEY}
+    region: ${TRPC_SERVICE_OBJECT_STORE_REGION}
+    access_key: env://TRPC_SERVICE_OBJECT_STORE_ACCESS_KEY
+    secret_key: env://TRPC_SERVICE_OBJECT_STORE_SECRET_KEY
 ```
 
 URL、API key 和对象存储凭据使用 `SecretStr`，写入配置仓库时由 `TenantConfigCodec` 单独加密。

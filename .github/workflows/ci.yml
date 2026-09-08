@@ -35,9 +35,9 @@ jobs:
         id: changed
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            FILES=$(git diff --name-only --diff-filter=ACM origin/${{ github.base_ref }}...HEAD -- '*.py' | grep -E '^(trpc_service|tests/service)/' || true)
+            FILES=$(git diff --name-only --diff-filter=ACM origin/${{ github.base_ref }}...HEAD -- '*.py' | grep -E '^(trpc_service|tests/service|examples/multi_tenant_saas)/' || true)
           else
-            FILES=$(git diff --name-only --diff-filter=ACM HEAD~1...HEAD -- '*.py' | grep -E '^(trpc_service|tests/service)/' || true)
+            FILES=$(git diff --name-only --diff-filter=ACM HEAD~1...HEAD -- '*.py' | grep -E '^(trpc_service|tests/service|examples/multi_tenant_saas)/' || true)
           fi
           if [ -z "$FILES" ]; then
             echo "has_files=false" >> "$GITHUB_OUTPUT"
@@ -115,3 +115,31 @@ jobs:
         run: |
           pip install dist/*.whl
           python -c "import trpc_agent_sdk, trpc_service; print('SDK and service imports OK')"
+
+  deployment-validation:
+    runs-on: [self-hosted, trpc-agent-python-ci]
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install deployment validation dependencies
+        run: pip install -e .
+
+      - name: Validate Compose topology
+        env:
+          TRPC_SERVICE_TENANT_CONFIG_ENCRYPTION_KEY: ci-placeholder
+        run: |
+          docker compose -f deploy/docker-compose.minimal.yml config --quiet
+          docker compose -f deploy/docker-compose.minimal.yml \
+            -f deploy/fault-stage-runtime.override.yml config --quiet
+
+      - name: Render Kubernetes overlays
+        run: |
+          kubectl kustomize deploy/kustomize/overlays/production >/dev/null
+          kubectl kustomize deploy/kustomize/overlays/performance >/dev/null
+
+      - name: Validate migration plan
+        env:
+          TRPC_SERVICE_MYSQL_URL: mysql+pymysql://agent:agent@127.0.0.1:3306/trpc_agent
+        run: python -m trpc_service.migrations.run --check

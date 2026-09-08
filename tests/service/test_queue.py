@@ -214,6 +214,8 @@ def test_gateway_enqueues_when_queue_provided():
     assert response.status_code == 200
     assert len(queue.enqueued) == 1
     assert queue.enqueued[0].tenant_id == "t_a"
+    assert queue.enqueued[0].config_revision == 1
+    assert len(queue.enqueued[0].turn_id) == 32
     # The worker must NOT have run in-process (decoupled mode).
     assert adapter.replies == []
     assert _has_attributes(worker.metrics, "agent_callback_enqueue_total", outcome="success")

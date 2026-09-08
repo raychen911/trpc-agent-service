@@ -18,8 +18,8 @@ tenants:
     channel_configs:
       wecom:
         channel_type: wecom
-        token: ${WECOM_TOKEN}
-        aes_key: ${WECOM_AES_KEY}
+        token: env://TRPC_SERVICE_WECOM_TOKEN
+        aes_key: env://TRPC_SERVICE_WECOM_AES_KEY
         corp_id: wx_demo
         agent_id: "1000001"
     storage_config:
@@ -27,8 +27,8 @@ tenants:
       memory_backend: mysql
       summary_backend: mysql
       audit_backend: mysql
-      redis_url: ${REDIS_URL}
-      mysql_url: ${MYSQL_URL}
+      redis_url: env://TRPC_SERVICE_REDIS_URL
+      mysql_url: env://TRPC_SERVICE_MYSQL_URL
     audit_policy:
       enabled: true
       retention_days: 90
@@ -47,16 +47,16 @@ tenants:
     channel_configs:
       dingtalk:
         channel_type: dingtalk
-        app_id: ${DINGTALK_CLIENT_ID}
-        robot_code: ${DINGTALK_ROBOT_CODE}
-        secret: ${DINGTALK_CLIENT_SECRET}
+        app_id: ${TRPC_SERVICE_DINGTALK_CLIENT_ID}
+        robot_code: ${TRPC_SERVICE_DINGTALK_ROBOT_CODE}
+        secret: env://TRPC_SERVICE_DINGTALK_CLIENT_SECRET
     storage_config:
       session_backend: redis
       memory_backend: mysql
       summary_backend: mysql
       audit_backend: mysql
-      redis_url: ${REDIS_URL}
-      mysql_url: ${MYSQL_URL}
+      redis_url: env://TRPC_SERVICE_REDIS_URL
+      mysql_url: env://TRPC_SERVICE_MYSQL_URL
     audit_policy:
       enabled: true
     budget:
@@ -76,22 +76,22 @@ tenants:
     channel_configs:
       feishu:
         channel_type: feishu
-        app_id: ${FEISHU_APP_ID}
-        verification_token: ${FEISHU_VERIFICATION_TOKEN}
-        encrypt_key: ${FEISHU_ENCRYPT_KEY}
+        app_id: ${TRPC_SERVICE_FEISHU_APP_ID}
+        verification_token: env://TRPC_SERVICE_FEISHU_VERIFICATION_TOKEN
+        encrypt_key: env://TRPC_SERVICE_FEISHU_ENCRYPT_KEY
       wechat_kf:
         channel_type: wechat_kf
-        token: ${WECHAT_KF_TOKEN}
-        aes_key: ${WECHAT_KF_AES_KEY}
-        corp_id: ${WECHAT_KF_CORP_ID}
-        open_kfid: ${WECHAT_KF_OPEN_KFID}
+        token: env://TRPC_SERVICE_WECHAT_KF_TOKEN
+        aes_key: env://TRPC_SERVICE_WECHAT_KF_AES_KEY
+        corp_id: ${TRPC_SERVICE_WECHAT_KF_CORP_ID}
+        open_kfid: ${TRPC_SERVICE_WECHAT_KF_OPEN_KFID}
     storage_config:
       session_backend: redis
       memory_backend: mysql
       summary_backend: mysql
       audit_backend: mysql
-      redis_url: ${REDIS_URL}
-      mysql_url: ${MYSQL_URL}
+      redis_url: env://TRPC_SERVICE_REDIS_URL
+      mysql_url: env://TRPC_SERVICE_MYSQL_URL
     audit_policy:
       enabled: true
       retention_days: 180

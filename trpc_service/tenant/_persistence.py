@@ -57,7 +57,10 @@ class TenantConfigCodec:
 
         def walk(value: Any, path: tuple[str, ...]) -> Any:
             if isinstance(value, SecretStr):
-                secrets[".".join(path)] = value.get_secret_value()
+                secret_value = value.get_secret_value()
+                if secret_value.startswith(("env://", "file://", "vault://", "aws-kms://")):
+                    return secret_value
+                secrets[".".join(path)] = secret_value
                 return None
             if isinstance(value, datetime):
                 return value.isoformat()
@@ -73,7 +76,8 @@ class TenantConfigCodec:
         encrypted = None
         if secrets:
             if self._fernet is None:
-                raise ValueError("TENANT_CONFIG_ENCRYPTION_KEY is required when tenant config contains secrets")
+                raise ValueError(
+                    "TRPC_SERVICE_TENANT_CONFIG_ENCRYPTION_KEY is required when tenant config contains inline secrets")
             encrypted = self._fernet.encrypt(json.dumps(secrets, ensure_ascii=False,
                                                         sort_keys=True).encode("utf-8")).decode("ascii")
         return sanitized, encrypted
@@ -82,12 +86,13 @@ class TenantConfigCodec:
         payload = json.loads(json.dumps(public))
         if encrypted:
             if self._fernet is None:
-                raise ValueError("TENANT_CONFIG_ENCRYPTION_KEY is required to decrypt tenant config")
+                raise ValueError("TRPC_SERVICE_TENANT_CONFIG_ENCRYPTION_KEY is required to decrypt tenant config")
             try:
                 decrypted = self._fernet.decrypt(encrypted.encode("ascii"))
             except InvalidToken as exc:
                 raise ValueError(
-                    "tenant config decryption failed: TENANT_CONFIG_ENCRYPTION_KEY does not match the key used "
+                    "tenant config decryption failed: TRPC_SERVICE_TENANT_CONFIG_ENCRYPTION_KEY does not match "
+                    "the key used "
                     "to persist existing tenant secrets") from exc
             secrets = json.loads(decrypted.decode("utf-8"))
             for dotted_path, value in secrets.items():
@@ -112,6 +117,16 @@ class StoredConfigVersion:
     created_at: datetime
     rolled_back: bool = False
     rolled_back_to: Optional[int] = None
+
+
+@dataclass(frozen=True)
+class StoredConfigDraft:
+    tenant_id: str
+    based_on_version: int
+    checksum: str
+    tenant: Tenant
+    created_by: str
+    reason: str
 
 
 metadata = MetaData()
@@ -151,6 +166,19 @@ outbox_table = Table(
     Column("status", String(32), nullable=False, default="pending"),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("published_at", DateTime(timezone=True), nullable=True),
+)
+draft_table = Table(
+    "tenant_config_draft",
+    metadata,
+    Column("tenant_id", String(128), primary_key=True),
+    Column("based_on_version", BigInteger, nullable=False),
+    Column("checksum", String(64), nullable=False),
+    Column("config_snapshot", JSON, nullable=False),
+    Column("encrypted_secrets", Text, nullable=True),
+    Column("created_by", String(128), nullable=False),
+    Column("reason", String(512), nullable=False, default=""),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
 )
 
 
@@ -253,6 +281,30 @@ class MySqlTenantRepository:
                reason: str,
                rolled_back: bool = False,
                rolled_back_to: Optional[int] = None) -> int:
+        return self._update(
+            tenant,
+            expected_version,
+            by,
+            reason,
+            rolled_back=rolled_back,
+            rolled_back_to=rolled_back_to,
+            discard_draft=False,
+        )
+
+    def publish_draft(self, tenant: Tenant, expected_version: int, by: str, reason: str) -> int:
+        """Activate and delete a draft in the same database transaction."""
+        return self._update(tenant, expected_version, by, reason, discard_draft=True)
+
+    def _update(
+        self,
+        tenant: Tenant,
+        expected_version: int,
+        by: str,
+        reason: str,
+        rolled_back: bool = False,
+        rolled_back_to: Optional[int] = None,
+        discard_draft: bool = False,
+    ) -> int:
         snapshot, secrets = self.codec.encode(tenant)
         next_version = expected_version + 1
         with self._engine.begin() as connection:
@@ -276,10 +328,61 @@ class MySqlTenantRepository:
             event_type = "tenant.rolled_back" if rolled_back else "tenant.updated"
             connection.execute(
                 insert(outbox_table).values(self._outbox_values(tenant.tenant_id, next_version, event_type)))
+            if discard_draft:
+                connection.execute(delete(draft_table).where(draft_table.c.tenant_id == tenant.tenant_id))
         return next_version
+
+    def save_draft(
+        self,
+        tenant: Tenant,
+        based_on_version: int,
+        checksum: str,
+        by: str,
+        reason: str,
+    ) -> None:
+        snapshot, secrets = self.codec.encode(tenant)
+        now = self._utcnow()
+        values = {
+            "based_on_version": based_on_version,
+            "checksum": checksum,
+            "config_snapshot": snapshot,
+            "encrypted_secrets": secrets,
+            "created_by": by,
+            "reason": reason,
+            "updated_at": now,
+        }
+        with self._engine.begin() as connection:
+            result = connection.execute(
+                update(draft_table).where(draft_table.c.tenant_id == tenant.tenant_id).values(**values))
+            if result.rowcount == 0:
+                connection.execute(insert(draft_table).values(
+                    tenant_id=tenant.tenant_id,
+                    created_at=now,
+                    **values,
+                ))
+
+    def get_draft(self, tenant_id: str) -> Optional[StoredConfigDraft]:
+        with self._engine.connect() as connection:
+            row = connection.execute(select(draft_table).where(draft_table.c.tenant_id == tenant_id)).mappings().first()
+        if row is None:
+            return None
+        return StoredConfigDraft(
+            tenant_id=tenant_id,
+            based_on_version=int(row["based_on_version"]),
+            checksum=row["checksum"],
+            tenant=self.codec.decode(row["config_snapshot"], row["encrypted_secrets"]),
+            created_by=row["created_by"],
+            reason=row["reason"],
+        )
+
+    def delete_draft(self, tenant_id: str) -> bool:
+        with self._engine.begin() as connection:
+            result = connection.execute(delete(draft_table).where(draft_table.c.tenant_id == tenant_id))
+        return result.rowcount == 1
 
     def delete(self, tenant_id: str, expected_version: int) -> None:
         with self._engine.begin() as connection:
+            connection.execute(delete(draft_table).where(draft_table.c.tenant_id == tenant_id))
             result = connection.execute(
                 delete(tenant_table).where(
                     tenant_table.c.tenant_id == tenant_id,

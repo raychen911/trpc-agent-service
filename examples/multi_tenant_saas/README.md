@@ -32,7 +32,7 @@ python simulate.py
 ## 接入真实 LLM（可选）
 
 ```bash
-export TRPC_AGENT_API_KEY=sk-xxx
+export TRPC_SERVICE_MODEL_API_KEY=sk-xxx
 cd examples/multi_tenant_saas
 python run_gateway.py   # 或 uvicorn run_gateway:app --port 8080
 ```

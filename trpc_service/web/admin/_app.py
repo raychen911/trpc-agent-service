@@ -40,6 +40,7 @@ class MutationMetadata(BaseModel):
 
     by: str = "admin"
     reason: str = ""
+    expected_version: Optional[int] = Field(default=None, ge=1)
 
 
 class TenantMutation(BaseModel):
@@ -53,6 +54,13 @@ class RollbackRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     version: int = Field(ge=1)
+    by: str = "admin"
+
+
+class PublishRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_version: Optional[int] = Field(default=None, ge=1)
     by: str = "admin"
 
 
@@ -143,8 +151,8 @@ def create_admin_router(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return tenant.model_dump(mode="json")
 
-    @router.put("/tenants/{tenant_id}")
-    async def update_tenant(
+    @router.put("/tenants/{tenant_id}/draft")
+    async def stage_tenant(
             tenant_id: str,
             mutation: TenantMutation,
             x_admin_api_key: Optional[str] = Header(default=None),
@@ -153,14 +161,55 @@ def create_admin_router(
         if mutation.tenant.tenant_id != tenant_id:
             raise HTTPException(status_code=400, detail="tenant id in path and body must match")
         try:
-            tenant = manager.update(
+            draft = manager.stage(
                 mutation.tenant,
+                expected_version=mutation.metadata.expected_version,
                 by=mutation.metadata.by,
                 reason=mutation.metadata.reason or "update via Admin API",
             )
         except ValueError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return draft.model_dump(mode="json")
+
+    @router.get("/tenants/{tenant_id}/draft")
+    async def get_tenant_draft(
+            tenant_id: str,
+            x_admin_api_key: Optional[str] = Header(default=None),
+    ) -> dict[str, Any]:
+        authorize(x_admin_api_key)
+        draft = manager.get_draft(tenant_id)
+        if draft is None:
+            raise HTTPException(status_code=404, detail="tenant draft not found")
+        return draft.model_dump(mode="json")
+
+    @router.post("/tenants/{tenant_id}/publish")
+    async def publish_tenant(
+            tenant_id: str,
+            request: PublishRequest,
+            x_admin_api_key: Optional[str] = Header(default=None),
+    ) -> dict[str, Any]:
+        authorize(x_admin_api_key)
+        try:
+            tenant = manager.publish(
+                tenant_id,
+                expected_version=request.expected_version,
+                by=request.by,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         return tenant.model_dump(mode="json")
+
+    @router.delete("/tenants/{tenant_id}/draft", status_code=204, response_class=Response)
+    async def discard_tenant_draft(
+            tenant_id: str,
+            x_admin_api_key: Optional[str] = Header(default=None),
+    ) -> Response:
+        authorize(x_admin_api_key)
+        try:
+            manager.discard_draft(tenant_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return Response(status_code=204)
 
     @router.delete("/tenants/{tenant_id}", status_code=204, response_class=Response)
     async def delete_tenant(

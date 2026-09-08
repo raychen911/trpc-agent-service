@@ -3,6 +3,8 @@
 from pathlib import Path
 import tomllib
 
+import yaml
+
 COMPOSE_FILE = Path(__file__).resolve().parents[2] / "deploy/docker-compose.minimal.yml"
 OBSERVABILITY_COMPOSE_FILE = COMPOSE_FILE.parent / "docker-compose.observability.yml"
 COMPOSE_COLLECTOR_FILE = COMPOSE_FILE.parent / "otel-collector.compose.yaml"
@@ -11,19 +13,92 @@ PROMETHEUS_ALERTS_FILE = COMPOSE_FILE.parent / "prometheus/alerts.yml"
 PYPROJECT_FILE = COMPOSE_FILE.parents[1] / "pyproject.toml"
 DOCKERFILE = COMPOSE_FILE.parent / "Dockerfile"
 KUBERNETES_DIR = COMPOSE_FILE.parent / "kubernetes"
+FAULT_COMPOSE_FILE = COMPOSE_FILE.parent / "fault-stage-runtime.override.yml"
+FAULT_SCRIPT_FILE = COMPOSE_FILE.parent / "run-fault-stage.sh"
+PRODUCTION_OVERLAY = COMPOSE_FILE.parent / "kustomize/overlays/production"
+CI_FILE = COMPOSE_FILE.parents[1] / ".github/workflows/ci.yml"
 
 
-def test_minimal_compose_passes_qq_credentials_to_runtime_services():
+def test_minimal_compose_passes_named_qq_credentials_to_runtime_roles():
     compose = COMPOSE_FILE.read_text(encoding="utf-8")
 
-    assert compose.count("QQBOT_APP_ID=${QQBOT_APP_ID:-}") == 2
-    assert compose.count("QQBOT_APP_SECRET=${QQBOT_APP_SECRET:-}") == 2
+    for variable in (
+            "TRPC_SERVICE_QQ_GREETING_APP_ID",
+            "TRPC_SERVICE_QQ_GREETING_APP_SECRET",
+            "TRPC_SERVICE_QQ_CHAT_APP_ID",
+            "TRPC_SERVICE_QQ_CHAT_APP_SECRET",
+    ):
+        assert compose.count(f"{variable}=${{{variable}:-}}") == 3
 
 
-def test_minimal_compose_allows_disabling_queue_for_small_hosts():
+def test_tenant_config_binds_two_qq_bots_to_distinct_tenants():
+    tenants = (COMPOSE_FILE.parent / "tenants.yaml").read_text(encoding="utf-8")
+
+    assert "tenant_id: local_demo" in tenants
+    assert "tenant_id: chat_assistant" in tenants
+    assert tenants.count("channel_type: qq") == 2
+    assert "app_id: ${TRPC_SERVICE_QQ_GREETING_APP_ID}" in tenants
+    assert "app_id: ${TRPC_SERVICE_QQ_CHAT_APP_ID}" in tenants
+    assert "secret: env://TRPC_SERVICE_QQ_GREETING_APP_SECRET" in tenants
+
+
+def test_minimal_compose_uses_queue_and_durable_outbox_roles():
     compose = COMPOSE_FILE.read_text(encoding="utf-8")
 
-    assert "AGENT_QUEUE_ENABLED=${AGENT_QUEUE_ENABLED:-1}" in compose
+    assert "TRPC_SERVICE_QUEUE_ENABLED=1" in compose
+    assert "TRPC_SERVICE_DURABLE_DELIVERY_ENABLED=1" in compose
+    assert 'command: ["python", "-m", "trpc_service.agent.run_outbox"]' in compose
+    assert 'command: ["python", "-m", "trpc_service.migrations.run"' in compose
+
+
+def test_fault_stage_routes_all_runtime_roles_through_toxiproxy():
+    override = FAULT_COMPOSE_FILE.read_text(encoding="utf-8")
+    script = FAULT_SCRIPT_FILE.read_text(encoding="utf-8")
+
+    assert override.count("TRPC_SERVICE_REDIS_URL=redis://toxiproxy:6380/0") == 3
+    assert override.count("toxiproxy:3307/trpc_agent") == 3
+    assert '"name":"redis"' in override
+    assert '"name":"mysql"' in override
+    assert "for dependency in redis mysql" in script
+
+
+def test_production_overlay_includes_isolated_canary():
+    kustomization = (PRODUCTION_OVERLAY / "kustomization.yaml").read_text(encoding="utf-8")
+    canary = (PRODUCTION_OVERLAY / "canary.yaml").read_text(encoding="utf-8")
+
+    assert "canary.yaml" in kustomization
+    assert "name: agent-gateway-canary" in canary
+    assert "release-track: canary" in canary
+    assert "kind: Ingress" not in canary
+    assert "readOnlyRootFilesystem: true" in canary
+    assert "name: TRPC_SERVICE_ADMIN_API_KEY" in canary
+
+
+def test_kustomize_files_are_parseable_and_base_uses_resource_directory():
+    root = COMPOSE_FILE.parent / "kustomize"
+    files = list(root.rglob("*.yaml")) + [KUBERNETES_DIR / "kustomization.yaml"]
+
+    for path in files:
+        assert all(isinstance(document, dict) for document in yaml.safe_load_all(path.read_text(encoding="utf-8")))
+
+    base = (root / "base/kustomization.yaml").read_text(encoding="utf-8")
+    production = (root / "overlays/production/kustomization.yaml").read_text(encoding="utf-8")
+    assert "- ../../kubernetes" in base
+    assert "- production-hardening.yaml" in production
+    agent = (KUBERNETES_DIR / "agent.yaml").read_text(encoding="utf-8")
+    outbox = (KUBERNETES_DIR / "outbox.yaml").read_text(encoding="utf-8")
+    assert agent.count("name: TRPC_SERVICE_ENVIRONMENT") == 2
+    assert "name: TRPC_SERVICE_ENVIRONMENT" in outbox
+
+
+def test_ci_validates_dependencies_fault_topology_overlays_and_migrations():
+    workflow = CI_FILE.read_text(encoding="utf-8")
+
+    assert "Install deployment validation dependencies" in workflow
+    assert "pip install -e ." in workflow
+    assert "-f deploy/fault-stage-runtime.override.yml config --quiet" in workflow
+    assert workflow.count("kubectl kustomize deploy/kustomize/overlays/") == 2
+    assert "python -m trpc_service.migrations.run --check" in workflow
 
 
 def test_minimal_compose_shares_local_artifacts_between_gateway_and_worker():
@@ -71,8 +146,8 @@ def test_production_manifests_wire_vector_and_object_storage_secrets():
 
     assert config.count("backend: qdrant") == 2
     assert config.count("backend: s3") == 2
-    assert "${VECTOR_URL}" in config
-    assert "${OBJECT_STORE_ENDPOINT}" in config
+    assert "env://TRPC_SERVICE_VECTOR_URL" in config
+    assert "${TRPC_SERVICE_OBJECT_STORE_ENDPOINT}" in config
     assert agent.count("name: agent-storage-secrets") == 2
 
 

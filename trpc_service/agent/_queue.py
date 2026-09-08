@@ -35,6 +35,7 @@ from ..channels import InboundMessage
 from ..metrics import EnterpriseMetrics
 from ..metrics import get_enterprise_metrics
 from ..metrics import operation_span
+from trpc_service.runtime import NodeInfo
 
 
 class TaskMessage(BaseModel):
@@ -44,6 +45,8 @@ class TaskMessage(BaseModel):
 
     tenant_id: str
     channel: str
+    turn_id: str = Field(default_factory=lambda: uuid4().hex)
+    config_revision: Optional[int] = Field(default=None, ge=1)
     inbound: dict[str, Any]
     """Serialized :class:`InboundMessage`."""
     trace_headers: dict[str, str] = Field(default_factory=dict)
@@ -56,10 +59,12 @@ class TaskMessage(BaseModel):
         channel: str,
         inbound: InboundMessage,
         trace_headers: Optional[dict[str, str]] = None,
+        config_revision: Optional[int] = None,
     ) -> "TaskMessage":
         return cls(
             tenant_id=tenant_id,
             channel=channel,
+            config_revision=config_revision,
             inbound=inbound.model_dump(mode="json"),
             trace_headers=trace_headers or {},
         )
@@ -86,6 +91,7 @@ class StreamQueue:
         consumer: Optional[str] = None,
         maxlen: int = 10000,
         metrics: Optional[EnterpriseMetrics] = None,
+        node_directory: Any = None,
     ) -> None:
         if client is not None:
             self._client = client
@@ -96,11 +102,12 @@ class StreamQueue:
         self._stream = stream
         self._group = group
         self._worker_heartbeat_key = f"{stream}:{group}:worker-heartbeats"
-        instance = os.environ.get("AGENT_WORKER_ID") or os.environ.get("OTEL_SERVICE_INSTANCE_ID")
+        instance = os.environ.get("TRPC_SERVICE_NODE_ID") or os.environ.get("OTEL_SERVICE_INSTANCE_ID")
         instance = instance or os.environ.get("HOSTNAME") or socket.gethostname()
         self._consumer = consumer or f"worker-{instance}-{os.getpid()}-{uuid4().hex[:8]}"
         self._maxlen = maxlen
         self._metrics = metrics or get_enterprise_metrics()
+        self._node_directory = node_directory
 
     @property
     def consumer_name(self) -> str:
@@ -205,6 +212,15 @@ class StreamQueue:
 
     async def publish_worker_heartbeat(self, ttl_seconds: float = 30.0) -> None:
         """Publish this consumer's lease-like liveness record for Gateways."""
+        if self._node_directory is not None:
+            await self._execute(
+                "worker_heartbeat",
+                self._node_directory.heartbeat(
+                    NodeInfo(node_id=self._consumer, role="worker"),
+                    ttl_seconds,
+                ),
+            )
+            return
         now_ms = int(time.time() * 1000)
         max_age_ms = max(1, int(ttl_seconds * 1000))
 
@@ -219,6 +235,10 @@ class StreamQueue:
 
     async def has_active_workers(self, max_age_seconds: float = 30.0) -> bool:
         """Return whether any Worker heartbeat is newer than ``max_age_seconds``."""
+        if self._node_directory is not None:
+            del max_age_seconds
+            nodes = await self._execute("worker_availability", self._node_directory.healthy("worker"))
+            return bool(nodes)
         cutoff_ms = int(time.time() * 1000) - max(1, int(max_age_seconds * 1000))
 
         async def count_active() -> int:
@@ -232,6 +252,9 @@ class StreamQueue:
 
     async def remove_worker_heartbeat(self) -> None:
         """Remove this consumer from the liveness set during graceful shutdown."""
+        if self._node_directory is not None:
+            await self._execute("worker_heartbeat_remove", self._node_directory.remove(self._consumer))
+            return
         await self._execute(
             "worker_heartbeat_remove",
             self._client.zrem(self._worker_heartbeat_key, self._consumer),

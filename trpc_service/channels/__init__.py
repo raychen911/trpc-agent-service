@@ -19,11 +19,13 @@ from ._feishu import FeishuAdapter
 from ._qq import QQAdapter
 from ._wecom import WecomAdapter
 from ._wechat_kf import WechatCustomerServiceAdapter
+from ._delivery import ChannelDeliveryTransport
 
 __all__ = [
     "CHAT_GROUP",
     "CHAT_PRIVATE",
     "ChannelAdapter",
+    "ChannelDeliveryTransport",
     "InboundMessage",
     "OutboundMessage",
     "SendResult",

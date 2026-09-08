@@ -13,7 +13,6 @@ different backends.
 
 from __future__ import annotations
 
-import os
 from typing import Callable
 from typing import Optional
 
@@ -24,6 +23,9 @@ from trpc_agent_sdk.memory import SqlMemoryService
 from trpc_agent_sdk.sessions import RedisSessionService
 from trpc_agent_sdk.sessions import SqlSessionService
 from pydantic import SecretStr
+from trpc_service.config._secrets import DEFAULT_SECRET_RESOLVER
+from trpc_service.config._secrets import SecretResolver
+from trpc_service.config._secrets import resolve_secret
 
 from trpc_service.tenant import ObjectBackendConfig
 from trpc_service.tenant import Tenant
@@ -41,8 +43,13 @@ VectorStoreFactory = Callable[[VectorBackendConfig], VectorStoreABC]
 ObjectStoreFactory = Callable[[ObjectBackendConfig], ObjectStoreABC]
 
 
-def _secret_value(value: Optional[SecretStr]) -> str:
-    return value.get_secret_value() if value is not None else ""
+def _secret_value(
+    value: Optional[SecretStr],
+    *,
+    resolver: SecretResolver = DEFAULT_SECRET_RESOLVER,
+    tenant_id: Optional[str] = None,
+) -> str:
+    return resolve_secret(value, resolver=resolver, tenant_id=tenant_id)
 
 
 def _is_async_mysql_url(url: str) -> bool:
@@ -116,11 +123,18 @@ class TenantStorageRouter:
 
     def __init__(self,
                  vector_factories: Optional[dict[str, VectorStoreFactory]] = None,
-                 object_factories: Optional[dict[str, ObjectStoreFactory]] = None) -> None:
+                 object_factories: Optional[dict[str, ObjectStoreFactory]] = None,
+                 *,
+                 redis_url: Optional[str] = None,
+                 mysql_url: Optional[str] = None,
+                 secret_resolver: Optional[SecretResolver] = None) -> None:
         self._session_services: dict[tuple[str, str], SessionServiceABC] = {}
         self._memory_services: dict[tuple[str, str], MemoryServiceABC] = {}
         self._vector_stores: dict[tuple[str, ...], TenantVectorStore] = {}
         self._object_stores: dict[tuple[str, ...], TenantObjectStore] = {}
+        self._default_redis_url = redis_url or ""
+        self._default_mysql_url = mysql_url or ""
+        self._secret_resolver = secret_resolver or DEFAULT_SECRET_RESOLVER
         self._vector_factories: dict[str, VectorStoreFactory] = {
             "memory": _memory_vector_builder,
             "qdrant": _qdrant_vector_builder,
@@ -142,27 +156,27 @@ class TenantStorageRouter:
         """Register or override an object-storage adapter."""
         self._object_factories[backend] = factory
 
-    @staticmethod
-    def _redis_url(tenant: Optional[Tenant]) -> str:
+    def _redis_url(self, tenant: Optional[Tenant]) -> str:
         configured = tenant.storage_config.redis_url if tenant is not None else None
-        return _secret_value(configured) or os.environ.get("REDIS_URL", "")
+        tenant_id = tenant.tenant_id if tenant is not None else None
+        return _secret_value(configured, resolver=self._secret_resolver, tenant_id=tenant_id) or self._default_redis_url
 
-    @staticmethod
-    def _mysql_url(tenant: Optional[Tenant]) -> str:
+    def _mysql_url(self, tenant: Optional[Tenant]) -> str:
         configured = tenant.storage_config.mysql_url if tenant is not None else None
-        return _secret_value(configured) or os.environ.get("MYSQL_URL", "")
+        tenant_id = tenant.tenant_id if tenant is not None else None
+        return _secret_value(configured, resolver=self._secret_resolver, tenant_id=tenant_id) or self._default_mysql_url
 
     def session_service(self, tenant: Optional[Tenant]) -> SessionServiceABC:
         backend = tenant.storage_config.session_backend.lower() if tenant is not None else "redis"
         if backend == "redis":
             identity = self._redis_url(tenant)
             if not identity:
-                raise ValueError("redis session backend requires storage_config.redis_url or REDIS_URL")
+                raise ValueError("redis session backend requires storage_config.redis_url or TRPC_SERVICE_REDIS_URL")
             builder = _redis_session_builder
         elif backend == "mysql":
             identity = self._mysql_url(tenant)
             if not identity:
-                raise ValueError("mysql session backend requires storage_config.mysql_url or MYSQL_URL")
+                raise ValueError("mysql session backend requires storage_config.mysql_url or TRPC_SERVICE_MYSQL_URL")
             builder = _mysql_session_builder
         else:
             raise ValueError(f"unsupported session backend: {backend}")
@@ -177,12 +191,12 @@ class TenantStorageRouter:
         if backend == "redis":
             identity = self._redis_url(tenant)
             if not identity:
-                raise ValueError("redis memory backend requires storage_config.redis_url or REDIS_URL")
+                raise ValueError("redis memory backend requires storage_config.redis_url or TRPC_SERVICE_REDIS_URL")
             builder = _redis_memory_builder
         elif backend == "mysql":
             identity = self._mysql_url(tenant)
             if not identity:
-                raise ValueError("mysql memory backend requires storage_config.mysql_url or MYSQL_URL")
+                raise ValueError("mysql memory backend requires storage_config.mysql_url or TRPC_SERVICE_MYSQL_URL")
             builder = _mysql_memory_builder
         else:
             raise ValueError(f"unsupported memory backend: {backend}")
@@ -201,15 +215,32 @@ class TenantStorageRouter:
         identity = (
             tenant.tenant_id,
             config.backend,
-            _secret_value(config.url),
-            _secret_value(config.api_key),
+            _secret_value(config.url, resolver=self._secret_resolver, tenant_id=tenant.tenant_id),
+            _secret_value(config.api_key, resolver=self._secret_resolver, tenant_id=tenant.tenant_id),
             config.collection,
             str(config.dimensions or ""),
             config.embedding_model or "",
         )
         if identity not in self._vector_stores:
             self._vector_stores[identity] = TenantVectorStore(
-                factory(config),
+                factory(
+                    config.model_copy(
+                        update={
+                            "url":
+                            SecretStr(
+                                _secret_value(
+                                    config.url,
+                                    resolver=self._secret_resolver,
+                                    tenant_id=tenant.tenant_id,
+                                )) if config.url else None,
+                            "api_key":
+                            SecretStr(
+                                _secret_value(
+                                    config.api_key,
+                                    resolver=self._secret_resolver,
+                                    tenant_id=tenant.tenant_id,
+                                )) if config.api_key else None,
+                        })),
                 tenant.tenant_id,
                 backend_name=config.backend,
             )
@@ -227,13 +258,30 @@ class TenantStorageRouter:
             config.endpoint_url or "",
             config.bucket,
             config.region or "",
-            _secret_value(config.access_key),
-            _secret_value(config.secret_key),
+            _secret_value(config.access_key, resolver=self._secret_resolver, tenant_id=tenant.tenant_id),
+            _secret_value(config.secret_key, resolver=self._secret_resolver, tenant_id=tenant.tenant_id),
             config.local_path,
         )
         if identity not in self._object_stores:
             self._object_stores[identity] = TenantObjectStore(
-                factory(config),
+                factory(
+                    config.model_copy(
+                        update={
+                            "access_key":
+                            SecretStr(
+                                _secret_value(
+                                    config.access_key,
+                                    resolver=self._secret_resolver,
+                                    tenant_id=tenant.tenant_id,
+                                )) if config.access_key else None,
+                            "secret_key":
+                            SecretStr(
+                                _secret_value(
+                                    config.secret_key,
+                                    resolver=self._secret_resolver,
+                                    tenant_id=tenant.tenant_id,
+                                )) if config.secret_key else None,
+                        })),
                 tenant.tenant_id,
                 backend_name=config.backend,
             )

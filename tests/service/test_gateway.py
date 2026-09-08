@@ -66,8 +66,9 @@ class FakeWorker:
         self.handled_metadata: list[dict] = []
         self.metrics = EnterpriseMetrics(meter=False)
 
-    def resolve_tenant(self, tenant_id):
-        tenant = self.manager.get(tenant_id)
+    def resolve_tenant(self, tenant_id, config_revision=None):
+        tenant = (self.manager.get_version(tenant_id, config_revision)
+                  if config_revision is not None else self.manager.get(tenant_id))
         if tenant is None or tenant.status != TenantStatus.ACTIVE:
             return None
         return tenant
@@ -241,3 +242,133 @@ def test_gateway_dedups_redelivered_message():
         for item in worker.metrics.snapshot("tenant_a")["counters"] if item["name"] == "agent_callback_total"
     }
     assert outcomes == {"success": 1, "duplicate": 1}
+
+
+def test_internal_test_message_runs_worker_without_channel_adapter():
+    manager = TenantConfigManager()
+    tenant = Tenant(
+        tenant_id="tenant_a",
+        name="t",
+        model=ModelEndpoint(model_name="gpt-4o"),
+    )
+    manager.register(tenant)
+    worker = FakeWorker(manager)
+    app = create_gateway_app(
+        manager=manager,
+        worker=worker,
+        idempotency_store=LocalIdempotencyStore(),
+        async_dispatch=False,
+        test_api_key="test-secret",
+    )
+
+    response = TestClient(app).post(
+        "/internal/test/messages/tenant_a",
+        json={
+            "user_id": "user-1",
+            "chat_id": "chat-1",
+            "message_id": "sim-1",
+            "text": "hello",
+        },
+        headers={"X-Test-API-Key": "test-secret"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["reply"] == "echo: hello"
+    assert response.json()["simulated"] is True
+    assert worker.handled == [("tenant_a", "qq", "hello")]
+    assert worker.handled_metadata == [{"simulated": True, "qq_scope": "c2c"}]
+
+
+def test_internal_test_message_is_not_available_without_key():
+    client, worker = _build_client()
+
+    response = client.post(
+        "/internal/test/messages/tenant_a",
+        json={
+            "user_id": "user-1",
+            "chat_id": "chat-1",
+            "message_id": "sim-1",
+            "text": "hello",
+        },
+        headers={"X-Test-API-Key": "test-secret"},
+    )
+
+    assert response.status_code == 404
+    assert worker.handled == []
+
+
+def test_internal_test_message_rejects_bad_key_and_unknown_tenant():
+    manager = TenantConfigManager()
+    tenant = Tenant(
+        tenant_id="tenant_a",
+        name="t",
+        model=ModelEndpoint(model_name="gpt-4o"),
+    )
+    manager.register(tenant)
+    worker = FakeWorker(manager)
+    app = create_gateway_app(manager=manager, worker=worker, test_api_key="test-secret")
+    client = TestClient(app)
+    payload = {
+        "user_id": "user-1",
+        "chat_id": "chat-1",
+        "message_id": "sim-1",
+        "text": "hello",
+    }
+
+    assert client.post(
+        "/internal/test/messages/tenant_a",
+        json=payload,
+        headers={
+            "X-Test-API-Key": "wrong"
+        },
+    ).status_code == 401
+    assert client.post(
+        "/internal/test/messages/unknown",
+        json=payload,
+        headers={
+            "X-Test-API-Key": "test-secret"
+        },
+    ).status_code == 404
+    assert worker.handled == []
+
+
+def test_internal_test_message_rejects_queue_channel_and_worker_failure():
+    manager = TenantConfigManager()
+    manager.register(Tenant(tenant_id="tenant_a", name="t", model=ModelEndpoint(model_name="gpt-4o")))
+    worker = FakeWorker(manager)
+    payload = {
+        "user_id": "user-1",
+        "chat_id": "chat-1",
+        "message_id": "sim-1",
+        "text": "hello",
+    }
+    queue_app = create_gateway_app(manager=manager, worker=worker, queue=object(), test_api_key="secret")
+    assert TestClient(queue_app).post(
+        "/internal/test/messages/tenant_a",
+        json=payload,
+        headers={
+            "X-Test-API-Key": "secret"
+        },
+    ).status_code == 503
+
+    app = create_gateway_app(manager=manager, worker=worker, test_api_key="secret")
+    unsupported = {**payload, "channel": "wecom"}
+    assert TestClient(app).post(
+        "/internal/test/messages/tenant_a",
+        json=unsupported,
+        headers={
+            "X-Test-API-Key": "secret"
+        },
+    ).status_code == 400
+
+    async def fail(*args, **kwargs):
+        raise RuntimeError("safe failure")
+
+    worker.handle = fail
+    assert TestClient(app, raise_server_exceptions=False).post(
+        "/internal/test/messages/tenant_a",
+        json=payload,
+        headers={
+            "X-Test-API-Key": "secret"
+        },
+    ).status_code == 500

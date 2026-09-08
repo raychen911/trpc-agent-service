@@ -94,7 +94,7 @@ Admin 概览中的“消息回调”只汇总 `agent_callback_total{outcome="suc
 
 ```bash
 curl -sS \
-  -H "X-Admin-API-Key: ${ADMIN_API_KEY}" \
+  -H "X-Admin-API-Key: ${TRPC_SERVICE_ADMIN_API_KEY}" \
   "http://127.0.0.1:8080/admin/metrics?tenant_id=tenant_a"
 ```
 

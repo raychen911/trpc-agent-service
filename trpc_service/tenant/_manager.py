@@ -8,6 +8,8 @@
 from __future__ import annotations
 
 import threading
+import hashlib
+import json
 from datetime import datetime
 from datetime import timezone
 from typing import Any
@@ -15,6 +17,7 @@ from typing import Callable
 from typing import Optional
 
 from pydantic import BaseModel
+from pydantic import SecretStr
 
 from ._models import Tenant
 from ._models import TenantStatus
@@ -42,6 +45,43 @@ class ConfigVersion(BaseModel):
     rolled_back_to: Optional[int] = None
 
 
+def tenant_config_checksum(tenant: Tenant) -> str:
+    """Return a deterministic checksum without exposing secret material."""
+
+    def normalize(value: Any) -> Any:
+        if isinstance(value, SecretStr):
+            return value.get_secret_value()
+        if isinstance(value, datetime):
+            return value.isoformat()
+        if isinstance(value, dict):
+            return {str(key): normalize(item) for key, item in sorted(value.items())}
+        if isinstance(value, list):
+            return [normalize(item) for item in value]
+        if hasattr(value, "value"):
+            return value.value
+        return value
+
+    payload = tenant.model_dump(mode="python")
+    payload.pop("created_at", None)
+    payload.pop("updated_at", None)
+    payload = normalize(payload)
+    encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+class ConfigDraft(BaseModel):
+    """Mutable proposal that does not affect active request processing."""
+
+    model_config = {"extra": "forbid"}
+
+    tenant_id: str
+    based_on_version: int
+    checksum: str
+    config_snapshot: dict[str, Any]
+    created_by: str = "system"
+    reason: str = ""
+
+
 class TenantConfigManager:
     """Tenant registry backed by MySQL, with an optional Redis L2 cache.
 
@@ -55,10 +95,13 @@ class TenantConfigManager:
         repository: Optional[MySqlTenantRepository] = None,
         cache: Optional[RedisTenantConfigCache] = None,
         listen_for_changes: bool = True,
+        preflight_checks: Optional[list[Callable[[Tenant], None]]] = None,
     ) -> None:
         self._tenants: dict[str, Tenant] = {}
         self._history: dict[str, list[ConfigVersion]] = {}
         self._versions: dict[str, int] = {}
+        self._drafts: dict[str, ConfigDraft] = {}
+        self._preflight_checks = list(preflight_checks or [])
         self._listeners: list[ChangeListener] = []
         self._lock = threading.RLock()
         self._repository = repository
@@ -76,6 +119,7 @@ class TenantConfigManager:
         with self._lock:
             if tenant.tenant_id in self._tenants:
                 raise ValueError(f"tenant '{tenant.tenant_id}' already registered")
+            self._run_preflight(tenant)
             stored = tenant.model_copy(deep=True)
             version = self._repository.create(stored, by, reason) if self._repository else 1
             self._tenants[tenant.tenant_id] = stored
@@ -110,6 +154,7 @@ class TenantConfigManager:
         with self._lock:
             if tenant.tenant_id not in self._tenants:
                 raise ValueError(f"tenant '{tenant.tenant_id}' not found")
+            self._run_preflight(tenant)
             stored = tenant.model_copy(deep=True)
             stored.updated_at = datetime.now(timezone.utc)
             current_version = self._versions.get(tenant.tenant_id, 0)
@@ -132,10 +177,138 @@ class TenantConfigManager:
                 self._repository.delete(tenant_id, version)
             self._tenants.pop(tenant_id)
             self._versions.pop(tenant_id, None)
+            self._drafts.pop(tenant_id, None)
         self._refresh_distributed_state(None, version + 1, "tenant.deleted", tenant_id)
         self._notify(tenant_id, None)
 
     # -------------------------------------------------------------- rollback
+
+    def current_version(self, tenant_id: str) -> int:
+        """Return the active immutable revision for one tenant."""
+        with self._lock:
+            version = self._versions.get(tenant_id)
+        if version is None:
+            loaded = self._load_one(tenant_id)
+            if loaded is None:
+                raise ValueError(f"tenant '{tenant_id}' not found")
+            with self._lock:
+                version = self._versions[tenant_id]
+        return version
+
+    def get_version(self, tenant_id: str, version: int) -> Optional[Tenant]:
+        """Load the exact configuration snapshot bound to an accepted task."""
+        try:
+            current = self.current_version(tenant_id)
+        except ValueError:
+            return None
+        if version == current:
+            return self.get(tenant_id)
+        with self._lock:
+            history = list(self._history.get(tenant_id, []))
+        target = next((item for item in history if item.version == version), None)
+        if target is None and self._repository is not None:
+            history = self._load_history(tenant_id)
+            with self._lock:
+                self._history[tenant_id] = history
+            target = next((item for item in history if item.version == version), None)
+        return Tenant.model_validate(target.config_snapshot) if target is not None else None
+
+    def stage(
+        self,
+        tenant: Tenant,
+        *,
+        expected_version: Optional[int] = None,
+        by: str = "system",
+        reason: str = "",
+    ) -> ConfigDraft:
+        """Create or replace a draft without changing the active tenant."""
+        current = self.current_version(tenant.tenant_id)
+        if expected_version is not None and expected_version != current:
+            raise ValueError(f"tenant '{tenant.tenant_id}' version conflict")
+        draft = ConfigDraft(
+            tenant_id=tenant.tenant_id,
+            based_on_version=current,
+            checksum=tenant_config_checksum(tenant),
+            config_snapshot=tenant.model_dump(mode="python"),
+            created_by=by,
+            reason=reason,
+        )
+        if self._repository is not None:
+            self._repository.save_draft(
+                tenant,
+                current,
+                draft.checksum,
+                by,
+                reason,
+            )
+        with self._lock:
+            self._drafts[tenant.tenant_id] = draft
+        return draft.model_copy(deep=True)
+
+    def get_draft(self, tenant_id: str) -> Optional[ConfigDraft]:
+        """Return the current draft, if present."""
+        with self._lock:
+            draft = self._drafts.get(tenant_id)
+        if draft is None and self._repository is not None:
+            stored = self._repository.get_draft(tenant_id)
+            if stored is not None:
+                draft = ConfigDraft(
+                    tenant_id=tenant_id,
+                    based_on_version=stored.based_on_version,
+                    checksum=stored.checksum,
+                    config_snapshot=stored.tenant.model_dump(mode="python"),
+                    created_by=stored.created_by,
+                    reason=stored.reason,
+                )
+                with self._lock:
+                    self._drafts[tenant_id] = draft
+        return draft.model_copy(deep=True) if draft is not None else None
+
+    def discard_draft(self, tenant_id: str) -> None:
+        """Discard a proposal without touching active configuration."""
+        with self._lock:
+            removed = self._drafts.pop(tenant_id, None) is not None
+        if self._repository is not None:
+            removed = self._repository.delete_draft(tenant_id) or removed
+        if not removed:
+            raise ValueError(f"no config draft for tenant '{tenant_id}'")
+
+    def publish(self, tenant_id: str, *, expected_version: Optional[int] = None, by: str = "system") -> Tenant:
+        """Preflight and atomically activate the tenant's staged draft."""
+        draft = self.get_draft(tenant_id)
+        if draft is None:
+            raise ValueError(f"no config draft for tenant '{tenant_id}'")
+        current = self.current_version(tenant_id)
+        required = draft.based_on_version if expected_version is None else expected_version
+        if current != required or current != draft.based_on_version:
+            raise ValueError(f"tenant '{tenant_id}' version conflict")
+        tenant = Tenant.model_validate(draft.config_snapshot)
+        self._run_preflight(tenant)
+        reason = draft.reason or "publish draft"
+        with self._lock:
+            stored = tenant.model_copy(deep=True)
+            stored.updated_at = datetime.now(timezone.utc)
+            version = (self._repository.publish_draft(stored, current, by, reason) if self._repository else current + 1)
+            self._tenants[tenant_id] = stored
+            self._versions[tenant_id] = version
+            self._record_version(stored, by=by, reason=reason, version=version)
+            self._drafts.pop(tenant_id, None)
+        self._refresh_distributed_state(stored, version, "tenant.updated")
+        self._notify(tenant_id, stored.model_copy(deep=True))
+        return stored.model_copy(deep=True)
+
+    def add_preflight_check(self, check: Callable[[Tenant], None]) -> None:
+        """Validate current tenants, then guard every future activation."""
+        with self._lock:
+            existing = [tenant.model_copy(deep=True) for tenant in self._tenants.values()]
+        for tenant in existing:
+            check(tenant)
+        with self._lock:
+            self._preflight_checks.append(check)
+
+    def _run_preflight(self, tenant: Tenant) -> None:
+        for check in self._preflight_checks:
+            check(tenant.model_copy(deep=True))
 
     def rollback(self, tenant_id: str, to_version: int, by: str = "system") -> Tenant:
         """Restore a tenant to a previous config version.
@@ -151,6 +324,7 @@ class TenantConfigManager:
             if target is None:
                 raise ValueError(f"version {to_version} not found for tenant '{tenant_id}'")
             restored = Tenant.model_validate(target.config_snapshot)
+            self._run_preflight(restored)
             restored.updated_at = restored.updated_at or restored.created_at
             current_version = self._versions.get(tenant_id, 0)
             version = self._repository.update(

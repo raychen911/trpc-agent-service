@@ -33,9 +33,9 @@ deployment_app = importlib.import_module("trpc_service.web.app")
 
 def _fake_redis_storage(monkeypatch):
     shared = InMemorySessionService()
-    monkeypatch.setenv("REDIS_URL", "redis://test/0")
+    monkeypatch.setenv("TRPC_SERVICE_REDIS_URL", "redis://test/0")
     monkeypatch.setattr(router_module, "_redis_session_builder", lambda _url: shared)
-    monkeypatch.setattr(deployment_app, "_STORAGE_ROUTER", TenantStorageRouter())
+    monkeypatch.setattr(deployment_app, "_STORAGE_ROUTER", TenantStorageRouter(redis_url="redis://test/0"))
     return shared
 
 

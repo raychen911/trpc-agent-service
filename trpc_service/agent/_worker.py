@@ -108,8 +108,9 @@ class TenantWorker:
     def metrics(self) -> EnterpriseMetrics:
         return self._metrics
 
-    def resolve_tenant(self, tenant_id: str) -> Optional[Tenant]:
-        tenant = self._manager.get(tenant_id)
+    def resolve_tenant(self, tenant_id: str, config_revision: Optional[int] = None) -> Optional[Tenant]:
+        tenant = (self._manager.get_version(tenant_id, config_revision)
+                  if config_revision is not None else self._manager.get(tenant_id))
         if tenant is None or tenant.status != TenantStatus.ACTIVE:
             return None
         return tenant
@@ -181,7 +182,8 @@ class TenantWorker:
     async def handle(self, tenant_id: str, channel: str, inbound: InboundMessage) -> str:
         """Execute a turn and return the final assistant text (empty on failure)."""
         started = time.perf_counter()
-        tenant = self.resolve_tenant(tenant_id)
+        config_revision = inbound.metadata.get("config_revision")
+        tenant = self.resolve_tenant(tenant_id, config_revision)
         if tenant is None:
             self._metrics.increment(
                 "agent_requests_total",
@@ -368,6 +370,8 @@ class TenantWorker:
                 "channel_user_verified": inbound.metadata.get("user_verified", False),
                 "confirmed_tools": confirmed_tools,
                 "session_fencing_token": fencing_token,
+                "config_revision": inbound.metadata.get("config_revision"),
+                "turn_id": inbound.metadata.get("turn_id"),
             })
         new_message = Content(parts=[Part.from_text(text=inbound.text or "")])
 
@@ -430,10 +434,15 @@ class TenantWorker:
                 channel=channel,
                 user_id=inbound.sender_id,
                 session_id=session_id,
+                message_id=inbound.message_id,
+                turn_id=inbound.metadata.get("turn_id"),
+                config_revision=inbound.metadata.get("config_revision"),
                 agent_name=agent_name,
                 decision=decision,
                 latency_ms=latency_ms,
                 error_type=error_type,
                 trace_id=current_trace_id(),
-                detail={"reply_length": len(final_text)},
+                detail={
+                    "reply_length": len(final_text),
+                },
             ))

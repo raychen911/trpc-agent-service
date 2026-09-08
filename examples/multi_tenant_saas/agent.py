@@ -5,7 +5,7 @@
 # tRPC-Agent-Python is licensed under Apache-2.0.
 """Demo agent factory for the 3-tenant SaaS customer-service example.
 
-When ``TRPC_AGENT_API_KEY`` is set, a real :class:`LlmAgent` is built from the
+When ``TRPC_SERVICE_MODEL_API_KEY`` is set, a real :class:`LlmAgent` is built from the
 tenant's model configuration; otherwise a deterministic :class:`MockCustomerServiceAgent`
 is used so the demo runs without any LLM credentials.
 """
@@ -46,7 +46,7 @@ class MockCustomerServiceAgent(BaseAgent):
 
 def create_agent(tenant):
     """Build the tenant's agent: LLM-backed if configured, otherwise mock."""
-    api_key = os.environ.get("TRPC_AGENT_API_KEY")
+    api_key = os.environ.get("TRPC_SERVICE_MODEL_API_KEY")
     instruction = tenant.app_config.default_instruction or "你是客服助手，请友好专业地回复用户。"
     if api_key:
         model = OpenAIModel(
@@ -54,6 +54,8 @@ def create_agent(tenant):
             api_key=api_key,
             base_url=tenant.model.api_endpoint,
         )
-        return LlmAgent(name=to_agent_name(tenant.tenant_id), model=model, instruction=instruction,
+        return LlmAgent(name=to_agent_name(tenant.tenant_id),
+                        model=model,
+                        instruction=instruction,
                         tools=build_tools(tenant))
     return MockCustomerServiceAgent(name=to_agent_name(tenant.tenant_id), instruction=instruction)

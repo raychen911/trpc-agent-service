@@ -5,21 +5,24 @@ from __future__ import annotations
 import argparse
 import os
 from typing import Optional
+from trpc_service.config import ServiceSettings
 
 
-def build_parser() -> argparse.ArgumentParser:
+def build_parser(settings: Optional[ServiceSettings] = None) -> argparse.ArgumentParser:
+    settings = settings or ServiceSettings.from_env()
     parser = argparse.ArgumentParser(description="Run the tRPC-Agent multi-tenant service gateway")
-    parser.add_argument("--host", default="0.0.0.0", help="Gateway bind host")
-    parser.add_argument("--port", default=8080, type=int, help="Gateway bind port")
+    parser.add_argument("--host", default=settings.host, help="Gateway bind host")
+    parser.add_argument("--port", default=settings.port, type=int, help="Gateway bind port")
     parser.add_argument("--tenants-config", help="Path to the tenant YAML/JSON configuration")
     parser.add_argument("--reload", action="store_true", help="Reload the process when source files change")
     return parser
 
 
 def main(argv: Optional[list[str]] = None) -> None:
-    args = build_parser().parse_args(argv)
+    settings = ServiceSettings.from_env()
+    args = build_parser(settings).parse_args(argv)
     if args.tenants_config:
-        os.environ["TENANTS_CONFIG"] = args.tenants_config
+        os.environ["TRPC_SERVICE_TENANTS_CONFIG"] = args.tenants_config
 
     import uvicorn
 

@@ -40,7 +40,7 @@ def make_tenant(fallback=None):
 
 
 def test_create_agent_primary_and_fallback(monkeypatch):
-    monkeypatch.setenv("TRPC_AGENT_API_KEY", "test-key")
+    monkeypatch.setenv("TRPC_SERVICE_MODEL_API_KEY", "test-key")
     monkeypatch.setattr(deployment_app, "_BUDGET_TRACKER", None)
     primary = deployment_app.create_agent(make_tenant())
     fallback = deployment_app.create_agent(make_tenant("backup"))
@@ -54,6 +54,7 @@ def test_create_agent_primary_and_fallback(monkeypatch):
 
 
 def test_create_agent_registers_tenant_model_pricing(monkeypatch):
+    monkeypatch.setenv("TRPC_SERVICE_MODEL_API_KEY", "test-key")
     monkeypatch.setattr(deployment_app, "_BUDGET_TRACKER", None)
     tenant = make_tenant()
     tenant.model.pricing["primary"] = ModelPricingConfig(input_per_mtok=2, output_per_mtok=8)
@@ -67,12 +68,26 @@ def test_create_agent_registers_tenant_model_pricing(monkeypatch):
     assert tracker.estimate_cost("deploy", "primary", 1000) is None
 
 
+def test_create_agent_applies_default_deepseek_pricing_for_legacy_tenant(monkeypatch):
+    monkeypatch.setattr(deployment_app, "_BUDGET_TRACKER", None)
+    monkeypatch.setenv("TRPC_SERVICE_MODEL_API_KEY", "test-key")
+    monkeypatch.setenv("TRPC_SERVICE_DEEPSEEK_INPUT_PRICE_PER_MTOK", "0.22")
+    monkeypatch.setenv("TRPC_SERVICE_DEEPSEEK_OUTPUT_PRICE_PER_MTOK", "0.66")
+    tenant = make_tenant()
+    tenant.model.model_name = "deepseek-chat"
+
+    deployment_app.create_agent(tenant)
+
+    tracker = deployment_app.create_budget_tracker()
+    assert tracker.estimate_cost("deploy", "deepseek-chat", 1000) == 0.00066
+
+
 def test_create_agent_supports_tenant_key_reference_and_anthropic(monkeypatch):
     monkeypatch.setenv("TENANT_DEPLOY_MODEL_KEY", "tenant-secret")
     monkeypatch.setattr(deployment_app, "_BUDGET_TRACKER", None)
     tenant = make_tenant()
     tenant.model.provider = "anthropic"
-    tenant.model.api_key_env = "TENANT_DEPLOY_MODEL_KEY"
+    tenant.model.api_key_ref = "env://TENANT_DEPLOY_MODEL_KEY"
     tenant.model.retry = 4
 
     agent = deployment_app.create_agent(tenant)
@@ -82,6 +97,7 @@ def test_create_agent_supports_tenant_key_reference_and_anthropic(monkeypatch):
 
 
 def test_create_agent_rejects_unknown_provider(monkeypatch):
+    monkeypatch.setenv("TRPC_SERVICE_MODEL_API_KEY", "test-key")
     monkeypatch.setattr(deployment_app, "_BUDGET_TRACKER", None)
     tenant = make_tenant()
     tenant.model.provider = "unsupported"
@@ -90,14 +106,15 @@ def test_create_agent_rejects_unknown_provider(monkeypatch):
 
 
 def test_shared_governance_and_lock_factories_local_and_redis(monkeypatch):
-    monkeypatch.delenv("REDIS_URL", raising=False)
+    monkeypatch.delenv("TRPC_SERVICE_REDIS_URL", raising=False)
     monkeypatch.setattr(deployment_app, "_BUDGET_TRACKER", None)
     monkeypatch.setattr(deployment_app, "_CONFIRMATION_MANAGER", None)
     monkeypatch.setattr(deployment_app, "_SESSION_LOCK_MANAGER", None)
     assert deployment_app.create_budget_tracker() is deployment_app.create_budget_tracker()
     assert deployment_app.create_confirmation_manager() is deployment_app.create_confirmation_manager()
     assert deployment_app.create_session_lock_manager() is None
-    monkeypatch.setenv("REDIS_URL", "redis://unused/0")
+    monkeypatch.setenv("TRPC_SERVICE_REDIS_URL", "redis://unused/0")
+    monkeypatch.setattr(deployment_app, "_STORAGE_ROUTER", None)
     assert deployment_app.create_memory_service(make_tenant()) is not None
 
     monkeypatch.setattr(deployment_app, "_BUDGET_TRACKER", None)
@@ -109,9 +126,9 @@ def test_shared_governance_and_lock_factories_local_and_redis(monkeypatch):
 
 
 def test_build_app_loads_tenants_and_mounts_admin(monkeypatch):
-    monkeypatch.delenv("REDIS_URL", raising=False)
-    monkeypatch.setenv("AGENT_QUEUE_ENABLED", "false")
-    monkeypatch.setenv("ADMIN_API_KEY", "admin")
+    monkeypatch.delenv("TRPC_SERVICE_REDIS_URL", raising=False)
+    monkeypatch.setenv("TRPC_SERVICE_QUEUE_ENABLED", "false")
+    monkeypatch.setenv("TRPC_SERVICE_ADMIN_API_KEY", "admin")
     monkeypatch.setattr(deployment_app, "_CONFIRMATION_MANAGER", None)
     monkeypatch.setattr(deployment_app, "_SESSION_LOCK_MANAGER", None)
     monkeypatch.setattr(deployment_app, "load_tenants", lambda _path: [make_tenant()])
@@ -151,12 +168,12 @@ def test_stream_worker_assembly_and_main(monkeypatch):
     audit_logger = object()
     audit_sink = object()
 
-    monkeypatch.setenv("REDIS_URL", "redis://worker/0")
+    monkeypatch.setenv("TRPC_SERVICE_REDIS_URL", "redis://worker/0")
     monkeypatch.setattr(run_worker, "TenantWorker", FakeTenantWorker)
     monkeypatch.setattr(run_worker, "StreamQueue", FakeQueue)
     monkeypatch.setattr(run_worker, "RedisTaskResultStore", FakeResults)
     monkeypatch.setattr(run_worker, "StreamWorker", FakeStreamWorker)
-    monkeypatch.setattr(run_worker, "create_audit_logger", lambda: (audit_logger, audit_sink))
+    monkeypatch.setattr(run_worker, "create_audit_logger", lambda _settings: (audit_logger, audit_sink))
     result = run_worker.build_stream_worker(manager=manager)
     assert isinstance(result, FakeStreamWorker)
     assert captured["queue"]["redis_url"] == "redis://worker/0"
@@ -166,7 +183,7 @@ def test_stream_worker_assembly_and_main(monkeypatch):
 
 
 def test_create_audit_logger_without_mysql(monkeypatch):
-    monkeypatch.delenv("MYSQL_URL", raising=False)
+    monkeypatch.delenv("TRPC_SERVICE_MYSQL_URL", raising=False)
     logger, sink = deployment_app.create_audit_logger()
     assert logger is not None
     assert sink is None
@@ -176,10 +193,10 @@ def test_compose_requires_stable_key_and_recovers_worker_process():
     compose = (Path(__file__).parents[2] / "deploy" / "docker-compose.minimal.yml").read_text(encoding="utf-8")
 
     assert "local-compose-change-me" not in compose
-    assert compose.count("TENANT_CONFIG_ENCRYPTION_KEY=${TENANT_CONFIG_ENCRYPTION_KEY:?") == 2
-    assert compose.count("restart: unless-stopped") == 2
+    assert compose.count("TRPC_SERVICE_TENANT_CONFIG_ENCRYPTION_KEY=${TRPC_SERVICE_TENANT_CONFIG_ENCRYPTION_KEY:?") == 3
+    assert compose.count("restart: unless-stopped") == 3
     assert "urlopen('http://localhost:8080/readyz'" in compose
-    assert "redis.Redis.from_url(os.environ['REDIS_URL']).ping()" in compose
+    assert "redis.Redis.from_url(os.environ['TRPC_SERVICE_REDIS_URL']).ping()" in compose
 
 
 async def test_stream_worker_main_runs(monkeypatch):
@@ -192,6 +209,6 @@ async def test_stream_worker_main_runs(monkeypatch):
 
     runner = Runner()
     monkeypatch.setattr(run_worker, "build_stream_worker", lambda **kwargs: runner)
-    monkeypatch.setenv("TENANTS_CONFIG", "tenants.yml")
+    monkeypatch.setenv("TRPC_SERVICE_TENANTS_CONFIG", "tenants.yml")
     await run_worker.main()
     assert runner.ran is True

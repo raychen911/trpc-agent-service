@@ -7,6 +7,11 @@ tenants:
       api_endpoint: https://api.deepseek.com
       timeout: 30
       retry: 2
+      api_key_ref: env://TRPC_SERVICE_MODEL_API_KEY
+      pricing:
+        deepseek-chat:
+          input_per_mtok: 0.22
+          output_per_mtok: 0.66
     app_config:
       default_instruction: You are a helpful local multi-tenant agent.
     channel_configs:
@@ -35,8 +40,8 @@ tenants:
         encrypt_key: ${FEISHU_ENCRYPT_KEY}
       qq:
         channel_type: qq
-        app_id: ${QQBOT_APP_ID}
-        secret: ${QQBOT_APP_SECRET}
+        app_id: ${TRPC_SERVICE_QQ_GREETING_APP_ID}
+        secret: env://TRPC_SERVICE_QQ_GREETING_APP_SECRET
 
     storage_config:
       session_backend: redis
@@ -48,6 +53,44 @@ tenants:
       vector:
         backend: memory
         collection: local_demo_knowledge
+      object:
+        backend: local
+        local_path: /app/data/objects
+        bucket: local-artifacts
+    audit_policy:
+      enabled: true
+      retention_days: 30
+
+  - tenant_id: chat_assistant
+    name: Chat Assistant
+    model:
+      provider: openai-compatible
+      model_name: deepseek-chat
+      api_endpoint: https://api.deepseek.com
+      timeout: 30
+      retry: 2
+      api_key_ref: env://TRPC_SERVICE_MODEL_API_KEY
+      pricing:
+        deepseek-chat:
+          input_per_mtok: 0.22
+          output_per_mtok: 0.66
+    app_config:
+      default_instruction: You are the chat assistant. Answer users clearly and helpfully.
+    channel_configs:
+      qq:
+        channel_type: qq
+        app_id: ${TRPC_SERVICE_QQ_CHAT_APP_ID}
+        secret: env://TRPC_SERVICE_QQ_CHAT_APP_SECRET
+    storage_config:
+      session_backend: redis
+      memory_backend: redis
+      summary_backend: redis
+      audit_backend: mysql
+      redis_url: redis://redis:6379/0
+      mysql_url: mysql+aiomysql://agent:agent_local@mysql:3306/trpc_agent
+      vector:
+        backend: memory
+        collection: chat_assistant_knowledge
       object:
         backend: local
         local_path: /app/data/objects
