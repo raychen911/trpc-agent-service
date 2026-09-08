@@ -1,0 +1,106 @@
+# 3 租户 SaaS 客服中台演示配置。每个租户独立的模型、工具权限、IM 通道、
+# 数据后端与预算。密钥字段支持 ${VAR} 环境变量展开。
+tenants:
+  - tenant_id: tenant_ecom
+    name: 电商客服
+    model:
+      model_name: gpt-4o
+      fallback_model: gpt-4o-mini
+      # 演示价格；生产中应按实际供应商合同更新。
+      pricing:
+        gpt-4o: {input_per_mtok: 2.5, output_per_mtok: 10.0}
+        gpt-4o-mini: {input_per_mtok: 0.15, output_per_mtok: 0.6}
+    app_config:
+      default_instruction: 你是电商售前客服，回答商品与订单问题，语气亲切。
+    tool_permissions:
+      tool_whitelist: [query_order, query_logistics]
+      dangerous_tools: [cancel_order]
+    channel_configs:
+      wecom:
+        channel_type: wecom
+        token: env://TRPC_SERVICE_WECOM_TOKEN
+        aes_key: env://TRPC_SERVICE_WECOM_AES_KEY
+        corp_id: wx_demo
+        agent_id: "1000001"
+    storage_config:
+      session_backend: redis
+      memory_backend: mysql
+      summary_backend: mysql
+      audit_backend: mysql
+      redis_url: env://TRPC_SERVICE_REDIS_URL
+      mysql_url: env://TRPC_SERVICE_MYSQL_URL
+    audit_policy:
+      enabled: true
+      retention_days: 90
+    im_access_policy:
+      # 所有 Gateway 通过 Redis 共享这一租户级固定窗口限额。
+      callback_requests_per_minute: 600
+    budget:
+      daily_token_budget: 100000
+      daily_cost_limit: 20.0
+
+  - tenant_id: tenant_logi
+    name: 物流客服
+    model:
+      model_name: gpt-4o-mini
+    app_config:
+      default_instruction: 你是物流售后客服，解答快递与配送问题。
+    tool_permissions:
+      tool_whitelist: [query_logistics, query_order]
+    channel_configs:
+      dingtalk:
+        channel_type: dingtalk
+        app_id: ${TRPC_SERVICE_DINGTALK_CLIENT_ID}
+        robot_code: ${TRPC_SERVICE_DINGTALK_ROBOT_CODE}
+        secret: env://TRPC_SERVICE_DINGTALK_CLIENT_SECRET
+    storage_config:
+      session_backend: redis
+      memory_backend: mysql
+      summary_backend: mysql
+      audit_backend: mysql
+      redis_url: env://TRPC_SERVICE_REDIS_URL
+      mysql_url: env://TRPC_SERVICE_MYSQL_URL
+    audit_policy:
+      enabled: true
+    im_access_policy:
+      callback_requests_per_minute: 300
+    budget:
+      daily_token_budget: 50000
+
+  - tenant_id: tenant_fin
+    name: 金融客服
+    model:
+      model_name: gpt-4o
+      pricing:
+        gpt-4o: {input_per_mtok: 2.5, output_per_mtok: 10.0}
+    app_config:
+      default_instruction: 你是金融客服，回答账户与余额问题，语气严谨。
+    tool_permissions:
+      tool_whitelist: [query_balance]
+      dangerous_tools: [cancel_order]
+    channel_configs:
+      feishu:
+        channel_type: feishu
+        app_id: ${TRPC_SERVICE_FEISHU_APP_ID}
+        verification_token: env://TRPC_SERVICE_FEISHU_VERIFICATION_TOKEN
+        encrypt_key: env://TRPC_SERVICE_FEISHU_ENCRYPT_KEY
+      wechat_kf:
+        channel_type: wechat_kf
+        token: env://TRPC_SERVICE_WECHAT_KF_TOKEN
+        aes_key: env://TRPC_SERVICE_WECHAT_KF_AES_KEY
+        corp_id: ${TRPC_SERVICE_WECHAT_KF_CORP_ID}
+        open_kfid: ${TRPC_SERVICE_WECHAT_KF_OPEN_KFID}
+    storage_config:
+      session_backend: redis
+      memory_backend: mysql
+      summary_backend: mysql
+      audit_backend: mysql
+      redis_url: env://TRPC_SERVICE_REDIS_URL
+      mysql_url: env://TRPC_SERVICE_MYSQL_URL
+    audit_policy:
+      enabled: true
+      retention_days: 180
+    im_access_policy:
+      callback_requests_per_minute: 200
+    budget:
+      daily_cost_limit: 10.0

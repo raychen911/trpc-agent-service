@@ -1,0 +1,34 @@
+services:
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports: ["16379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_USER: agent_test
+      MYSQL_PASSWORD: agent_test_only
+      MYSQL_DATABASE: agent_test
+      MYSQL_ROOT_PASSWORD: root_test_only
+    ports: ["13306:3306"]
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot_test_only"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports: ["16686:16686", "14318:4318"]
+
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.9.0
+    ports: ["18474:8474", "18679:8666"]

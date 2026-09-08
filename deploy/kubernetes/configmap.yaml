@@ -1,0 +1,111 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agent-config
+data:
+  tenants.yaml: |
+    tenants:
+      - tenant_id: tenant_a
+        name: 电商公司
+        model:
+          model_name: gpt-4o
+          api_endpoint: https://api.openai.com/v1
+          timeout: 30
+          retry: 2
+          fallback_model: gpt-4o-mini
+          api_key_ref: env://TRPC_SERVICE_MODEL_API_KEY
+          # 示例价格；上线前按供应商合同价格更新。
+          pricing:
+            gpt-4o:
+              input_per_mtok: 2.5
+              output_per_mtok: 10.0
+            gpt-4o-mini:
+              input_per_mtok: 0.15
+              output_per_mtok: 0.6
+        tool_permissions:
+          tool_whitelist: [query_order, query_logistics]
+          dangerous_tools: [cancel_order]
+        channel_configs:
+          wecom:
+            channel_type: wecom
+            token: env://TRPC_SERVICE_WECOM_TOKEN
+            secret: env://TRPC_SERVICE_WECOM_CORP_SECRET
+            aes_key: env://TRPC_SERVICE_WECOM_AES_KEY
+            corp_id: wx123456
+            agent_id: "1000001"
+          wechat_kf:
+            channel_type: wechat_kf
+            token: env://TRPC_SERVICE_WECHAT_KF_TOKEN
+            aes_key: env://TRPC_SERVICE_WECHAT_KF_AES_KEY
+            corp_id: wx123456
+            open_kfid: wk123456
+          dingtalk:
+            channel_type: dingtalk
+            app_id: ${TRPC_SERVICE_DINGTALK_CLIENT_ID}
+            robot_code: ${TRPC_SERVICE_DINGTALK_ROBOT_CODE}
+            secret: env://TRPC_SERVICE_DINGTALK_CLIENT_SECRET
+          feishu:
+            channel_type: feishu
+            app_id: ${TRPC_SERVICE_FEISHU_APP_ID}
+            verification_token: env://TRPC_SERVICE_FEISHU_VERIFICATION_TOKEN
+            encrypt_key: env://TRPC_SERVICE_FEISHU_ENCRYPT_KEY
+        storage_config:
+          session_backend: redis
+          memory_backend: redis
+          summary_backend: redis
+          audit_backend: mysql
+          redis_url: env://TRPC_SERVICE_REDIS_URL
+          mysql_url: env://TRPC_SERVICE_MYSQL_URL
+          vector:
+            backend: qdrant
+            url: env://TRPC_SERVICE_VECTOR_URL
+            api_key: env://TRPC_SERVICE_QDRANT_API_KEY
+            collection: tenant_a_knowledge
+          object:
+            backend: s3
+            endpoint_url: ${TRPC_SERVICE_OBJECT_STORE_ENDPOINT}
+            bucket: tenant-a-artifacts
+            region: ${TRPC_SERVICE_OBJECT_STORE_REGION}
+            access_key: env://TRPC_SERVICE_OBJECT_STORE_ACCESS_KEY
+            secret_key: env://TRPC_SERVICE_OBJECT_STORE_SECRET_KEY
+        audit_policy:
+          enabled: true
+          retention_days: 90
+        im_access_policy:
+          callback_requests_per_minute: 1200
+        budget:
+          daily_token_budget: 2000000
+          daily_cost_limit: 50.0
+
+      - tenant_id: tenant_b
+        name: 物流公司
+        model:
+          model_name: gpt-4o-mini
+          api_key_ref: env://TRPC_SERVICE_MODEL_API_KEY
+        channel_configs:
+          feishu:
+            channel_type: feishu
+            app_id: ${TRPC_SERVICE_FEISHU_APP_ID_B}
+            verification_token: env://TRPC_SERVICE_FEISHU_VERIFICATION_TOKEN_B
+            encrypt_key: env://TRPC_SERVICE_FEISHU_ENCRYPT_KEY_B
+        im_access_policy:
+          callback_requests_per_minute: 600
+        storage_config:
+          session_backend: mysql
+          memory_backend: mysql
+          summary_backend: mysql
+          audit_backend: mysql
+          redis_url: env://TRPC_SERVICE_REDIS_URL
+          mysql_url: env://TRPC_SERVICE_MYSQL_URL
+          vector:
+            backend: qdrant
+            url: env://TRPC_SERVICE_VECTOR_URL
+            api_key: env://TRPC_SERVICE_QDRANT_API_KEY
+            collection: tenant_b_knowledge
+          object:
+            backend: s3
+            endpoint_url: ${TRPC_SERVICE_OBJECT_STORE_ENDPOINT}
+            bucket: tenant-b-artifacts
+            region: ${TRPC_SERVICE_OBJECT_STORE_REGION}
+            access_key: env://TRPC_SERVICE_OBJECT_STORE_ACCESS_KEY
+            secret_key: env://TRPC_SERVICE_OBJECT_STORE_SECRET_KEY

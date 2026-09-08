@@ -1,0 +1,76 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: agent-gateway
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: agent-gateway
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: agent-worker
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: agent-worker
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agent-default-deny
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: trpc-agent-enterprise
+  policyTypes: ["Ingress", "Egress"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gateway-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app: agent-gateway
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agent-egress
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values: ["agent-gateway", "agent-gateway-canary", "agent-worker", "agent-outbox", "agent-schema-migration"]
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: redis
+      ports:
+        - protocol: TCP
+          port: 6379
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 3306
+        - protocol: TCP
+          port: 4318

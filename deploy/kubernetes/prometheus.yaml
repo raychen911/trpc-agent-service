@@ -1,0 +1,138 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agent-prometheus-config
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+    rule_files:
+      - /etc/prometheus/alerts.yml
+    scrape_configs:
+      - job_name: trpc-agent-otel
+        dns_sd_configs:
+          - names: [otel-collector]
+            type: A
+            port: 8889
+  alerts.yml: |
+    groups:
+      - name: trpc-agent
+        rules:
+          - alert: AgentGatewayCallbackErrors
+            expr: sum(rate(agent_callback_total{outcome!~"success|duplicate|challenge"}[5m])) > 0
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: Agent Gateway callback errors detected
+          - alert: AgentWorkerTaskErrors
+            expr: sum(rate(agent_worker_task_total{outcome!="success"}[5m])) > 0
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: Agent Worker task retries or failures detected
+          - alert: AgentDeadLetterQueueGrowth
+            expr: increase(agent_queue_dlq_total[10m]) > 0
+            labels:
+              severity: critical
+            annotations:
+              summary: Agent tasks entered the dead-letter queue
+          - alert: AgentWorkerUnavailable
+            expr: max(agent_worker_available{mode="queue"}) == 0
+            for: 30s
+            labels:
+              severity: critical
+            annotations:
+              summary: No active Agent Worker is available
+          - alert: AgentWorkerReconnects
+            expr: increase(agent_worker_reconnect_total[10m]) > 0
+            labels:
+              severity: warning
+            annotations:
+              summary: Agent Worker lost and retried its Redis queue connection
+          - alert: AgentImDeliveryErrors
+            expr: sum(rate(agent_im_delivery_total{outcome="error"}[5m])) > 0
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: Agent IM delivery errors detected
+          - alert: AgentBudgetRejections
+            expr: increase(agent_budget_rejection_total[10m]) > 0
+            labels:
+              severity: warning
+            annotations:
+              summary: Agent model calls were rejected by a tenant budget
+          - alert: AgentTokenBudgetNearLimit
+            expr: max by (tenant_id) (agent_budget_tokens_used) / max by (tenant_id) (agent_budget_daily_token_limit) >= 0.9
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: Tenant token budget usage is at least 90 percent
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+        app.kubernetes.io/part-of: trpc-agent-enterprise
+    spec:
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v2.55.1
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.path=/prometheus
+            - --storage.tsdb.retention.time=15d
+          ports:
+            - containerPort: 9090
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: 9090
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: 9090
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+              readOnly: true
+            - name: data
+              mountPath: /prometheus
+      volumes:
+        - name: config
+          configMap:
+            name: agent-prometheus-config
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+spec:
+  selector:
+    app: prometheus
+  ports:
+    - name: http
+      port: 9090
+      targetPort: 9090

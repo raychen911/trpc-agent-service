@@ -1,0 +1,17 @@
+gates:
+  - name: gateway-live
+    request: GET /healthz
+    expect_status: 200
+  - name: gateway-ready
+    request: GET /readyz
+    expect_status: 200
+  - name: synthetic-turn
+    request: POST /internal/test/messages/local_demo
+    auth_header: X-Test-API-Key
+    expect_status: 200
+  - name: worker-directory
+    redis_key_pattern: trpc-service:nodes:node:*
+    minimum_nodes: 1
+  - name: delivery-backlog
+    sql: SELECT COUNT(*) FROM delivery_outbox WHERE status IN ('pending','retry','delivering')
+    maximum: 0

@@ -1,109 +1,178 @@
-# 基于 tRPC-Agent 设计多租户节点化 Agent 部署平台
+# tRPC Agent 多租户服务
 
-## 背景和价值
-企业在落地 Agent 应用时，通常不会只部署一个单体机器人，而是希望面向多个部门、多个业务线、多个 IM 入口和多个数据后端
-，构建一套可统一管理的 Agent 平台。例如：客服团队希望把 Agent 接入企业微信，研发团队希望接入内部群机器人，运营团队>希望接入微信公众号或微信客服，不同租户又需要隔离会话、记忆、知识库、工具权限和审计日志。
-tRPC-Agent-Python 已经具备 Agent 编排、Tool / MCP、Session、Memory、Knowledge、Filter、Telemetry、FastAPI 服务化、OpenClaw / IM 通道、A2A / AG-UI 等能力。该题要求基于这些能力设计一个“多租户、可节点化部署、支持多后端数据同步、可接>入微信 / 企业微信等 IM 软件”的生产级方案。
-这个题目解决的业务痛点是：企业希望把 Agent 能力从单点 demo 扩展成平台化服务，同时满足租户隔离、弹性部署、数据一致性
-、IM 触达、审计合规和后端可替换等要求。它的价值在于把框架能力真正映射到企业级 Agent 平台架构，而不是只停留在单个 Agent 脚本。 
-根据需要可以选择Python或者Go语言框架进行实现
-任务描述
-请设计一个基于 tRPC-Agent-Python 的多租户节点化 Agent 部署平台。平台需要支持多个租户创建和部署自己的 Agent，每个租>户可以绑定不同 IM 通道、选择不同数据后端、配置不同工具权限和知识库，并允许多个 Agent 节点水平扩展。系统需要考虑跨节
-点会话路由、数据同步、后端适配、IM 消息接入、监控审计和故障恢复。
-本题以架构设计为主，可以包含少量关键伪代码、接口定义或数据模型示例。不要求实现完整系统，但方案必须足够具体，能指导>后续工程落地。
+这是一个基于 [tRPC-Agent-Python](https://github.com/trpc-group/trpc-agent-python) 的多租户 Agent 服务。项目不再复制或修改 SDK 源码，而是通过 PyPI 依赖 `trpc-agent-py` 复用 Agent、Model、Runner、Session 和 Memory 等基础能力；本仓库的业务代码统一放在 `trpc_service` 包中。
 
-## 具体要求
-### 多租户与节点部署
-- 设计租户模型，至少包含 tenant_id、应用配置、模型配置、工具权限、IM 通道配置、数据后端配置、审计策略。
-- 设计节点部署拓扑，说明 Agent Gateway、Agent Worker、Channel Adapter、Storage Adapter、Admin API、Telemetry Collector 等组件如何协作。
-- 支持多节点水平扩展，说明用户消息如何路由到正确租户和正确 session。
-- 说明是否需要 sticky session；如果不需要，说明如何依赖共享 Session / Memory 后端实现无状态 Worker。
-- 设计租户隔离机制，包括配置隔离、数据隔离、工具权限隔离、日志脱敏和密钥管理。
+> Python 包名是 `trpc-agent-py`，安装后使用 `trpc_agent_sdk` 导入；本项目自身的发行包名是 `trpc-agent-service`，使用 `trpc_service` 导入。
 
-### 数据同步与多后端支持
-- 支持不同租户选择不同数据后端，例如 InMemory、Redis、SQL、向量库、对象存储或外部 Memory 服务。
-- 设计统一的数据访问抽象，说明 Session、Memory、Summary、Artifact、Knowledge、Audit Log 分别如何存储。
-- 设计数据同步策略，至少覆盖：  
-- 多节点并发写入同一 session 的一致性。
-- Session event、state、summary 的更新顺序。
-- Memory 写入后的跨节点可见性。
-- 后端从 Redis 迁移到 SQL 或从本地向量库迁移到远端向量库时的数据迁移方案。
-- IM 消息重复投递时的幂等处理。
-- 说明不同后端的一致性取舍，例如强一致、最终一致、读写延迟、成本和运维复杂度。
-- 给出一个最小数据模型或表结构示例，至少包含 tenant、agent app、session、message/event、memory、summary、channel binding、audit log。
+## 设计概览
 
-### IM 软件接入
-- 设计 IM Channel Adapter，支持企业微信、微信客服、微信公众号、Telegram 或其他 IM 通道中的至少两类。
-- 说明外部 IM 消息如何转换为 tRPC-Agent-Python 的用户输入，Agent Event 如何转换为 IM 回复、流式消息或卡片消息。
-- 设计 IM 账号和租户绑定方式，包括 webhook URL、token、secret、回调验签、消息去重、用户身份映射。
-- 说明群聊和单聊的 session_id 生成规则，以及用户跨群、跨租户时的隔离策略。
-- 考虑 IM 平台限制，例如消息长度、频率限制、异步回复、图片 / 文件消息、撤回或失败重试。
-
-### 治理、监控和安全
-- 使用 Filter 设计租户级治理策略，例如工具白名单、敏感信息脱敏、预算限制、危险工具二次确认、IM 用户权限校验。
-- 设计监控指标，例如请求量、模型调用耗时、工具调用耗时、IM 投递成功率、错误率、token 消耗、每租户成本、Session 后端延迟。
-- 说明如何接入 OpenTelemetry 或等价 tracing，要求 trace 能串起 IM callback、Runner 执行、Tool 调用、Session / Memory 读写和 IM 回复。
-- 设计审计日志字段，至少包含 tenant_id、channel、user_id、session_id、agent_name、tool_name、decision、latency、error_type、cost、trace_id。
-- 说明密钥管理和脱敏策略，IM token、模型 API key、数据库密码不能明文出现在日志、trace 或错误报告中。
-
-### 故障恢复与运维
-- 设计节点故障、IM 重试、数据库短暂不可用、模型超时、工具执行失败时的降级策略。
-- 说明如何做灰度发布和租户级配置回滚。
-- 说明如何做容量评估，例如每节点并发 session 数、平均 token 消耗、Redis / SQL QPS、IM 回调峰值。
-- 设计最小可运行部署方案和生产推荐部署方案，可以使用 Docker Compose、Kubernetes 或等价部署方式描述。
-交付物
-- 一份架构设计文档，建议 2000 – 4000 字。
-- 一张系统架构图，展示 Gateway、Worker、Channel Adapter、Storage Adapter、Filter、Telemetry、数据库和 IM 平台之间的
-关系。
-- 一张核心时序图，展示“企业微信用户发消息 → Agent 执行 → Tool 调用 → Session / Memory 写入 → IM 回复”的完整链路。
-- 一份数据模型设计，包含核心表结构或 JSON schema。
-- 一份数据同步和幂等策略说明。
-- 一份多后端适配方案，说明 Redis / SQL / 向量库 / 对象存储分别适合存什么。
-- 一份风险清单，列出至少 8 个生产风险及对应缓解措施。 
-- 一份基于该设计的github实现的代码 
-
-## 题目难点
-- 多租户隔离不是只加一个 tenant_id 字段，还涉及配置、权限、密钥、数据、日志、工具和成本隔离。
-- 节点化部署要求 Agent Worker 尽量无状态，但 Agent 又天然依赖 Session、Memory、Summary 和工具上下文，需要设计可靠的
-共享状态层。
-- IM 通道存在消息乱序、重复投递、响应超时、长度限制和身份映射问题，不能简单等同于 HTTP chat API。
-- 不同后端的数据一致性能力不同，Redis、SQL、向量库、对象存储无法用同一种同步策略处理。
-- Agent 执行链路包含模型、工具、MCP、知识库、沙箱和外部系统，监控和审计必须跨组件串联。 
-- 企业级平台必须考虑灰度、回滚、租户级限流、成本控制和合规审计。 
-
-## 验收标准
-1.架构方案必须覆盖多租户、节点化部署、数据同步、多后端支持、IM 接入、治理监控和故障恢复。
-2.数据模型必须能表达 tenant、agent、channel binding、session、event、memory、summary、audit log 的关系。
-3.必须说明至少两种 IM 通道的接入差异，其中至少包含微信或企业微信。
-4.必须说明至少三类后端的数据存储和同步策略，例如 Redis、SQL、向量库或对象存储。
-5.必须给出一条完整消息链路的时序说明，包含 trace_id 或 request_id 如何贯穿链路。 
-6.必须列出至少 8 个生产风险和缓解措施。 
-7.方案需要明确哪些能力可直接复用 tRPC-Agent-Python，哪些需要新增平台层模块。
-
-## 代码目录
-
-```txt
-|-- README.md  # 说明文档,包含设计, 安装,使用
-|-- build.sh   # 开发的时候,用于构建项目
-|-- clean.sh   # 清理当前项目的中间产物 
-|-- coverage.sh # 运行单测覆盖率 
-|-- data     # 存储服务需要的数据文件夹
-|-- docs    # 各模块的说明文档目录 
-|-- format.sh # 格式化项目代码风格
-|-- lint_flake8.sh # 格式化项目代码风格
-|-- start.sh  # 运行脚本可以启动服务 
-|-- stop.sh  # 运行脚本可以停止服务 
-`-- trpc_service # 源码项目
-    |-- _cli.py # cli 可以直接命令行运行
-    |-- agent   # agent 的源码
-    |-- channels # 对接im 的channel
-    |-- config   # 需要的配置 
-    |-- log   # 日志代码,可以设置日志文件级别的操作
-    |-- metrics # 监控
-    |-- skill # 可以运行的skill文件
-    |-- tenant # 多租户的代码 
-    |-- tool # 需要使用的tool
-    |-- version.py # 版本
-    |-- web # 提供网页版本页面可以访问服务
-    `-- workspace # 工作目录,包含本地,容器等沙箱环境
+```text
+企业微信 / 微信客服 / 钉钉 / 飞书 / QQ
+                    │ Webhook
+                    ▼
+            Gateway + Channel Adapter
+          验签、解析、幂等、租户限流、快速 ACK
+                    │
+          ┌─────────┴─────────┐
+          │ 进程内调用         │ Redis Streams
+          ▼                   ▼
+       TenantWorker       Worker 集群
+          │                   │
+          └──── Agent / Filter / Tool ────┐
+                                          │
+                    ┌────────────┬───────┼──────────┬─────────────┐
+                    ▼            ▼       ▼          ▼             ▼
+             Session/Memory   Knowledge Artifact Audit/Config OpenTelemetry
+              Redis/MySQL      Qdrant   S3/Local     MySQL
 ```
+
+Gateway 和 Worker 不保存租户会话状态。会话与记忆通过共享 Redis 或 MySQL 后端访问，因此 Worker 可以水平扩展而不要求 sticky session。租户配置、工具权限、预算、HITL 确认、审计和脱敏由服务层实现。
+
+详细资料：
+
+- [架构与模块设计](docs/enterprise/DESIGN.md)
+- [最小可运行与生产部署](docs/enterprise/DEPLOYMENT.md)
+- [租户接入指南](docs/enterprise/ONBOARDING.md)
+- [多后端适配方案](docs/enterprise/BACKEND_ADAPTERS.md)
+- [数据模型设计](docs/enterprise/DATA_MODEL.md)
+- [数据同步与幂等策略](docs/enterprise/SYNC_AND_IDEMPOTENCY.md)
+- [企业监控链路与指标调试](docs/enterprise/METRICS.md)
+- [验收测试方案](docs/enterprise/ACCEPTANCE_TEST_PLAN.md)
+- [架构演进与运维手册](docs/enterprise/ARCHITECTURE_EVOLUTION.md)
+- [实现审计与生产差距](docs/enterprise/IMPLEMENTATION_AUDIT.md)
+- [完整方案与数据模型](docs/SUBMISSION_PROPOSAL.md)
+
+## 代码结构
+
+```text
+.
+├── README.md                  # 设计、安装和使用说明
+├── build.sh                   # 构建 wheel/sdist
+├── clean.sh                   # 清理构建、缓存和覆盖率产物
+├── coverage.sh                # 运行单测和覆盖率门禁
+├── data/                      # 数据库 schema 等服务数据
+├── deploy/                    # Docker Compose 与 Kubernetes 清单
+├── docs/                      # 架构、部署和模块文档
+├── format.sh                  # YAPF 格式化
+├── lint_flake8.sh             # Flake8 静态检查
+├── start.sh                   # 启动最小 Compose 环境
+├── stop.sh                    # 停止 Compose 环境并保留数据卷
+├── tests/service/             # 服务层测试
+└── trpc_service/
+    ├── _cli.py                # trpc-service 命令行入口
+    ├── agent/                 # Worker、任务队列、锁、执行结果和模型降级
+    ├── channels/              # IM Channel Adapter
+    ├── config/                # 配置模型与加载入口
+    ├── log/                   # 审计日志、持久化和敏感信息遮罩
+    ├── metrics/               # 指标与 OpenTelemetry
+    ├── skill/                 # 服务自定义 Skill 扩展位置
+    ├── tenant/                # 多租户模型、配置管理和持久化
+    ├── tool/                  # 权限、预算、HITL 和输出脱敏
+    ├── version.py             # 服务版本
+    ├── web/                   # Gateway、Admin API 和 FastAPI 装配
+    └── workspace/             # Session/Memory/Vector/Object 后端路由与迁移
+```
+
+`trpc_agent_sdk/` 不属于本仓库源码。代码中的 `from trpc_agent_sdk...` 都来自外部 `trpc-agent-py` 依赖。
+
+## 安装
+
+要求 Python 3.10+。
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e .
+```
+
+开发和测试依赖：
+
+```bash
+python -m pip install -r requirements-test.txt
+```
+
+## 本地运行
+
+准备模型密钥和租户配置：
+
+```bash
+export TRPC_SERVICE_MODEL_API_KEY='<model-api-key>'
+export TRPC_SERVICE_TENANTS_CONFIG="$PWD/deploy/tenants.yaml"
+export TRPC_SERVICE_ADMIN_API_KEY='<admin-api-key>'
+export TRPC_SERVICE_TENANT_CONFIG_ENCRYPTION_KEY='<stable-random-secret>'
+```
+
+直接运行 Gateway：
+
+```bash
+trpc-service --host 0.0.0.0 --port 8080
+```
+
+也可以不安装命令入口：
+
+```bash
+python -m trpc_service._cli --host 0.0.0.0 --port 8080
+```
+
+主要端点：
+
+- `GET /healthz`：健康检查；
+- `POST /webhook/{tenant_id}/{channel}`：IM webhook；
+- `GET /admin/ui`：管理页面；
+- `/admin/*`：租户、审计和指标管理 API。
+
+真实 webhook 必须使用相应 IM 平台的签名和消息格式。
+
+## Docker Compose
+
+最小环境包括 Gateway、Worker、Redis 和 MySQL：
+
+```bash
+./start.sh
+curl --fail http://127.0.0.1:8080/healthz
+./stop.sh
+```
+
+`stop.sh` 默认保留命名卷。如果只需要低流量单进程验证，可关闭 Redis Streams Worker：
+
+```bash
+TRPC_SERVICE_QUEUE_ENABLED=0 docker compose \
+  -f deploy/docker-compose.minimal.yml \
+  up --build gateway
+```
+
+生产环境推荐将 Gateway 与 Worker 分开扩缩容，并使用高可用 Redis、MySQL、Qdrant、S3 兼容对象存储、Secret 管理和 OpenTelemetry Collector；完整 Kubernetes 方案见[部署文档](docs/enterprise/DEPLOYMENT.md)。
+
+## 开发与验证
+
+```bash
+./format.sh
+./lint_flake8.sh
+./coverage.sh
+./build.sh
+```
+
+提交前还必须检查增量覆盖率：
+
+```bash
+diff-cover coverage.xml --fail-under=85
+```
+
+完整服务层 CI 可运行：
+
+```bash
+SERVICE_PYTHON=/path/to/python ./scripts/service_ci.sh
+```
+
+`coverage.sh` 对 `trpc_service` 执行 95% 总行覆盖率门禁；`diff-cover` 对本次变更执行至少 85% 的增量覆盖率门禁。
+
+## 构建与依赖边界
+
+```bash
+./build.sh
+python -m pip install dist/trpc_agent_service-*.whl
+python -c "import trpc_agent_sdk, trpc_service; print('ok')"
+```
+
+构建产物只包含 `trpc_service`。安装 wheel 时，包管理器会根据 `pyproject.toml` 自动安装兼容版本的 `trpc-agent-py`，避免本项目长期维护一份容易与上游分叉的 SDK 副本。

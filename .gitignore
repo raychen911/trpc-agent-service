@@ -2,7 +2,17 @@
 .vscode
 .DS_Store
 *.lock
+# npm ci requires this lockfile; keep it even though other generated lock files
+# are ignored by the upstream repository defaults.
+!package-lock.json
+!**/package-lock.json
 *.log
+
+# Local secrets and environment overrides; keep only *.example templates.
+.env
+.env.*
+!.env.example
+!**/.env.example
 
 *.egg-info
 
@@ -12,15 +22,37 @@ dist
 venv
 venv*
 __pycache__
+*.pyc
+
+# Generated frontend output and local tool state.
+.next
+.vinext
+.wrangler
+node_modules
+
+# Local frontend prototypes; the tracked Admin UI lives under trpc_service/web/admin.
+/MyTestUserWeb/
+/MyTestWeb/
 
 .coverage
 htmlcov
 cov.tmp
 coverage.xml
+coverage-*.xml
 .pytest_cache
+.mypy_cache
+.ruff_cache
+.tox
+.nox
 
-node_modules
-package-lock.json
+# Local runtime databases, process files and editor scratch files.
+*.db
+*.sqlite
+*.sqlite3
+*.pid
+*.tmp
+*.swp
+
 pyrightconfig.json
 
 # spec-workflow tool artifacts

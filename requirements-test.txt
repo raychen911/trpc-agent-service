@@ -1,0 +1,11 @@
+-r requirements.txt
+
+build
+diff-cover
+fakeredis
+flake8
+pytest
+pytest-asyncio
+pytest-cov
+qdrant-client>=1.15,<2
+yapf

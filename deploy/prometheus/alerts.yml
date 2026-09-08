@@ -1,0 +1,49 @@
+groups:
+  - name: trpc-agent
+    rules:
+      - alert: AgentCallbackErrors
+        expr: sum(rate(agent_callback_total{outcome!~"success|duplicate|challenge"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Agent Gateway callback errors detected
+      - alert: AgentDeadLetterQueueGrowth
+        expr: increase(agent_queue_dlq_total[10m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: Agent tasks entered the dead-letter queue
+      - alert: AgentWorkerUnavailable
+        expr: max(agent_worker_available{mode="queue"}) == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: No active Agent Worker is available
+      - alert: AgentWorkerReconnects
+        expr: increase(agent_worker_reconnect_total[10m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: Agent Worker lost and retried its Redis queue connection
+      - alert: AgentImDeliveryErrors
+        expr: sum(rate(agent_im_delivery_total{outcome="error"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Agent IM delivery errors detected
+      - alert: AgentBudgetRejections
+        expr: increase(agent_budget_rejection_total[10m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: Agent model calls were rejected by a tenant budget
+      - alert: AgentTokenBudgetNearLimit
+        expr: max by (tenant_id) (agent_budget_tokens_used) / max by (tenant_id) (agent_budget_daily_token_limit) >= 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Tenant token budget usage is at least 90 percent

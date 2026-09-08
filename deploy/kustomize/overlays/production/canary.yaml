@@ -1,0 +1,118 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-gateway-canary
+spec:
+  selector:
+    app: agent-gateway-canary
+  ports:
+    - port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-gateway-canary
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: agent-gateway-canary
+  template:
+    metadata:
+      labels:
+        app: agent-gateway-canary
+        app.kubernetes.io/part-of: trpc-agent-enterprise
+        release-track: canary
+    spec:
+      serviceAccountName: agent-runtime
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: agent
+          image: trpc-agent-enterprise:latest
+          command: ["uvicorn", "trpc_service.web.app:app", "--host", "0.0.0.0", "--port", "8080"]
+          ports:
+            - containerPort: 8080
+          env:
+            - name: TRPC_SERVICE_ENVIRONMENT
+              value: production
+            - name: TRPC_SERVICE_ROLE
+              value: gateway
+            - name: TRPC_SERVICE_TENANTS_CONFIG
+              value: /etc/agent/tenants.yaml
+            - name: TRPC_SERVICE_REDIS_URL
+              value: redis://redis:6379
+            - name: TRPC_SERVICE_MYSQL_URL
+              valueFrom:
+                secretKeyRef:
+                  name: agent-secrets
+                  key: mysql-url
+            - name: TRPC_SERVICE_MODEL_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: agent-secrets
+                  key: api-key
+            - name: TRPC_SERVICE_TENANT_CONFIG_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: agent-secrets
+                  key: tenant-config-encryption-key
+            - name: TRPC_SERVICE_ADMIN_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: agent-secrets
+                  key: admin-api-key
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: http://otel-collector:4318
+            - name: OTEL_SERVICE_NAME
+              value: trpc-agent-gateway-canary
+          envFrom:
+            - secretRef:
+                name: agent-channel-secrets
+            - secretRef:
+                name: agent-storage-secrets
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8080
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/agent
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: agent-config
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: canary-gateway-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app: agent-gateway-canary
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 8080

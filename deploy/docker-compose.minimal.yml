@@ -1,0 +1,160 @@
+# Minimal deployment for the tRPC-Agent enterprise gateway + worker.
+#
+# Redis provides queue/lock/session and MySQL provides durable configuration,
+# summary and audit data. Gateway and Worker can be scaled independently.
+#
+#   docker compose -f docker-compose.minimal.yml up
+#
+# Webhook endpoint: POST http://localhost:8080/webhook/{tenant_id}/{channel}
+
+services:
+  gateway:
+    restart: unless-stopped
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    command: ["uvicorn", "trpc_service.web.app:app", "--host", "0.0.0.0", "--port", "8080"]
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      - TRPC_SERVICE_ROLE=gateway
+      - TRPC_SERVICE_TENANTS_CONFIG=/app/tenants.yaml
+      - TRPC_SERVICE_MODEL_API_KEY=${TRPC_SERVICE_MODEL_API_KEY:-}
+      - TRPC_SERVICE_QQ_GREETING_APP_ID=${TRPC_SERVICE_QQ_GREETING_APP_ID:-}
+      - TRPC_SERVICE_QQ_GREETING_APP_SECRET=${TRPC_SERVICE_QQ_GREETING_APP_SECRET:-}
+      - TRPC_SERVICE_QQ_CHAT_APP_ID=${TRPC_SERVICE_QQ_CHAT_APP_ID:-}
+      - TRPC_SERVICE_QQ_CHAT_APP_SECRET=${TRPC_SERVICE_QQ_CHAT_APP_SECRET:-}
+      - TRPC_SERVICE_REDIS_URL=redis://redis:6379/0
+      - TRPC_SERVICE_MYSQL_URL=mysql+aiomysql://agent:agent_local@mysql:3306/trpc_agent
+      - TRPC_SERVICE_TENANT_CONFIG_ENCRYPTION_KEY=${TRPC_SERVICE_TENANT_CONFIG_ENCRYPTION_KEY:?set a stable key}
+      - TRPC_SERVICE_QUEUE_ENABLED=1
+      - TRPC_SERVICE_ADMIN_API_KEY=${TRPC_SERVICE_ADMIN_API_KEY:-local-admin}
+      - TRPC_SERVICE_DEEPSEEK_INPUT_PRICE_PER_MTOK=${TRPC_SERVICE_DEEPSEEK_INPUT_PRICE_PER_MTOK:-0.22}
+      - TRPC_SERVICE_DEEPSEEK_OUTPUT_PRICE_PER_MTOK=${TRPC_SERVICE_DEEPSEEK_OUTPUT_PRICE_PER_MTOK:-0.66}
+      # Disabled by default. When enabled, this endpoint runs only the
+      # in-process Worker and never calls an IM provider for the reply.
+      - TRPC_SERVICE_TEST_API_ENABLED=${TRPC_SERVICE_TEST_API_ENABLED:-0}
+      - TRPC_SERVICE_TEST_API_KEY=${TRPC_SERVICE_TEST_API_KEY:-}
+    volumes:
+      - ./tenants.yaml:/app/tenants.yaml:ro
+      - artifact-data:/app/data/objects
+    depends_on:
+      redis:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/readyz', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # Standalone worker: consumes tasks from Redis Streams. Only needed when
+  # TRPC_SERVICE_REDIS_URL is set (decoupled mode); omit the worker in in-process mode.
+  worker:
+    restart: unless-stopped
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    command: ["python", "-m", "trpc_service.agent.run_worker"]
+    environment:
+      - TRPC_SERVICE_ROLE=worker
+      - TRPC_SERVICE_TENANTS_CONFIG=/app/tenants.yaml
+      - TRPC_SERVICE_MODEL_API_KEY=${TRPC_SERVICE_MODEL_API_KEY:-}
+      - TRPC_SERVICE_QQ_GREETING_APP_ID=${TRPC_SERVICE_QQ_GREETING_APP_ID:-}
+      - TRPC_SERVICE_QQ_GREETING_APP_SECRET=${TRPC_SERVICE_QQ_GREETING_APP_SECRET:-}
+      - TRPC_SERVICE_QQ_CHAT_APP_ID=${TRPC_SERVICE_QQ_CHAT_APP_ID:-}
+      - TRPC_SERVICE_QQ_CHAT_APP_SECRET=${TRPC_SERVICE_QQ_CHAT_APP_SECRET:-}
+      - TRPC_SERVICE_REDIS_URL=redis://redis:6379/0
+      - TRPC_SERVICE_MYSQL_URL=mysql+aiomysql://agent:agent_local@mysql:3306/trpc_agent
+      - TRPC_SERVICE_TENANT_CONFIG_ENCRYPTION_KEY=${TRPC_SERVICE_TENANT_CONFIG_ENCRYPTION_KEY:?set the same stable key}
+      - TRPC_SERVICE_DURABLE_DELIVERY_ENABLED=1
+      - TRPC_SERVICE_DEEPSEEK_INPUT_PRICE_PER_MTOK=${TRPC_SERVICE_DEEPSEEK_INPUT_PRICE_PER_MTOK:-0.22}
+      - TRPC_SERVICE_DEEPSEEK_OUTPUT_PRICE_PER_MTOK=${TRPC_SERVICE_DEEPSEEK_OUTPUT_PRICE_PER_MTOK:-0.66}
+    volumes:
+      - ./tenants.yaml:/app/tenants.yaml:ro
+      - artifact-data:/app/data/objects
+    depends_on:
+      redis:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os, redis; os.kill(1, 0); assert redis.Redis.from_url(os.environ['TRPC_SERVICE_REDIS_URL']).ping()"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  outbox:
+    restart: unless-stopped
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    command: ["python", "-m", "trpc_service.agent.run_outbox"]
+    environment:
+      - TRPC_SERVICE_ROLE=outbox
+      - TRPC_SERVICE_TENANTS_CONFIG=/app/tenants.yaml
+      - TRPC_SERVICE_REDIS_URL=redis://redis:6379/0
+      - TRPC_SERVICE_MYSQL_URL=mysql+aiomysql://agent:agent_local@mysql:3306/trpc_agent
+      - TRPC_SERVICE_TENANT_CONFIG_ENCRYPTION_KEY=${TRPC_SERVICE_TENANT_CONFIG_ENCRYPTION_KEY:?set the same stable key}
+      - TRPC_SERVICE_QQ_GREETING_APP_ID=${TRPC_SERVICE_QQ_GREETING_APP_ID:-}
+      - TRPC_SERVICE_QQ_GREETING_APP_SECRET=${TRPC_SERVICE_QQ_GREETING_APP_SECRET:-}
+      - TRPC_SERVICE_QQ_CHAT_APP_ID=${TRPC_SERVICE_QQ_CHAT_APP_ID:-}
+      - TRPC_SERVICE_QQ_CHAT_APP_SECRET=${TRPC_SERVICE_QQ_CHAT_APP_SECRET:-}
+    volumes:
+      - ./tenants.yaml:/app/tenants.yaml:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  migrate:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    command: ["python", "-m", "trpc_service.migrations.run", "--schema-file", "/src/data/schema.mysql.sql", "--migrations-dir", "/src/data/migrations"]
+    environment:
+      - TRPC_SERVICE_MYSQL_URL=mysql+pymysql://agent:agent_local@mysql:3306/trpc_agent
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: "no"
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_USER: agent
+      MYSQL_PASSWORD: agent_local
+      MYSQL_DATABASE: trpc_agent
+      MYSQL_ROOT_PASSWORD: root_local_only
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot_local_only"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  redis-data:
+  mysql-data:
+  artifact-data:
