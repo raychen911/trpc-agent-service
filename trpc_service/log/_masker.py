@@ -92,25 +92,32 @@ def _redact_log_record(record: logging.LogRecord) -> logging.LogRecord:
     """Redact every standard text-bearing part of a log record."""
     if not isinstance(record.msg, str):
         record.msg = _mask_structured_value(record.msg)
-    if isinstance(record.args, Mapping):
+    preserve_access_args = (record.name.startswith("uvicorn.access") and isinstance(record.args, tuple)
+                            and len(record.args) == 5)
+    if preserve_access_args:
+        # Uvicorn's AccessFormatter unpacks these five positional values after
+        # filters run. Redact each value but retain the tuple structure.
+        record.msg = SecretMasker.mask_value(record.msg)
         record.args = _mask_structured_value(record.args)
-
-    try:
-        rendered_message = record.getMessage()
-    except Exception:  # noqa: BLE001 - logging formatting can raise arbitrary errors
-        # Logging should not break application control flow. Drop arguments
-        # that could not be rendered safely and retain a redacted template.
-        try:
-            fallback_message = str(record.msg)
-        except Exception:  # noqa: BLE001 - hostile/lazy message objects are allowed
-            fallback_message = "<unformattable log message>"
-        record.msg = SecretMasker.mask_value(fallback_message)
-        record.args = ()
     else:
-        # Rendering first keeps %-style positional and mapping arguments valid
-        # while allowing patterns such as ``token=%s`` to be redacted safely.
-        record.msg = SecretMasker.mask_value(rendered_message)
-        record.args = ()
+        if isinstance(record.args, Mapping):
+            record.args = _mask_structured_value(record.args)
+        try:
+            rendered_message = record.getMessage()
+        except Exception:  # noqa: BLE001 - logging formatting can raise arbitrary errors
+            # Logging should not break application control flow. Drop arguments
+            # that could not be rendered safely and retain a redacted template.
+            try:
+                fallback_message = str(record.msg)
+            except Exception:  # noqa: BLE001 - hostile/lazy message objects are allowed
+                fallback_message = "<unformattable log message>"
+            record.msg = SecretMasker.mask_value(fallback_message)
+            record.args = ()
+        else:
+            # Rendering first keeps %-style positional and mapping arguments valid
+            # while allowing patterns such as ``token=%s`` to be redacted safely.
+            record.msg = SecretMasker.mask_value(rendered_message)
+            record.args = ()
 
     if record.exc_info:
         if record.exc_text is None:

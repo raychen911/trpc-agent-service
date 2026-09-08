@@ -39,6 +39,19 @@ data:
               severity: critical
             annotations:
               summary: Agent tasks entered the dead-letter queue
+          - alert: AgentWorkerUnavailable
+            expr: max(agent_worker_available{mode="queue"}) == 0
+            for: 30s
+            labels:
+              severity: critical
+            annotations:
+              summary: No active Agent Worker is available
+          - alert: AgentWorkerReconnects
+            expr: increase(agent_worker_reconnect_total[10m]) > 0
+            labels:
+              severity: warning
+            annotations:
+              summary: Agent Worker lost and retried its Redis queue connection
           - alert: AgentImDeliveryErrors
             expr: sum(rate(agent_im_delivery_total{outcome="error"}[5m])) > 0
             for: 5m

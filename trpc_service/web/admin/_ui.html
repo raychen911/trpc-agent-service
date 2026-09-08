@@ -466,6 +466,7 @@
       const challenges = totalCounter("agent_callback_total", "challenge");
       const queue = totalCounter("agent_callback_enqueue_total");
       const worker = totalCounter("agent_worker_task_total");
+      const workerUnavailable = totalCounter("agent_worker_unavailable_total");
       const requests = totalCounter("agent_requests_total");
       const inputTokens = totalCounter("agent_llm_input_tokens_total");
       const outputTokens = totalCounter("agent_llm_output_tokens_total");
@@ -476,7 +477,7 @@
       const budgetCostLimit = totalGauge("agent_budget_daily_cost_limit");
       const deliveries = totalCounter("agent_im_delivery_total");
       const deliveryErrors = totalCounter("agent_im_delivery_total", "error");
-      const errors = ["error", "retry", "dead_letter"].reduce((sum, outcome) => {
+      const errors = ["error", "retry", "dead_letter", "worker_unavailable", "worker_healthcheck_failed"].reduce((sum, outcome) => {
         return sum + (state.metrics.counters || [])
           .filter((item) => item.attributes?.outcome === outcome)
           .reduce((total, item) => total + Number(item.value || 0), 0);
@@ -493,7 +494,7 @@
       list.appendChild(kpi("消息回调", formatNumber(messages), `outcome=success · 平台总数 ${formatNumber(callbacks)}`));
       list.appendChild(kpi("验证回调", formatNumber(challenges), "outcome=challenge"));
       list.appendChild(kpi("入队总数", formatNumber(queue), "写入 Redis 队列"));
-      list.appendChild(kpi("Worker 处理", formatNumber(worker), "消费到的任务"));
+      list.appendChild(kpi("Worker 处理", formatNumber(worker), `无可用 Worker 拒绝 ${formatNumber(workerUnavailable)} 次`, workerUnavailable > 0));
       list.appendChild(kpi("Agent 执行", formatNumber(requests), "模型 turn 次数"));
       list.appendChild(kpi("Token 消耗", formatNumber(inputTokens + outputTokens), `输入 ${formatNumber(inputTokens)} · 输出 ${formatNumber(outputTokens)}`));
       list.appendChild(kpi("模型成本", `$${formatNumber(modelCost, 6)}`, "按已配置模型单价估算"));

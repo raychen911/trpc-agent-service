@@ -45,6 +45,12 @@ METRIC_DEFINITIONS: dict[str, MetricDefinition] = {
     MetricDefinition("histogram", "Stream task processing duration.", "ms", DURATION_BUCKETS_MS),
     "agent_worker_retry_total":
     MetricDefinition("counter", "Number of stream task retries."),
+    "agent_worker_reconnect_total":
+    MetricDefinition("counter", "Number of Worker queue reconnect attempts."),
+    "agent_worker_unavailable_total":
+    MetricDefinition("counter", "Number of callbacks rejected because no Worker was active."),
+    "agent_worker_available":
+    MetricDefinition("gauge", "Whether at least one queue Worker is currently active."),
     "agent_queue_dlq_total":
     MetricDefinition("counter", "Number of tasks moved to the dead-letter stream."),
     "agent_result_cache_total":

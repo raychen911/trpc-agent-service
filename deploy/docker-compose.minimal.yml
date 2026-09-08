@@ -9,6 +9,7 @@
 
 services:
   gateway:
+    restart: unless-stopped
     build:
       context: ..
       dockerfile: deploy/Dockerfile
@@ -22,7 +23,7 @@ services:
       - QQBOT_APP_SECRET=${QQBOT_APP_SECRET:-}
       - REDIS_URL=redis://redis:6379/0
       - MYSQL_URL=mysql+aiomysql://agent:agent_local@mysql:3306/trpc_agent
-      - TENANT_CONFIG_ENCRYPTION_KEY=${TENANT_CONFIG_ENCRYPTION_KEY:-local-compose-change-me}
+      - TENANT_CONFIG_ENCRYPTION_KEY=${TENANT_CONFIG_ENCRYPTION_KEY:?set a stable TENANT_CONFIG_ENCRYPTION_KEY}
       - AGENT_QUEUE_ENABLED=${AGENT_QUEUE_ENABLED:-1}
       - ADMIN_API_KEY=${ADMIN_API_KEY:-local-admin}
     volumes:
@@ -34,7 +35,7 @@ services:
       mysql:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz', timeout=2)"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/readyz', timeout=2)"]
       interval: 10s
       timeout: 3s
       retries: 5
@@ -42,6 +43,7 @@ services:
   # Standalone worker: consumes tasks from Redis Streams. Only needed when
   # REDIS_URL is set (decoupled mode); ignored in single-node in-process mode.
   worker:
+    restart: unless-stopped
     build:
       context: ..
       dockerfile: deploy/Dockerfile
@@ -53,7 +55,7 @@ services:
       - QQBOT_APP_SECRET=${QQBOT_APP_SECRET:-}
       - REDIS_URL=redis://redis:6379/0
       - MYSQL_URL=mysql+aiomysql://agent:agent_local@mysql:3306/trpc_agent
-      - TENANT_CONFIG_ENCRYPTION_KEY=${TENANT_CONFIG_ENCRYPTION_KEY:-local-compose-change-me}
+      - TENANT_CONFIG_ENCRYPTION_KEY=${TENANT_CONFIG_ENCRYPTION_KEY:?set the same stable TENANT_CONFIG_ENCRYPTION_KEY}
     volumes:
       - ./tenants.yaml:/app/tenants.yaml:ro
       - artifact-data:/app/data/objects
@@ -62,6 +64,12 @@ services:
         condition: service_healthy
       mysql:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os, redis; os.kill(1, 0); assert redis.Redis.from_url(os.environ['REDIS_URL']).ping()"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
 
   redis:
     image: redis:7-alpine

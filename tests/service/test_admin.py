@@ -87,6 +87,8 @@ def test_admin_ui_is_local_read_only_console_and_does_not_embed_secret():
     assert "运行概览" in response.text
     assert "Gateway 回调" in response.text
     assert "Worker 消费" in response.text
+    assert 'totalCounter("agent_worker_unavailable_total")' in response.text
+    assert "无可用 Worker 拒绝" in response.text
     assert "回复成功率" in response.text
     assert "Token 消耗" in response.text
     assert 'totalCounter("agent_callback_total", "success")' in response.text

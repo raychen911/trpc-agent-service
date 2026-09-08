@@ -54,6 +54,9 @@ Pod，也共享同一个 `trace_id`。`trace_id`、`message_id`、`session_id` �
 | `agent_worker_task_total` | Counter | tenant、channel、outcome | Worker 每次任务投递尝试 |
 | `agent_worker_task_duration_ms` | Histogram | tenant、channel、outcome | 单次消费处理耗时 |
 | `agent_worker_retry_total` | Counter | tenant、channel、error_type | 未 ACK、等待重投的任务数 |
+| `agent_worker_reconnect_total` | Counter | error_type | Worker Redis 队列连接恢复次数 |
+| `agent_worker_unavailable_total` | Counter | tenant、channel、reason | 因无可用 Worker 而拒绝的回调数 |
+| `agent_worker_available` | Gauge | mode | Gateway 最近检查时是否存在有效 Worker 心跳 |
 | `agent_queue_dlq_total` | Counter | tenant、channel | 超过最大尝试次数后进入 DLQ 的任务数 |
 | `agent_result_cache_total` | Counter | tenant、channel、outcome | 结果缓存 hit/miss，用于避免回复失败时重跑 Agent |
 | `agent_session_lock_duration_ms` | Histogram | tenant、phase、outcome | 同一 Session 锁的等待和持有耗时 |

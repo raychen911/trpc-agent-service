@@ -11,7 +11,9 @@ import asyncio
 import json
 
 import fakeredis.aioredis as faioredis
+import pytest
 from fastapi.testclient import TestClient
+from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from trpc_agent_sdk.agents import BaseAgent
@@ -254,6 +256,67 @@ def test_gateway_releases_idempotency_when_enqueue_fails():
     assert _has_attributes(worker.metrics, "agent_callback_enqueue_total", outcome="success")
 
 
+def test_gateway_rejects_callback_until_a_queue_worker_is_active():
+    manager = TenantConfigManager()
+    _make_tenant(manager)
+    worker = TenantWorker(
+        manager=manager,
+        agent_factory=lambda tenant: EchoAgent(name="t_a"),
+        session_service_factory=lambda tenant: InMemorySessionService(),
+    )
+    adapter = FakeAdapter()
+    registry = ChannelRegistry(factories={"fake": lambda cfg: adapter})
+
+    class AvailabilityQueue:
+
+        def __init__(self):
+            self.available = False
+            self.enqueued = []
+
+        async def has_active_workers(self):
+            if self.available is None:
+                raise RedisConnectionError("health check unavailable")
+            return self.available
+
+        async def enqueue(self, task):
+            self.enqueued.append(task)
+            return "id"
+
+    queue = AvailabilityQueue()
+    app = create_gateway_app(manager=manager, worker=worker, registry=registry, queue=queue)
+    client = TestClient(app)
+    payload = {"message_id": "wait-for-worker", "text": "hi"}
+
+    assert client.get("/healthz").status_code == 200
+    assert client.get("/readyz").status_code == 503
+    unavailable = client.post("/webhook/t_a/fake", json=payload)
+    assert unavailable.status_code == 503
+    assert unavailable.json() == {"error": "worker_unavailable"}
+    assert queue.enqueued == []
+    assert _has_attributes(worker.metrics,
+                           "agent_worker_unavailable_total",
+                           tenant_id="t_a",
+                           channel="fake",
+                           reason="worker_unavailable")
+
+    queue.available = True
+    assert client.get("/readyz").status_code == 200
+    assert client.post("/webhook/t_a/fake", json=payload).status_code == 200
+    assert len(queue.enqueued) == 1
+
+    queue.available = None
+    assert client.get("/readyz").status_code == 503
+    failed_check = client.post(
+        "/webhook/t_a/fake",
+        json={
+            "message_id": "healthcheck-error",
+            "text": "hi"
+        },
+    )
+    assert failed_check.status_code == 503
+    assert failed_check.json() == {"error": "worker_healthcheck_failed"}
+
+
 # ------------------------------------------------------------ StreamWorker consume
 
 
@@ -317,6 +380,18 @@ async def test_stream_queue_uses_unique_consumers_and_can_heartbeat_pending_task
     assert await second.touch(message_id) is False
     pending = await client.xpending_range("agent:tasks", "agent-workers", message_id, message_id, 1)
     assert pending[0]["consumer"] == first.consumer_name
+
+
+async def test_stream_queue_publishes_and_removes_worker_liveness():
+    client = faioredis.FakeRedis(decode_responses=True)
+    worker_queue = StreamQueue(client=client, consumer="worker-one")
+    gateway_queue = StreamQueue(client=client, consumer="gateway")
+
+    assert await gateway_queue.has_active_workers() is False
+    await worker_queue.publish_worker_heartbeat(ttl_seconds=30)
+    assert await gateway_queue.has_active_workers() is True
+    await worker_queue.remove_worker_heartbeat()
+    assert await gateway_queue.has_active_workers() is False
 
 
 async def test_stream_worker_heartbeats_while_agent_turn_is_running():
@@ -405,6 +480,54 @@ async def test_stream_worker_stops_when_pending_task_ownership_is_lost():
     assert await stream_worker._process("1-0", task.model_dump_json()) is False
     assert queue.acked == []
     assert _has_attributes(worker.metrics, "agent_worker_task_total", outcome="ownership_lost")
+
+
+async def test_stream_worker_recovers_queue_connection_errors(monkeypatch):
+
+    class RecoveryQueue:
+
+        def __init__(self):
+            self.ensure_calls = 0
+            self.heartbeat_calls = 0
+            self.remove_calls = 0
+
+        async def ensure_group(self):
+            self.ensure_calls += 1
+
+        async def publish_worker_heartbeat(self, ttl_seconds):
+            self.heartbeat_calls += 1
+
+        async def remove_worker_heartbeat(self):
+            self.remove_calls += 1
+
+    class Worker:
+        metrics = EnterpriseMetrics(meter=False)
+
+    queue = RecoveryQueue()
+    stream_worker = StreamWorker(
+        queue=queue,
+        worker=Worker(),
+        registry=object(),
+        reconnect_delay_seconds=0,
+    )
+    run_calls = 0
+
+    async def run_once(*, count, block):
+        nonlocal run_calls
+        run_calls += 1
+        if run_calls == 1:
+            raise RedisConnectionError("redis unavailable")
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(stream_worker, "run_once", run_once)
+
+    with pytest.raises(asyncio.CancelledError):
+        await stream_worker.run(block=5000)
+
+    assert queue.ensure_calls == 2
+    assert queue.heartbeat_calls == 2
+    assert queue.remove_calls == 1
+    assert _has_attributes(Worker.metrics, "agent_worker_reconnect_total", error_type="ConnectionError")
 
 
 async def test_failed_task_is_not_acked_and_is_reclaimed():

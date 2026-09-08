@@ -95,6 +95,7 @@ class StreamQueue:
             raise ValueError("StreamQueue requires redis_url or client")
         self._stream = stream
         self._group = group
+        self._worker_heartbeat_key = f"{stream}:{group}:worker-heartbeats"
         instance = os.environ.get("AGENT_WORKER_ID") or os.environ.get("OTEL_SERVICE_INSTANCE_ID")
         instance = instance or os.environ.get("HOSTNAME") or socket.gethostname()
         self._consumer = consumer or f"worker-{instance}-{os.getpid()}-{uuid4().hex[:8]}"
@@ -201,6 +202,40 @@ class StreamQueue:
         )
         entries = result[1] if result and len(result) > 1 else []
         return [(self._stream, entries)] if entries else []
+
+    async def publish_worker_heartbeat(self, ttl_seconds: float = 30.0) -> None:
+        """Publish this consumer's lease-like liveness record for Gateways."""
+        now_ms = int(time.time() * 1000)
+        max_age_ms = max(1, int(ttl_seconds * 1000))
+
+        async def publish() -> None:
+            async with self._client.pipeline(transaction=True) as pipe:
+                pipe.zadd(self._worker_heartbeat_key, {self._consumer: now_ms})
+                pipe.zremrangebyscore(self._worker_heartbeat_key, "-inf", now_ms - max_age_ms)
+                pipe.expire(self._worker_heartbeat_key, max(1, int(ttl_seconds * 2)))
+                await pipe.execute()
+
+        await self._execute("worker_heartbeat", publish())
+
+    async def has_active_workers(self, max_age_seconds: float = 30.0) -> bool:
+        """Return whether any Worker heartbeat is newer than ``max_age_seconds``."""
+        cutoff_ms = int(time.time() * 1000) - max(1, int(max_age_seconds * 1000))
+
+        async def count_active() -> int:
+            async with self._client.pipeline(transaction=True) as pipe:
+                pipe.zremrangebyscore(self._worker_heartbeat_key, "-inf", cutoff_ms)
+                pipe.zcard(self._worker_heartbeat_key)
+                result = await pipe.execute()
+                return int(result[-1])
+
+        return bool(await self._execute("worker_availability", count_active()))
+
+    async def remove_worker_heartbeat(self) -> None:
+        """Remove this consumer from the liveness set during graceful shutdown."""
+        await self._execute(
+            "worker_heartbeat_remove",
+            self._client.zrem(self._worker_heartbeat_key, self._consumer),
+        )
 
     async def delivery_count(self, message_id: str) -> int:
         """Return the consumer-group delivery count for one pending entry."""

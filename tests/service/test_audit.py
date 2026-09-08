@@ -174,6 +174,29 @@ def test_redacting_log_filter_masks_record():
     assert "abc123" not in record.msg
 
 
+def test_redacting_log_filter_preserves_uvicorn_access_formatter_arguments():
+    from uvicorn.logging import AccessFormatter
+    from trpc_service.log import RedactingLogFilter
+
+    record = logging.LogRecord(
+        name="uvicorn.access",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg='%s - "%s %s HTTP/%s" %d',
+        args=("127.0.0.1:1234", "POST", "/callback?token=access-secret", "1.1", 200),
+        exc_info=None,
+    )
+
+    assert RedactingLogFilter().filter(record) is True
+    output = AccessFormatter('%(client_addr)s - "%(request_line)s" %(status_code)s').format(record)
+
+    assert len(record.args) == 5
+    assert "access-secret" not in output
+    assert "POST" in output
+    assert "200" in output
+
+
 def test_redacting_log_filter_masks_parameterized_and_structured_messages():
     from trpc_service.log import RedactingLogFilter
 

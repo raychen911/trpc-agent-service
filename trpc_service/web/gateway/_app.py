@@ -178,9 +178,37 @@ def create_gateway_app(
 
     app = FastAPI(title="tRPC-Agent Enterprise Gateway")
 
+    async def _worker_status() -> tuple[bool, str]:
+        if queue is None:
+            metrics.set_gauge("agent_worker_available", 1, mode="in_process")
+            return True, "in_process"
+        checker = getattr(queue, "has_active_workers", None)
+        if not callable(checker):
+            # Backwards compatibility for custom queue implementations. The
+            # built-in Redis StreamQueue always exposes the liveness check.
+            return True, "unsupported"
+        try:
+            available = bool(await checker())
+        except Exception:  # noqa: BLE001 - readiness must not expose Redis details
+            metrics.set_gauge("agent_worker_available", 0, mode="queue")
+            logger.exception("failed to check queue Worker availability")
+            return False, "worker_healthcheck_failed"
+        metrics.set_gauge("agent_worker_available", int(available), mode="queue")
+        return available, "ready" if available else "worker_unavailable"
+
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/readyz")
+    async def readyz() -> JSONResponse:
+        available, reason = await _worker_status()
+        status_code = 200 if available else 503
+        return JSONResponse({
+            "status": "ready" if available else "not_ready",
+            "reason": reason
+        },
+                            status_code=status_code)
 
     async def _handle_webhook(tenant_id: str, channel: str, request: Request) -> tuple[JSONResponse, str]:
         tenant = worker.resolve_tenant(tenant_id)
@@ -231,6 +259,16 @@ def create_gateway_app(
         }
         if binding.agent_app_id is not None:
             inbound.metadata["agent_app_id"] = binding.agent_app_id
+
+        workers_available, worker_reason = await _worker_status()
+        if not workers_available:
+            metrics.increment(
+                "agent_worker_unavailable_total",
+                tenant_id=tenant_id,
+                channel=channel,
+                reason=worker_reason,
+            )
+            return JSONResponse({"error": worker_reason}, status_code=503), worker_reason
 
         dedup_key = f"{tenant_id}:{channel}:{inbound.message_id}"
         with operation_span("idempotency.check", **{"tenant.id": tenant_id, "channel": channel}):

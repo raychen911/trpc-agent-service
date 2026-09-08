@@ -19,6 +19,8 @@ import logging
 import time
 from contextlib import suppress
 from typing import Any
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from trpc_service.web._dispatch import reply_to_channel
 from trpc_service.web._dispatch import run_turn
@@ -42,6 +44,8 @@ class StreamWorker:
                  registry: Any,
                  min_idle_ms: int = 60000,
                  heartbeat_interval_ms: int | None = None,
+                 worker_heartbeat_ttl_seconds: float = 30.0,
+                 reconnect_delay_seconds: float = 1.0,
                  max_attempts: int = 3,
                  result_store: Any = None,
                  metrics: EnterpriseMetrics | None = None) -> None:
@@ -51,6 +55,8 @@ class StreamWorker:
         self._min_idle_ms = min_idle_ms
         self._heartbeat_interval_ms = (heartbeat_interval_ms if heartbeat_interval_ms is not None else max(
             100, min_idle_ms // 3))
+        self._worker_heartbeat_ttl_seconds = max(1.0, worker_heartbeat_ttl_seconds)
+        self._reconnect_delay_seconds = max(0.0, reconnect_delay_seconds)
         self._max_attempts = max_attempts
         self._result_store = result_store or LocalTaskResultStore()
         self._metrics = metrics or getattr(worker, "metrics", None) or get_enterprise_metrics()
@@ -195,7 +201,31 @@ class StreamWorker:
         return processed + await self._process_batches(messages)
 
     async def run(self, block: int = 5000) -> None:
-        """Blocking consumption loop (production entrypoint)."""
-        await self._queue.ensure_group()
-        while True:
-            await self.run_once(count=10, block=block)
+        """Consume forever, recovering from Redis timeout and connection loss."""
+        group_ready = False
+        effective_block = min(block, max(1, int(self._worker_heartbeat_ttl_seconds * 1000 / 3)))
+        try:
+            while True:
+                try:
+                    if not group_ready:
+                        await self._queue.ensure_group()
+                        group_ready = True
+                    publish_heartbeat = getattr(self._queue, "publish_worker_heartbeat", None)
+                    if callable(publish_heartbeat):
+                        await publish_heartbeat(self._worker_heartbeat_ttl_seconds)
+                    await self.run_once(count=10, block=effective_block)
+                except asyncio.CancelledError:
+                    raise
+                except (RedisTimeoutError, RedisConnectionError, TimeoutError, ConnectionError) as exc:
+                    group_ready = False
+                    self._metrics.increment(
+                        "agent_worker_reconnect_total",
+                        error_type=type(exc).__name__,
+                    )
+                    logger.warning("worker queue connection failed; retrying", exc_info=True)
+                    await asyncio.sleep(self._reconnect_delay_seconds)
+        finally:
+            remove_heartbeat = getattr(self._queue, "remove_worker_heartbeat", None)
+            if callable(remove_heartbeat):
+                with suppress(Exception):
+                    await remove_heartbeat()

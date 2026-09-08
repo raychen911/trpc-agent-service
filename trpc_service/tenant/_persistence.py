@@ -14,6 +14,7 @@ from typing import Optional
 from uuid import uuid4
 
 from cryptography.fernet import Fernet
+from cryptography.fernet import InvalidToken
 from pydantic import SecretStr
 from sqlalchemy import JSON
 from sqlalchemy import BigInteger
@@ -82,7 +83,13 @@ class TenantConfigCodec:
         if encrypted:
             if self._fernet is None:
                 raise ValueError("TENANT_CONFIG_ENCRYPTION_KEY is required to decrypt tenant config")
-            secrets = json.loads(self._fernet.decrypt(encrypted.encode("ascii")).decode("utf-8"))
+            try:
+                decrypted = self._fernet.decrypt(encrypted.encode("ascii"))
+            except InvalidToken as exc:
+                raise ValueError(
+                    "tenant config decryption failed: TENANT_CONFIG_ENCRYPTION_KEY does not match the key used "
+                    "to persist existing tenant secrets") from exc
+            secrets = json.loads(decrypted.decode("utf-8"))
             for dotted_path, value in secrets.items():
                 target = payload
                 parts = dotted_path.split(".")

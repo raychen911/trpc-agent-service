@@ -67,6 +67,13 @@ def test_codec_requires_key_for_secret_config():
         codec.decode(make_tenant().model_dump(mode="json"), "encrypted")
 
 
+def test_codec_reports_stable_error_for_wrong_encryption_key():
+    public, encrypted = TenantConfigCodec("original-key").encode(make_tenant())
+
+    with pytest.raises(ValueError, match="does not match the key used"):
+        TenantConfigCodec("wrong-key").decode(public, encrypted)
+
+
 def test_mysql_url_normalization():
     assert mysql_sync_url("mysql+aiomysql://u:p@db/x") == "mysql+pymysql://u:p@db/x"
     assert mysql_sync_url("mysql+asyncmy://u:p@db/x") == "mysql+pymysql://u:p@db/x"

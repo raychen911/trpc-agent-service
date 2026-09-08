@@ -37,7 +37,7 @@ spec:
             - containerPort: 8080
           readinessProbe:
             httpGet:
-              path: /healthz
+              path: /readyz
               port: 8080
             periodSeconds: 5
             timeoutSeconds: 2
@@ -147,6 +147,10 @@ spec:
               value: trpc-agent-worker
             - name: OTEL_METRIC_EXPORT_INTERVAL
               value: "15000"
+            - name: AGENT_WORKER_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
           envFrom:
             - secretRef:
                 name: agent-channel-secrets
@@ -161,8 +165,12 @@ spec:
               memory: 4Gi
           readinessProbe:
             exec:
-              command: ["/bin/sh", "-c", "kill -0 1"]
+              command:
+                - python
+                - -c
+                - "import os, redis, time; r=redis.Redis.from_url(os.environ['REDIS_URL']); score=r.zscore('agent:tasks:agent-workers:worker-heartbeats', os.environ['AGENT_WORKER_ID']); assert score and time.time()*1000-score < 30000"
             periodSeconds: 5
+            timeoutSeconds: 2
           livenessProbe:
             exec:
               command: ["/bin/sh", "-c", "kill -0 1"]

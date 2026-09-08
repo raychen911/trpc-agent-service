@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import importlib
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -169,6 +170,16 @@ def test_create_audit_logger_without_mysql(monkeypatch):
     logger, sink = deployment_app.create_audit_logger()
     assert logger is not None
     assert sink is None
+
+
+def test_compose_requires_stable_key_and_recovers_worker_process():
+    compose = (Path(__file__).parents[2] / "deploy" / "docker-compose.minimal.yml").read_text(encoding="utf-8")
+
+    assert "local-compose-change-me" not in compose
+    assert compose.count("TENANT_CONFIG_ENCRYPTION_KEY=${TENANT_CONFIG_ENCRYPTION_KEY:?") == 2
+    assert compose.count("restart: unless-stopped") == 2
+    assert "urlopen('http://localhost:8080/readyz'" in compose
+    assert "redis.Redis.from_url(os.environ['REDIS_URL']).ping()" in compose
 
 
 async def test_stream_worker_main_runs(monkeypatch):
