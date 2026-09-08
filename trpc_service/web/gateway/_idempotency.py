@@ -7,7 +7,9 @@
 
 IM platforms may redeliver a callback when the gateway fails to ACK in time
 (e.g. WeCom retries within ~5s). The gateway keys on ``tenant_id:channel:msg_id``
-so a redelivered message is processed exactly once.
+so duplicate callbacks are suppressed within the configured TTL after the task
+has been durably accepted. External tool side effects still require their own
+business idempotency keys.
 """
 
 from __future__ import annotations

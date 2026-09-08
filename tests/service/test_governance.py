@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import pytest
 
 from trpc_agent_sdk.abc import FilterResult
@@ -18,6 +19,8 @@ from trpc_service.tool import ChannelUserAuthorizationFilter
 from trpc_service.tool import ToolAllowlistFilter
 from trpc_service.tool import ToolOutputRedactionFilter
 from trpc_service.tool import ToolCallLimitFilter
+from trpc_service.tool import ToolExecutionTimeoutFilter
+from trpc_service.tool import GovernedToolSet
 from trpc_service.tool import apply_tenant_governance
 from trpc_service.tool import build_governance_filters
 from trpc_service.tenant import ModelEndpoint
@@ -26,6 +29,7 @@ from trpc_service.tenant import Tenant
 from trpc_service.tenant import ToolPermissions
 from trpc_agent_sdk.sessions import InMemorySessionService
 from trpc_agent_sdk.tools import FunctionTool
+from trpc_agent_sdk.tools import BaseToolSet
 
 
 def _make_tenant() -> Tenant:
@@ -235,17 +239,93 @@ def test_apply_tenant_governance_wraps_callable_and_attaches_filters():
     assert isinstance(agent.tools[0], FunctionTool)
     assert any(isinstance(item, ToolAllowlistFilter) for item in agent.tools[0].filters)
     assert any(isinstance(item, ToolCallLimitFilter) for item in agent.tools[0].filters)
+    assert any(isinstance(item, ToolExecutionTimeoutFilter) for item in agent.tools[0].filters)
     assert any(isinstance(item, ToolOutputRedactionFilter) for item in agent.tools[0].filters)
     # Agent-level channel authorization is owned by the deployment factory;
     # applying tool governance must not add a duplicate filter.
     assert not any(isinstance(item, ChannelUserAuthorizationFilter) for item in agent.filters)
 
 
-def test_apply_tenant_governance_preserves_unknown_toolset():
+def test_apply_tenant_governance_rejects_unknown_tool_type():
     sentinel = object()
 
     class Agent:
         tools = [sentinel]
 
+    with pytest.raises(TypeError, match="unsupported tenant tool type"):
+        apply_tenant_governance(Agent(), _make_tenant())
+
+
+async def test_governed_toolset_applies_filters_after_dynamic_expansion():
+
+    def query_order() -> str:
+        """Query one order."""
+        return "ok"
+
+    class DynamicToolSet(BaseToolSet):
+
+        def __init__(self):
+            super().__init__(name="dynamic")
+            self.closed = False
+            self.tool = FunctionTool(query_order)
+
+        async def get_tools(self, invocation_context=None):
+            return [self.tool]
+
+        async def close(self):
+            self.closed = True
+
+    inner = DynamicToolSet()
+
+    class Agent:
+        tools = [inner]
+
     agent = apply_tenant_governance(Agent(), _make_tenant())
-    assert agent.tools == [sentinel]
+    assert isinstance(agent.tools[0], GovernedToolSet)
+    tools = await agent.tools[0].get_tools()
+    assert len(tools) == 1
+    assert any(isinstance(item, ToolAllowlistFilter) for item in tools[0].filters)
+    assert any(isinstance(item, ToolExecutionTimeoutFilter) for item in tools[0].filters)
+    filter_count = len(tools[0].filters)
+    assert (await agent.tools[0].get_tools())[0] is tools[0]
+    assert len(tools[0].filters) == filter_count
+    await agent.tools[0].close()
+    assert inner.closed is True
+
+
+async def test_governed_toolset_rejects_non_tool_results():
+
+    class InvalidToolSet(BaseToolSet):
+
+        async def get_tools(self, invocation_context=None):
+            return [object()]
+
+    class Agent:
+        tools = [InvalidToolSet(name="invalid")]
+
+    governed = apply_tenant_governance(Agent(), _make_tenant())
+    with pytest.raises(TypeError, match="returned unsupported tool type"):
+        await governed.tools[0].get_tools()
+
+
+async def test_tool_execution_timeout_cancels_slow_tool():
+
+    async def slow_tool() -> str:
+        """Wait longer than the tenant permits."""
+        await asyncio.sleep(0.05)
+        return "late"
+
+    session_service = InMemorySessionService()
+    session = await session_service.create_session(app_name="app", user_id="u1", session_id="s1")
+    invocation = InvocationContext(
+        session_service=session_service,
+        invocation_id="timeout",
+        agent=_ToolAgent(name="agent"),
+        agent_context=new_agent_context(metadata={"tenant_id": "tenant_a"}),
+        session=session,
+        branch="",
+    )
+    tool = FunctionTool(slow_tool, filters=[ToolExecutionTimeoutFilter(0.005)])
+
+    with pytest.raises(TimeoutError, match="tool execution exceeded"):
+        await tool.run_async(tool_context=invocation, args={})

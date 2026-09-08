@@ -18,6 +18,7 @@ instance can serve many tenants; the ``tenant_id`` is read from the
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import threading
 from typing import Any
@@ -29,6 +30,7 @@ from trpc_agent_sdk.abc import FilterType
 from trpc_agent_sdk.context import AgentContext
 from trpc_agent_sdk.context import get_invocation_ctx
 from trpc_agent_sdk.filter import BaseFilter
+from trpc_agent_sdk.tools import BaseToolSet
 from trpc_agent_sdk.tools import get_tool_var
 
 from trpc_service.log import AuditLogEntry
@@ -207,6 +209,71 @@ class ToolCallLimitFilter(BaseFilter):
         return None
 
 
+class ToolExecutionTimeoutFilter(BaseFilter):
+    """Apply a hard per-call timeout around the remaining Tool filter chain."""
+
+    def __init__(self, timeout_seconds: float) -> None:
+        super().__init__()
+        self._type = FilterType.TOOL
+        self._name = "tenant_tool_execution_timeout"
+        self._timeout_seconds = max(0.001, float(timeout_seconds))
+
+    async def run(self, ctx: AgentContext, req: Any, handle):
+        try:
+            async with asyncio.timeout(self._timeout_seconds):
+                return await super().run(ctx, req, handle)
+        except TimeoutError:
+            return FilterResult(
+                error=TimeoutError(f"tool execution exceeded {self._timeout_seconds:g}s"),
+                is_continue=False,
+            )
+
+    async def run_stream(self, ctx: AgentContext, req: Any, handle):
+        try:
+            async with asyncio.timeout(self._timeout_seconds):
+                async for event in super().run_stream(ctx, req, handle):
+                    yield event
+        except TimeoutError:
+            yield FilterResult(
+                error=TimeoutError(f"tool execution exceeded {self._timeout_seconds:g}s"),
+                is_continue=False,
+            )
+
+
+class GovernedToolSet(BaseToolSet):
+    """Fail-closed ToolSet wrapper applying tenant filters after expansion."""
+
+    def __init__(self, inner: BaseToolSet, filters: list[BaseFilter]) -> None:
+        super().__init__(name=getattr(inner, "name", type(inner).__name__))
+        self._inner = inner
+        self._governance_filters = filters
+        self._governed_tools: list[Any] = []
+
+    def initialize(self) -> None:
+        return self._inner.initialize()
+
+    def add_tools(self, tools) -> None:
+        return self._inner.add_tools(tools)
+
+    async def get_tools(self, invocation_context=None):
+        from trpc_agent_sdk.tools import BaseTool
+
+        tools = await self._inner.get_tools(invocation_context)
+        governed = []
+        for tool in tools:
+            if not isinstance(tool, BaseTool):
+                raise TypeError(f"toolset '{self.name}' returned unsupported tool type: {type(tool)}")
+            if not any(tool is governed_tool for governed_tool in self._governed_tools):
+                for filter_ in self._governance_filters:
+                    tool.add_one_filter(filter_)
+                self._governed_tools.append(tool)
+            governed.append(tool)
+        return governed
+
+    async def close(self) -> None:
+        await self._inner.close()
+
+
 def build_governance_filters(tenant: Tenant, *, audit_logger: Any = None) -> list[BaseFilter]:
     """Build the default tool governance filter chain for a tenant.
 
@@ -241,6 +308,7 @@ def build_governance(
             confirmation_manager=confirmation_manager,
         ),
         ToolCallLimitFilter(tenant.tool_permissions.max_tool_calls_per_turn),
+        ToolExecutionTimeoutFilter(tenant.tool_permissions.max_tool_execution_time),
         ToolOutputRedactionFilter(
             redactor=SensitiveDataRedactor(),
             rules=tenant.audit_policy.desensitize_rules,
@@ -270,6 +338,7 @@ def apply_tenant_governance(
     the same filters.
     """
     from trpc_agent_sdk.tools import BaseTool
+    from trpc_agent_sdk.tools import BaseToolSet
     from trpc_agent_sdk.tools import FunctionTool
 
     tools = getattr(agent, "tools", None)
@@ -284,13 +353,14 @@ def apply_tenant_governance(
     governed_tools = []
     for tool in tools:
         if isinstance(tool, BaseTool):
-            tool.add_filters(tool_filters)
+            for filter_ in tool_filters:
+                tool.add_one_filter(filter_)
             governed_tools.append(tool)
+        elif isinstance(tool, BaseToolSet):
+            governed_tools.append(GovernedToolSet(tool, tool_filters))
         elif callable(tool):
             governed_tools.append(FunctionTool(tool, filters=tool_filters.copy()))
         else:
-            # Toolsets resolve their tools asynchronously inside the upstream SDK.
-            # They remain supported, but should return pre-filtered BaseTool objects.
-            governed_tools.append(tool)
+            raise TypeError(f"unsupported tenant tool type: {type(tool)}")
     agent.tools = governed_tools
     return agent

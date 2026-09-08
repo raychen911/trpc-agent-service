@@ -71,6 +71,7 @@ Pod，也共享同一个 `trace_id`。`trace_id`、`message_id`、`session_id` �
 | `agent_budget_tokens_reserved` | Gauge | tenant | 执行中模型调用预留的 token |
 | `agent_budget_daily_cost_limit` | Gauge | tenant | 当前租户每日成本上限 |
 | `agent_budget_cost_used` | Gauge | tenant | 当日已使用成本 |
+| `agent_budget_cost_reserved` | Gauge | tenant | 执行中模型调用预留的估算成本 |
 | `agent_im_delivery_total` | Counter | tenant、channel、outcome | 最终 IM 回复尝试和结果 |
 | `agent_im_delivery_duration_ms` | Histogram | tenant、channel、outcome | Adapter 回复耗时 |
 | `agent_im_delivery_parts` | Histogram | tenant、channel、outcome | 一次逻辑回复的分段数 |

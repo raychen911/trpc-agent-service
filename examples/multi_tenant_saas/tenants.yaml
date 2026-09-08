@@ -6,6 +6,10 @@ tenants:
     model:
       model_name: gpt-4o
       fallback_model: gpt-4o-mini
+      # 演示价格；生产中应按实际供应商合同更新。
+      pricing:
+        gpt-4o: {input_per_mtok: 2.5, output_per_mtok: 10.0}
+        gpt-4o-mini: {input_per_mtok: 0.15, output_per_mtok: 0.6}
     app_config:
       default_instruction: 你是电商售前客服，回答商品与订单问题，语气亲切。
     tool_permissions:
@@ -62,6 +66,8 @@ tenants:
     name: 金融客服
     model:
       model_name: gpt-4o
+      pricing:
+        gpt-4o: {input_per_mtok: 2.5, output_per_mtok: 10.0}
     app_config:
       default_instruction: 你是金融客服，回答账户与余额问题，语气严谨。
     tool_permissions:

@@ -16,7 +16,7 @@ from trpc_agent_sdk.agents import BaseAgent
 from trpc_service.agent import run_worker
 from trpc_service.tool import ChannelUserAuthorizationFilter
 from trpc_service.tool import apply_tenant_governance
-from trpc_service.tenant import AppConfig, ModelEndpoint, Tenant, TenantConfigManager
+from trpc_service.tenant import AppConfig, ModelEndpoint, ModelPricingConfig, Tenant, TenantConfigManager
 from trpc_agent_sdk.events import Event
 from trpc_agent_sdk.types import Content, Part
 
@@ -50,6 +50,20 @@ def test_create_agent_primary_and_fallback(monkeypatch):
 
     governed = apply_tenant_governance(primary, make_tenant())
     assert sum(isinstance(item, ChannelUserAuthorizationFilter) for item in governed.filters) == 1
+
+
+def test_create_agent_registers_tenant_model_pricing(monkeypatch):
+    monkeypatch.setattr(deployment_app, "_BUDGET_TRACKER", None)
+    tenant = make_tenant()
+    tenant.model.pricing["primary"] = ModelPricingConfig(input_per_mtok=2, output_per_mtok=8)
+
+    deployment_app.create_agent(tenant)
+
+    tracker = deployment_app.create_budget_tracker()
+    assert tracker.estimate_cost("deploy", "primary", 1000) == 0.008
+
+    deployment_app.create_agent(make_tenant())
+    assert tracker.estimate_cost("deploy", "primary", 1000) is None
 
 
 def test_create_agent_supports_tenant_key_reference_and_anthropic(monkeypatch):

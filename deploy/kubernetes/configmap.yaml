@@ -13,6 +13,14 @@ data:
           timeout: 30
           retry: 2
           fallback_model: gpt-4o-mini
+          # 示例价格；上线前按供应商合同价格更新。
+          pricing:
+            gpt-4o:
+              input_per_mtok: 2.5
+              output_per_mtok: 10.0
+            gpt-4o-mini:
+              input_per_mtok: 0.15
+              output_per_mtok: 0.6
         tool_permissions:
           tool_whitelist: [query_order, query_logistics]
           dangerous_tools: [cancel_order]

@@ -135,11 +135,15 @@ class ChannelRegistry:
         key = (tenant.tenant_id, channel)
         if key in self._cache:
             return self._cache[key]
-        factory = self._factories.get(channel)
-        if factory is None:
-            return None
         cfg = tenant.channel_configs.get(channel)
         if cfg is None:
+            return None
+        # Prefer an explicit binding-specific factory for backwards-compatible
+        # tests/extensions, then resolve by the configured channel type. This
+        # makes ``channel`` a binding id rather than limiting one account per
+        # IM platform and tenant.
+        factory = self._factories.get(channel) or self._factories.get(cfg.channel_type)
+        if factory is None:
             return None
         adapter = factory(cfg)
         self._cache[key] = adapter
@@ -219,6 +223,14 @@ def create_gateway_app(
                 inbound = await adapter.parse_message(payload)
         except Exception as exc:  # noqa: BLE001 - malformed payloads are client errors
             return JSONResponse({"error": f"parse failed: {safe_error_message(exc)}"}, status_code=400), "parse_failed"
+
+        binding = tenant.channel_configs[channel]
+        inbound.metadata = {
+            **inbound.metadata,
+            "channel_binding_id": channel,
+        }
+        if binding.agent_app_id is not None:
+            inbound.metadata["agent_app_id"] = binding.agent_app_id
 
         dedup_key = f"{tenant_id}:{channel}:{inbound.message_id}"
         with operation_span("idempotency.check", **{"tenant.id": tenant_id, "channel": channel}):

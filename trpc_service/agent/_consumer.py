@@ -7,14 +7,17 @@
 
 The consumer owns the full turn (agent run + IM reply) via the shared dispatch
 primitives, so it is behaviourally identical to the in-process gateway path.
-Delivery is at-least-once via the consumer group; combined with the gateway's
-idempotency key, redelivery is safe.
+Delivery is at-least-once via the consumer group. A heartbeat prevents healthy
+long turns from being reclaimed, and processing is cancelled if ownership is
+lost; result caching and downstream idempotency keys cover recovery retries.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
+from contextlib import suppress
 from typing import Any
 
 from trpc_service.web._dispatch import reply_to_channel
@@ -38,6 +41,7 @@ class StreamWorker:
                  worker: Any,
                  registry: Any,
                  min_idle_ms: int = 60000,
+                 heartbeat_interval_ms: int | None = None,
                  max_attempts: int = 3,
                  result_store: Any = None,
                  metrics: EnterpriseMetrics | None = None) -> None:
@@ -45,18 +49,48 @@ class StreamWorker:
         self._worker = worker
         self._registry = registry
         self._min_idle_ms = min_idle_ms
+        self._heartbeat_interval_ms = (heartbeat_interval_ms if heartbeat_interval_ms is not None else max(
+            100, min_idle_ms // 3))
         self._max_attempts = max_attempts
         self._result_store = result_store or LocalTaskResultStore()
         self._metrics = metrics or getattr(worker, "metrics", None) or get_enterprise_metrics()
 
+    async def _heartbeat(
+        self,
+        message_id: str,
+        owner_task: asyncio.Task,
+        ownership_lost: asyncio.Event,
+    ) -> None:
+        touch = getattr(self._queue, "touch", None)
+        if not callable(touch) or self._heartbeat_interval_ms <= 0:
+            return
+        interval = self._heartbeat_interval_ms / 1000
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                if await touch(message_id):
+                    continue
+                logger.warning("task %s is no longer owned by this worker", message_id)
+            except Exception:  # noqa: BLE001 - uncertain ownership must stop side effects
+                logger.warning("failed to heartbeat task %s", message_id, exc_info=True)
+            ownership_lost.set()
+            owner_task.cancel()
+            return
+
     async def _process(self, message_id: str, payload: str) -> bool:
         started = time.perf_counter()
         task = None
+        heartbeat_task = None
+        ownership_lost = asyncio.Event()
         outcome = "error"
         error_type = None
         try:
             task = TaskMessage.model_validate_json(payload)
             inbound = task.to_inbound()
+            owner_task = asyncio.current_task()
+            if owner_task is None:  # pragma: no cover - an async function always has a current task
+                raise RuntimeError("stream task is not running inside an asyncio task")
+            heartbeat_task = asyncio.create_task(self._heartbeat(message_id, owner_task, ownership_lost))
             with extracted_trace_context(task.trace_headers):
                 with operation_span(
                         "worker.process_task",
@@ -94,6 +128,13 @@ class StreamWorker:
                     await self._queue.ack(message_id)
             outcome = "success"
             return True
+        except asyncio.CancelledError:
+            if not ownership_lost.is_set():
+                raise
+            error_type = "TaskOwnershipLost"
+            outcome = "ownership_lost"
+            logger.warning("stopped processing task %s after ownership was lost", message_id)
+            return False
         except Exception as exc:  # noqa: BLE001 - a bad message must not stop the consumer
             error_type = type(exc).__name__
             logger.exception("failed to process task %s", message_id)
@@ -116,6 +157,10 @@ class StreamWorker:
                 )
             return False
         finally:
+            if heartbeat_task is not None:
+                heartbeat_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await heartbeat_task
             attributes = {
                 "tenant_id": task.tenant_id if task is not None else None,
                 "channel": task.channel if task is not None else None,

@@ -115,20 +115,3 @@ jobs:
         run: |
           pip install dist/*.whl
           python -c "import trpc_agent_sdk, trpc_service; print('SDK and service imports OK')"
-
-  mytestweb:
-    runs-on: [self-hosted, trpc-agent-python-ci]
-    timeout-minutes: 20
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install frontend dependencies
-        working-directory: MyTestWeb
-        run: npm ci
-
-      - name: Lint and build frontend
-        working-directory: MyTestWeb
-        run: |
-          npm run lint
-          npm run build

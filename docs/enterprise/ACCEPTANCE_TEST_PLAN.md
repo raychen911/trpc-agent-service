@@ -11,7 +11,7 @@
 3. `trpc_service` 行覆盖率 **≥95%**，低于阈值 CI 直接失败；
 4. Redis/MySQL/Qdrant/S3 兼容接口的后端集成测试；
 5. Compose 配置校验、镜像启动与健康检查；
-6. 浏览器 E2E（MyTestWeb）和 API 契约测试；
+6. Admin UI 浏览器 E2E 和 API 契约测试；
 7. 主分支夜间执行性能、故障注入、迁移回放和密钥扫描。
 
 覆盖率是防回归下限，不替代断言质量。测试必须断言结果、隔离边界或故障状态，禁止只为走行而调用函数。当前命令：
@@ -134,7 +134,7 @@ Redis→SQL 仅迁移 Session/Memory，必测空值、Unicode、大消息、乱�
 - PR 快速套件全绿，企业层行覆盖率 ≥95%；
 - 两个 IM adapter 的契约、附件、分段、流式与失败测试通过；
 - 真实 Redis/SQL 通过并发、可见性、pending reclaim 和迁移测试；Qdrant/S3 通过租户隔离、幂等 upsert/checksum 和故障补偿测试；
-- MyTestWeb 的 Mock 模式、DeepSeek 模式（有 key 时）、租户切换、HITL 和场景按钮通过浏览器 E2E；
+- Admin UI 的租户切换、指标、审计查询与关键操作通过浏览器 E2E；
 - Compose 最小部署和 K8s 推荐部署均通过 smoke/rollout；
 - 日志、trace、审计和错误报告的 secret scan 为 0 命中；
 - 生成 coverage.xml、JUnit、性能报告、迁移校验报告和 trace 样例作为评审证据。

@@ -42,6 +42,8 @@ from trpc_service.metrics import EnterpriseMetrics
 from trpc_service.metrics import get_enterprise_metrics
 from trpc_service.workspace import TenantMemoryService
 from trpc_service.workspace import TenantSessionService
+from trpc_service.channels import CHAT_GROUP
+from trpc_service.tenant import AppInfo
 from trpc_service.tenant import Tenant
 from trpc_service.tenant import TenantConfigManager
 from trpc_service.tenant import TenantStatus
@@ -112,19 +114,69 @@ class TenantWorker:
             return None
         return tenant
 
-    async def _get_or_create_session(self, session_service: SessionServiceABC, user_id: str,
+    async def _get_or_create_session(self, session_service: SessionServiceABC, app_name: str, user_id: str,
                                      session_id: str) -> SessionABC:
-        session = await session_service.get_session(app_name=self._app_name, user_id=user_id, session_id=session_id)
+        session = await session_service.get_session(app_name=app_name, user_id=user_id, session_id=session_id)
         if session is None:
-            session = await session_service.create_session(app_name=self._app_name,
-                                                           user_id=user_id,
-                                                           session_id=session_id)
+            session = await session_service.create_session(app_name=app_name, user_id=user_id, session_id=session_id)
         return session
 
+    def _resolve_app(self, tenant: Tenant, requested_app_id: Optional[str]) -> tuple[str, Tenant, Optional[AppInfo]]:
+        """Resolve one tenant Agent app while preserving legacy single-app configs."""
+        apps = {item.app_id: item for item in tenant.app_config.app_list}
+        selected_id = requested_app_id or tenant.app_config.default_app_id
+        if selected_id is None and len(apps) == 1:
+            selected_id = next(iter(apps))
+        if selected_id is None and len(apps) > 1:
+            raise ValueError(f"tenant '{tenant.tenant_id}' requires an explicit agent_app_id")
+        if selected_id is not None and selected_id not in apps:
+            raise ValueError(f"agent app '{selected_id}' is not configured for tenant '{tenant.tenant_id}'")
+
+        effective = tenant.model_copy(deep=True)
+        selected = apps.get(selected_id) if selected_id is not None else None
+        app_name = selected_id or self._app_name
+        if selected is not None:
+            effective.app_config.default_app_id = selected.app_id
+            if selected.instruction is not None:
+                effective.app_config.default_instruction = selected.instruction
+        return app_name, effective, selected
+
     @staticmethod
-    def _load_confirmed_tools(session: SessionABC) -> list[str]:
-        tools = session.state.get(CONFIRMED_TOOLS_KEY, []) if session.state else []
+    def _session_user_id(inbound: InboundMessage) -> str:
+        """Use one storage owner per group while retaining the real sender in context."""
+        if inbound.chat_type == CHAT_GROUP:
+            return f"group:{inbound.chat_id}"
+        return inbound.sender_id
+
+    @staticmethod
+    def _load_confirmed_tools(session: SessionABC, sender_id: str) -> list[str]:
+        """Load one sender's one-shot grants from a possibly shared group session."""
+        tools = session.state.get(CONFIRMED_TOOLS_KEY, {}) if session.state else {}
+        if isinstance(tools, dict):
+            sender_tools = tools.get(sender_id, [])
+            return list(sender_tools) if isinstance(sender_tools, list) else []
+        # Read legacy list state as belonging to the current sender. It is
+        # removed before the next run, so old grants cannot remain reusable.
         return list(tools) if isinstance(tools, list) else []
+
+    @staticmethod
+    async def _consume_confirmed_tools(
+        session: SessionABC,
+        session_service: SessionServiceABC,
+        sender_id: str,
+        confirmed_tools: list[str],
+    ) -> None:
+        """Remove grants before execution so approval is identity-bound and one-shot."""
+        if not confirmed_tools:
+            return
+        stored = session.state.get(CONFIRMED_TOOLS_KEY, {}) if session.state else {}
+        if isinstance(stored, dict):
+            stored = dict(stored)
+            stored.pop(sender_id, None)
+            session.state[CONFIRMED_TOOLS_KEY] = stored
+        else:
+            session.state.pop(CONFIRMED_TOOLS_KEY, None)
+        await session_service.update_session(session)
 
     async def handle(self, tenant_id: str, channel: str, inbound: InboundMessage) -> str:
         """Execute a turn and return the final assistant text (empty on failure)."""
@@ -141,14 +193,16 @@ class TenantWorker:
 
         attach_tenant_to_span(tenant_id)
         session_id = generate_session_id(tenant_id, channel, inbound.chat_type, inbound.sender_id, inbound.chat_id)
-
-        lock_key = f"{tenant_id}:{self._app_name}:{inbound.sender_id}:{session_id}"
         outcome = "error"
         error_type = None
         lock_acquired = False
         lock_wait_started = time.perf_counter()
         try:
-            async with self._session_locks.acquire(lock_key):
+            requested_app_id = inbound.metadata.get("agent_app_id")
+            app_name, effective_tenant, _selected_app = self._resolve_app(tenant, requested_app_id)
+            session_user_id = self._session_user_id(inbound)
+            lock_key = f"{tenant_id}:{app_name}:{session_user_id}:{session_id}"
+            async with self._session_locks.acquire(lock_key) as lease:
                 lock_acquired = True
                 self._metrics.observe(
                     "agent_session_lock_duration_ms",
@@ -159,7 +213,19 @@ class TenantWorker:
                 )
                 lock_held_started = time.perf_counter()
                 try:
-                    result = await self._handle_locked(tenant, tenant_id, channel, inbound, session_id, started)
+                    result = await self._handle_locked(
+                        effective_tenant,
+                        tenant_id,
+                        channel,
+                        inbound,
+                        session_id,
+                        session_user_id,
+                        app_name,
+                        getattr(lease, "fencing_token", 0),
+                        started,
+                    )
+                    if hasattr(lease, "assert_valid"):
+                        lease.assert_valid()
                     outcome = "success"
                     return result
                 finally:
@@ -201,8 +267,18 @@ class TenantWorker:
                 error_type=error_type,
             )
 
-    async def _handle_locked(self, tenant: Tenant, tenant_id: str, channel: str, inbound: InboundMessage,
-                             session_id: str, started: float) -> str:
+    async def _handle_locked(
+        self,
+        tenant: Tenant,
+        tenant_id: str,
+        channel: str,
+        inbound: InboundMessage,
+        session_id: str,
+        session_user_id: str,
+        app_name: str,
+        fencing_token: int,
+        started: float,
+    ) -> str:
         """Execute a turn while holding the session-scoped writer lock."""
 
         backend: SessionServiceABC = self._session_factory(tenant)
@@ -224,7 +300,7 @@ class TenantWorker:
         storage_outcome = "error"
         storage_error_type = None
         try:
-            session = await self._get_or_create_session(session_service, inbound.sender_id, session_id)
+            session = await self._get_or_create_session(session_service, app_name, session_user_id, session_id)
             storage_outcome = "success"
         except Exception as exc:
             storage_error_type = type(exc).__name__
@@ -239,7 +315,7 @@ class TenantWorker:
                 outcome=storage_outcome,
                 error_type=storage_error_type,
             )
-        confirmed_tools = self._load_confirmed_tools(session)
+        confirmed_tools = self._load_confirmed_tools(session, inbound.sender_id)
 
         # HITL: a confirmation reply ("确认 <token>") resolves the pending request
         # and records the approved tool so a subsequent run may execute it.
@@ -253,10 +329,20 @@ class TenantWorker:
             if pending is not None and pending.tenant_id == tenant_id and identity_matches and session_matches:
                 if pending.tool_name not in confirmed_tools:
                     confirmed_tools.append(pending.tool_name)
-                session.state[CONFIRMED_TOOLS_KEY] = confirmed_tools
+                stored = session.state.get(CONFIRMED_TOOLS_KEY, {}) if session.state else {}
+                grants = dict(stored) if isinstance(stored, dict) else {}
+                grants[inbound.sender_id] = confirmed_tools
+                session.state[CONFIRMED_TOOLS_KEY] = grants
                 await session_service.update_session(session)
                 return f"已确认执行工具「{pending.tool_name}」，请重新发起该操作。"
             return "确认码无效或已过期。"
+
+        await self._consume_confirmed_tools(
+            session,
+            session_service,
+            inbound.sender_id,
+            confirmed_tools,
+        )
 
         agent = apply_tenant_governance(
             self._agent_factory(tenant),
@@ -265,7 +351,7 @@ class TenantWorker:
             audit_logger=self._audit_logger,
         )
         runner = Runner(
-            app_name=self._app_name,
+            app_name=app_name,
             agent=agent,
             session_service=session_service,
             memory_service=memory_service,
@@ -281,6 +367,7 @@ class TenantWorker:
                 "channel_chat_id": inbound.chat_id,
                 "channel_user_verified": inbound.metadata.get("user_verified", False),
                 "confirmed_tools": confirmed_tools,
+                "session_fencing_token": fencing_token,
             })
         new_message = Content(parts=[Part.from_text(text=inbound.text or "")])
 
@@ -289,7 +376,7 @@ class TenantWorker:
             run_outcome = "error"
             run_error_type = None
             events = runner.run_async(
-                user_id=inbound.sender_id,
+                user_id=session_user_id,
                 session_id=session_id,
                 new_message=new_message,
                 agent_context=agent_context,

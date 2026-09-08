@@ -49,7 +49,7 @@ core 现有文件**。租户隔离复用框架既有的 `app_name → user_id �
 | 配置域 | 字段 | 说明 |
 |---|---|---|
 | 基础 | `tenant_id` / `name` / `status` | `active` / `disabled` |
-| 应用 | `app_config.app_list` / `default_instruction` / `max_concurrent_sessions` | 绑定 App 列表、默认提示词、并发上限 |
+| 应用 | `app_config.app_list` / `default_app_id` / `default_instruction` / `max_concurrent_sessions` | 多 Agent App、默认路由、提示词、容量目标 |
 | 模型 | `model.provider` / `model_name` / `api_endpoint` / `timeout` / `retry` / `fallback_model` | 主模型与降级备选 |
 | 工具 | `tool_permissions.tool_whitelist` / `tool_denylist` / `dangerous_tools` | 白名单/黑名单/需二次确认 |
 | IM | `channel_configs[channel_type]` | 企业微信/微信客服/钉钉/飞书/QQ 的 token、secret 与账号绑定 |
@@ -156,7 +156,7 @@ Gateway 与 Worker 解耦，并用 consumer group、pending reclaim、最大重�
   建目标 schema → 记录 watermark → 按租户全量复制 → 双写并追平增量 → checksum/shadow read
   校验 → 单租户切换读路由 → 保留回滚窗口。Audit 始终以 MySQL 为主存储，不参与迁移；
   Summary 作为 session summary event 时随 Session 一起迁移。
-  MyTestWeb 已接入真实 `TenantBackendMigrationAdapter`；当前可运行流程会全量复制 Session/Memory、
+  `TenantBackendMigrationAdapter` 已由后端自动化测试覆盖；当前可运行流程会全量复制 Session/Memory、
   复扫源端并校验 checksum，源端发生未追平写入时拒绝切换。生产零停机部署还需在复制窗口接入
   `DualWriteBackend` 和 durable outbox。
 - **IM 幂等**：Gateway 以 `tenant:channel:msg_id` 为键 `SETNX`（TTL 300s），已存在则
@@ -196,7 +196,7 @@ class ChannelAdapter(ABC):
 | 消息转换 | XML 或平台 JSON → `InboundMessage` | 平台 event JSON → `InboundMessage` | C2C/群/频道/频道私信 event → `InboundMessage` |
 | session_id | 单聊 `sha256(tenant:channel:user)`；群聊 `sha256(tenant:channel:chat)` | 同左 | 同左 |
 | 回复 | 文本分段，图片/文件保留 attachment | webhook/SDK 发送文本或卡片，限流退避 | App AccessToken + 对应会话 OpenAPI，限流退避 |
-| 本地验证 | MyTestWeb 构造企业微信/微信客服 fixture | MyTestWeb 构造钉钉/飞书 fixture | MyTestWeb 构造 QQ fixture |
+| 本地验证 | pytest 构造企业微信/微信客服 fixture | pytest 构造钉钉/飞书 fixture | pytest 构造 QQ fixture |
 
 ### 5.3 账号绑定与身份映射
 
@@ -219,7 +219,7 @@ class ChannelAdapter(ABC):
 | 工具白名单/黑名单 | `ToolAllowlistFilter` | `_before` 拦截，违规 `is_continue=False` |
 | 危险工具二次确认 | `ToolAllowlistFilter` + `ConfirmationManager` | 生成一次性确认 token，`ToolConfirmationRequired` |
 | 敏感信息脱敏 | `ToolOutputRedactionFilter` + `SensitiveDataRedactor` | `_after` 对输出做正则脱敏 |
-| 预算限制 | `ModelBudgetFilter` + `BudgetTracker` | `_before` 检查预算，`_after` 从 `usage_metadata` 记录 token/成本 |
+| 预算限制 | `ModelBudgetFilter` + `BudgetTracker` | `_before` 原子预留 token/估算成本，`_after` 从 `usage_metadata` 记账；成本限额缺少价格时 fail closed |
 
 ### 6.2 监控指标
 

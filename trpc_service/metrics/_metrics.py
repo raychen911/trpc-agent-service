@@ -79,6 +79,8 @@ METRIC_DEFINITIONS: dict[str, MetricDefinition] = {
     MetricDefinition("gauge", "Configured daily cost budget for a tenant.", "USD"),
     "agent_budget_cost_used":
     MetricDefinition("gauge", "Estimated cost committed against today's tenant budget.", "USD"),
+    "agent_budget_cost_reserved":
+    MetricDefinition("gauge", "Estimated cost reserved by in-flight model calls.", "USD"),
     "agent_im_delivery_total":
     MetricDefinition("counter", "Number of IM reply delivery attempts."),
     "agent_im_delivery_duration_ms":

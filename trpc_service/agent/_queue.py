@@ -7,7 +7,9 @@
 
 The gateway enqueues a serialized :class:`TaskMessage`; worker processes consume
 it via a consumer group (at-least-once delivery). Combined with the gateway's
-existing idempotency key, redelivery never causes duplicate processing.
+idempotency key, result cache, ownership heartbeat and downstream business
+idempotency keys, redelivery is safe to recover without claiming impossible
+exactly-once semantics for external side effects.
 
 This module lives at the package top level (not under ``gateway`` or ``worker``)
 so both sides can import it without a circular dependency.
@@ -15,9 +17,12 @@ so both sides can import it without a circular dependency.
 
 from __future__ import annotations
 
+import os
+import socket
 import time
 from typing import Any
 from typing import Optional
+from uuid import uuid4
 
 import redis.asyncio as aioredis
 from pydantic import BaseModel
@@ -78,7 +83,7 @@ class StreamQueue:
         client: Any = None,
         stream: str = "agent:tasks",
         group: str = "agent-workers",
-        consumer: str = "worker",
+        consumer: Optional[str] = None,
         maxlen: int = 10000,
         metrics: Optional[EnterpriseMetrics] = None,
     ) -> None:
@@ -90,9 +95,16 @@ class StreamQueue:
             raise ValueError("StreamQueue requires redis_url or client")
         self._stream = stream
         self._group = group
-        self._consumer = consumer
+        instance = os.environ.get("AGENT_WORKER_ID") or os.environ.get("OTEL_SERVICE_INSTANCE_ID")
+        instance = instance or os.environ.get("HOSTNAME") or socket.gethostname()
+        self._consumer = consumer or f"worker-{instance}-{os.getpid()}-{uuid4().hex[:8]}"
         self._maxlen = maxlen
         self._metrics = metrics or get_enterprise_metrics()
+
+    @property
+    def consumer_name(self) -> str:
+        """Unique Redis Streams consumer identity for this worker process."""
+        return self._consumer
 
     async def _execute(self, operation: str, awaitable: Any) -> Any:
         started = time.perf_counter()
@@ -206,6 +218,44 @@ class StreamQueue:
             return 0
         entry = entries[0]
         return int(entry.get("times_delivered", entry.get(b"times_delivered", 1)))
+
+    async def touch(self, message_id: str) -> bool:
+        """Refresh a running task's pending idle time without a redelivery.
+
+        A Worker heartbeat calls this while an Agent turn is still executing so
+        another Worker does not reclaim a healthy long-running task merely
+        because it exceeded ``min_idle_ms``.
+        """
+
+        async def refresh() -> list:
+            pending = await self._client.xpending_range(
+                self._stream,
+                self._group,
+                min=message_id,
+                max=message_id,
+                count=1,
+            )
+            if not pending:
+                return []
+            entry = pending[0]
+            owner = entry.get("consumer", entry.get(b"consumer"))
+            if isinstance(owner, bytes):
+                owner = owner.decode()
+            if owner != self._consumer:
+                return []
+            deliveries = int(entry.get("times_delivered", entry.get(b"times_delivered", 1)))
+            return await self._client.xclaim(
+                self._stream,
+                self._group,
+                self._consumer,
+                min_idle_time=0,
+                message_ids=[message_id],
+                retrycount=deliveries,
+                justid=True,
+            )
+
+        result = await self._execute("touch", refresh())
+        return bool(result)
 
     async def dead_letter(self, message_id: str, payload: str, error: str) -> str:
         """Move a poison task to the dead-letter stream and acknowledge it."""

@@ -39,6 +39,7 @@ from trpc_service.log import install_redacting_log_filter
 from trpc_service.metrics._observability import configure_telemetry
 from trpc_service.metrics._observability import shutdown_telemetry
 from trpc_service.tenant import Tenant
+from trpc_service.tenant import AppInfo
 from trpc_service.tenant import TenantConfigManager
 from trpc_service.tenant import build_tenant_config_manager
 from trpc_service.tenant import load_tenants
@@ -47,6 +48,7 @@ from trpc_service.tool import BudgetTracker
 from trpc_service.tool import ChannelUserAuthorizationFilter
 from trpc_service.tool import ConfirmationManager
 from trpc_service.tool import ModelBudgetFilter
+from trpc_service.tool import ModelPricing
 from trpc_service.tool import RedisBudgetTracker
 from trpc_service.tool import RedisConfirmationManager
 from trpc_service.web.admin import create_admin_router
@@ -65,7 +67,18 @@ def create_agent(tenant: Tenant) -> LlmAgent:
     The model API key is read from the tenant's ``api_key_env`` reference so
     it is never stored in tenant config; ``TRPC_AGENT_API_KEY`` is the default.
     """
-    model_filter = ModelBudgetFilter(create_budget_tracker(), tenant=tenant)
+    budget_tracker = create_budget_tracker()
+    budget_tracker.replace_tenant_pricing(
+        tenant.tenant_id,
+        {
+            model_name: ModelPricing(
+                input_per_mtok=pricing.input_per_mtok,
+                output_per_mtok=pricing.output_per_mtok,
+            )
+            for model_name, pricing in tenant.model.pricing.items()
+        },
+    )
+    model_filter = ModelBudgetFilter(budget_tracker, tenant=tenant)
     retry_config = ModelRetryConfig(num_retries=tenant.model.retry)
     api_key = os.environ.get(tenant.model.api_key_env, "")
 
@@ -90,10 +103,21 @@ def create_agent(tenant: Tenant) -> LlmAgent:
         model = FallbackLLMModel(primary, fallback, filters=[model_filter])
     else:
         primary.add_filters([model_filter])
+    selected_app: Optional[AppInfo] = None
+    if tenant.app_config.default_app_id is not None:
+        selected_app = next(
+            (item for item in tenant.app_config.app_list if item.app_id == tenant.app_config.default_app_id),
+            None,
+        )
+    instruction = (selected_app.instruction
+                   if selected_app and selected_app.instruction is not None else tenant.app_config.default_instruction)
+    agent_identity = tenant.tenant_id
+    if selected_app is not None:
+        agent_identity = f"{tenant.tenant_id}_{selected_app.app_id}"
     return LlmAgent(
-        name=to_agent_name(tenant.tenant_id),
+        name=to_agent_name(agent_identity),
         model=model,
-        instruction=tenant.app_config.default_instruction or "You are a helpful assistant.",
+        instruction=instruction or "You are a helpful assistant.",
         filters=[ChannelUserAuthorizationFilter(tenant=tenant)],
     )
 

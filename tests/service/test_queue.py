@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import fakeredis.aioredis as faioredis
@@ -161,6 +162,7 @@ async def test_stream_queue_enqueue_read_ack():
 
 
 async def test_stream_queue_treats_blocking_read_timeout_as_empty_poll():
+
     class TimeoutClient:
 
         async def xreadgroup(self, *args, **kwargs):
@@ -291,6 +293,118 @@ async def test_stream_worker_processes_and_acks():
     # The message was acked, so a second read returns nothing.
     assert await stream_worker.run_once(count=1, block=0) == 0
     await queue.close()
+
+
+async def test_stream_queue_uses_unique_consumers_and_can_heartbeat_pending_task():
+    client = faioredis.FakeRedis(decode_responses=True)
+    first = StreamQueue(client=client)
+    second = StreamQueue(client=client)
+    assert first.consumer_name != second.consumer_name
+
+    await first.ensure_group()
+    message_id = await first.enqueue(
+        TaskMessage(
+            tenant_id="t",
+            channel="fake",
+            inbound={
+                "chat_id": "c",
+                "sender_id": "u",
+                "message_id": "m"
+            },
+        ))
+    assert await first.read(count=1, block=0)
+    assert await first.touch(message_id) is True
+    assert await second.touch(message_id) is False
+    pending = await client.xpending_range("agent:tasks", "agent-workers", message_id, message_id, 1)
+    assert pending[0]["consumer"] == first.consumer_name
+
+
+async def test_stream_worker_heartbeats_while_agent_turn_is_running():
+
+    class HeartbeatQueue:
+
+        def __init__(self):
+            self.touches = 0
+            self.acked = []
+
+        async def touch(self, message_id):
+            self.touches += 1
+            return True
+
+        async def ack(self, message_id):
+            self.acked.append(message_id)
+
+    class SlowWorker:
+
+        def __init__(self):
+            self.metrics = EnterpriseMetrics(meter=False)
+
+        async def handle(self, tenant_id, channel, inbound):
+            await asyncio.sleep(0.025)
+            return ""
+
+    queue = HeartbeatQueue()
+    task = TaskMessage.from_inbound(
+        "t_a",
+        "fake",
+        InboundMessage(
+            channel="fake",
+            chat_id="c",
+            sender_id="u",
+            message_id="heartbeat",
+        ),
+    )
+    stream_worker = StreamWorker(
+        queue=queue,
+        worker=SlowWorker(),
+        registry=object(),
+        heartbeat_interval_ms=5,
+    )
+
+    assert await stream_worker._process("1-0", task.model_dump_json()) is True
+    assert queue.touches >= 2
+    assert queue.acked == ["1-0"]
+
+
+async def test_stream_worker_stops_when_pending_task_ownership_is_lost():
+
+    class LostQueue:
+
+        def __init__(self):
+            self.acked = []
+
+        async def touch(self, message_id):
+            return False
+
+        async def ack(self, message_id):
+            self.acked.append(message_id)
+
+    class SlowWorker:
+
+        def __init__(self):
+            self.metrics = EnterpriseMetrics(meter=False)
+
+        async def handle(self, tenant_id, channel, inbound):
+            await asyncio.sleep(1)
+            return "late"
+
+    queue = LostQueue()
+    worker = SlowWorker()
+    task = TaskMessage.from_inbound(
+        "t_a",
+        "fake",
+        InboundMessage(channel="fake", chat_id="c", sender_id="u", message_id="lost"),
+    )
+    stream_worker = StreamWorker(
+        queue=queue,
+        worker=worker,
+        registry=object(),
+        heartbeat_interval_ms=1,
+    )
+
+    assert await stream_worker._process("1-0", task.model_dump_json()) is False
+    assert queue.acked == []
+    assert _has_attributes(worker.metrics, "agent_worker_task_total", outcome="ownership_lost")
 
 
 async def test_failed_task_is_not_acked_and_is_reclaimed():

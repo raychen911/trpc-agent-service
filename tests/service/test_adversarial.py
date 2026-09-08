@@ -161,3 +161,34 @@ async def test_redis_session_lock_serializes_different_workers():
 
     await asyncio.gather(critical(manager_a), critical(manager_b))
     assert max_active == 1
+
+
+async def test_redis_session_lock_renews_and_issues_monotonic_fencing_tokens():
+    import pytest
+    import fakeredis.aioredis as faioredis
+
+    client = faioredis.FakeRedis(decode_responses=True)
+    first = RedisSessionLockManager(
+        client=client,
+        lease_seconds=0.03,
+        renew_interval=0.005,
+        acquire_timeout=1,
+        retry_interval=0.001,
+    )
+    contender = RedisSessionLockManager(
+        client=client,
+        lease_seconds=0.03,
+        renew_interval=0.005,
+        acquire_timeout=0,
+        retry_interval=0.001,
+    )
+
+    async with first.acquire("tenant:session") as lease_one:
+        await asyncio.sleep(0.07)
+        lease_one.assert_valid()
+        with pytest.raises(TimeoutError):
+            async with contender.acquire("tenant:session"):
+                pass
+
+    async with contender.acquire("tenant:session") as lease_two:
+        assert lease_two.fencing_token > lease_one.fencing_token

@@ -18,7 +18,7 @@
 5. 如何建立可审计、可观测、可灰度、可回滚的生产运行体系；
 6. 如何用自动化测试证明租户不串、消息不丢、故障可恢复、密钥不泄漏。
 
-最终交付包括独立的 `trpc_service` 平台代码、部署清单、数据模型、五类 IM Adapter、治理与审计组件、自动化验收体系，以及可在本地运行的 MyTestWeb 实战验证台；基础 SDK 通过 `trpc-agent-py` 依赖复用。
+最终交付包括独立的 `trpc_service` 平台代码、部署清单、数据模型、五类 IM Adapter、治理与审计组件、自动化验收体系，以及可在本地运行的 Admin 管理页；基础 SDK 通过 `trpc-agent-py` 依赖复用。
 
 ## 2. 背景与目标
 
@@ -66,7 +66,7 @@ flowchart LR
     IM2[微信客服] --> GW
     IM3[钉钉] --> GW
     IM4[飞书] --> GW
-    WEB[MyTestWeb / Admin Client] --> GW
+    WEB[Admin UI / Admin Client] --> GW
     GW -->|验签、去重、路由| Q[(Redis Streams)]
     Q --> W1[Agent Worker 1]
     Q --> W2[Agent Worker 2]
@@ -251,7 +251,7 @@ Channel Adapter 统一提供验签、消息解析、普通回复、流式回复�
 | 用户映射 | FromUserName/external_userid + tenant/channel | staff/open_id + tenant/channel |
 | 群聊映射 | chat_id + tenant/channel | conversation/chat_id + tenant/channel |
 | 回复 | 原生 stream 或分段降级 | webhook/SDK 文本或卡片 |
-| 本地验证 | MyTestWeb 平台 fixture | MyTestWeb 平台 fixture |
+| 本地验证 | pytest 平台 fixture | pytest 平台 fixture |
 
 Gateway 必须在平台要求的时间内快速 ACK，Agent 执行转入队列。发送端对限流和临时错误做带抖动的指数退避；永久权限错误进入审计和告警，不进行无限重试。重复回调使用 `tenant:channel:message_id` 幂等键，成功结果可缓存，避免 Agent 副作用被重复执行。
 
@@ -320,7 +320,7 @@ IM callback → Gateway → Redis Streams → Worker → Runner
 | 单元测试 | 租户模型、session ID、验签、分段、Filter、脱敏、预算、迁移算法 |
 | 组件测试 | Gateway、Worker、Channel Adapter、Storage、Admin API、审计 |
 | 集成测试 | Redis/MySQL/Qdrant/S3 兼容接口/Jaeger 后端 |
-| E2E | webhook → queue → Worker → Session → reply，及 MyTestWeb 浏览器流程 |
+| E2E | webhook → queue → Worker → Session → reply，及 Admin API 契约流程 |
 | 故障测试 | 节点 SIGKILL、pending reclaim、数据库断连、模型超时、重复投递 |
 | 迁移测试 | Session/Memory Redis→MySQL、checksum、shadow read、回滚 |
 | 性能测试 | IM callback 峰值、并发 session、长上下文和混合工具负载 |
@@ -336,8 +336,8 @@ IM callback → Gateway → Redis Streams → Worker → Runner
 - 覆盖率报告、JUnit、trace 样例、迁移校验和性能报告作为验收证据。
 
 测试数量与覆盖率以仓库当前 `coverage.sh` 输出为准；CI 对 `trpc_service` 保持 95% 总行覆盖率
-门禁，并执行 `diff-cover --fail-under=85` 增量门禁。MyTestWeb 是本地验证台，不纳入企业生产
-模块覆盖率口径。详细测试矩阵见 `docs/enterprise/ACCEPTANCE_TEST_PLAN.md`。
+门禁，并执行 `diff-cover --fail-under=85` 增量门禁。Admin UI 由后端包内静态页面和 Admin API
+契约测试覆盖。详细测试矩阵见 `docs/enterprise/ACCEPTANCE_TEST_PLAN.md`。
 
 ## 12. 预期效果与验收指标
 
@@ -404,7 +404,7 @@ Worker 并发上限 ≈ min(
 | MySQL 数据模型 | `data/schema.mysql.sql` |
 | Docker Compose / Kubernetes | `deploy/` |
 | 自动化测试 | `tests/service/` |
-| 实战验证台 | `MyTestWeb/` |
+| 本地管理页 | `trpc_service/web/admin/_ui.html` |
 | 多租户示例 | `examples/multi_tenant_saas/` |
 | 详细设计 | `docs/enterprise/DESIGN.md` |
 | 验收测试方案 | `docs/enterprise/ACCEPTANCE_TEST_PLAN.md` |
@@ -418,4 +418,4 @@ Worker 并发上限 ≈ min(
 
 本方案将 tRPC-Agent 从单实例能力验证扩展为面向企业 IM 场景的多租户 Agent 服务平台。核心价值不只是“可以同时服务多个租户”，而是为租户隔离、消息可靠性、无状态扩展、多后端迁移、安全治理和生产运维建立可实现、可验证、可回滚的工程闭环。
 
-通过 MyTestWeb 可以低成本演示租户切换、会话、治理、审计、Trace 和故障场景；通过自动化测试、真实后端集成、故障注入与容量测试，则可以进一步证明系统具备进入生产试点的基础。
+通过 Admin UI 和 API fixture 可以低成本演示租户切换、会话、治理、审计、Trace 和故障场景；通过自动化测试、真实后端集成、故障注入与容量测试，则可以进一步证明系统具备进入生产试点的基础。

@@ -11,9 +11,13 @@ import pytest
 from pydantic import ValidationError
 
 from trpc_service import to_agent_name
+from trpc_service.tenant import AppConfig
+from trpc_service.tenant import AppInfo
+from trpc_service.tenant import BudgetConfig
 from trpc_service.tenant import DingTalkChannelConfig
 from trpc_service.tenant import FeishuChannelConfig
 from trpc_service.tenant import ModelEndpoint
+from trpc_service.tenant import ModelPricingConfig
 from trpc_service.tenant import QQChannelConfig
 from trpc_service.tenant import StorageBackendConfig
 from trpc_service.tenant import Tenant
@@ -39,6 +43,20 @@ def test_tenant_minimal_construction():
     assert tenant.status == TenantStatus.ACTIVE
     assert tenant.model.model_name == "gpt-4o"
     assert tenant.tool_permissions.tool_whitelist == []
+
+
+def test_model_pricing_and_budget_validation():
+    endpoint = ModelEndpoint(
+        model_name="gpt-4o",
+        pricing={"gpt-4o": ModelPricingConfig(input_per_mtok=2.5, output_per_mtok=10)},
+    )
+    assert endpoint.pricing["gpt-4o"].output_per_mtok == 10
+    with pytest.raises(ValidationError):
+        ModelPricingConfig(input_per_mtok=-1)
+    with pytest.raises(ValidationError):
+        BudgetConfig(daily_token_budget=0)
+    with pytest.raises(ValidationError):
+        BudgetConfig(daily_cost_limit=0)
 
 
 def test_audit_backend_is_mysql_only():
@@ -326,3 +344,27 @@ def test_load_tenants_missing_key_raises(tmp_path):
     config_file.write_text("name: no tenants here\n", encoding="utf-8")
     with pytest.raises(ValueError):
         load_tenants(config_file)
+
+
+def test_app_config_and_channel_binding_validation():
+    with pytest.raises(ValueError, match="duplicate app_id"):
+        AppConfig(app_list=[AppInfo(app_id="same"), AppInfo(app_id="same")])
+    with pytest.raises(ValueError, match="default_app_id"):
+        AppConfig(app_list=[AppInfo(app_id="one")], default_app_id="missing")
+    with pytest.raises(ValueError, match="unknown agent_app_id"):
+        Tenant(
+            tenant_id="tenant_a",
+            name="A",
+            model=ModelEndpoint(model_name="m"),
+            app_config=AppConfig(app_list=[AppInfo(app_id="one")]),
+            channel_configs={
+                "support":
+                WeComChannelConfig(
+                    token="token",
+                    aes_key="aes",
+                    corp_id="corp",
+                    agent_id="1",
+                    agent_app_id="missing",
+                )
+            },
+        )

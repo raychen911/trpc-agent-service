@@ -41,6 +41,15 @@ class TenantStatus(str, Enum):
     DISABLED = "disabled"
 
 
+class ModelPricingConfig(BaseModel):
+    """Tenant-owned model prices in USD per million tokens."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    input_per_mtok: float = Field(default=0.0, ge=0)
+    output_per_mtok: float = Field(default=0.0, ge=0)
+
+
 class ModelEndpoint(BaseModel):
     """Model provider configuration for a tenant."""
 
@@ -60,8 +69,8 @@ class ModelEndpoint(BaseModel):
     """Fallback model used when the primary model times out."""
     api_key_env: str = "TRPC_AGENT_API_KEY"
     """Environment/Kubernetes Secret key containing this tenant's model credential."""
-    daily_token_budget: Optional[int] = None
-    """Optional daily token budget ceiling for this tenant."""
+    pricing: dict[str, ModelPricingConfig] = Field(default_factory=dict)
+    """Prices keyed by configured model name, used for cost accounting and limits."""
 
 
 class ToolPermissions(BaseModel):
@@ -89,6 +98,14 @@ class BaseChannelConfig(BaseModel):
     """
 
     model_config = ConfigDict(extra="forbid")
+
+    agent_app_id: Optional[str] = None
+    """Agent application selected for this channel binding.
+
+    ``channel_configs`` is keyed by a binding id. Keeping the Agent binding on
+    the channel config allows one tenant to bind multiple accounts of the same
+    IM type to different Agent applications.
+    """
 
 
 class WeComChannelConfig(BaseChannelConfig):
@@ -278,8 +295,18 @@ class AppConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     app_list: list[AppInfo] = Field(default_factory=list)
+    default_app_id: Optional[str] = None
     default_instruction: str = ""
-    max_concurrent_sessions: int = 500
+    max_concurrent_sessions: int = Field(default=500, gt=0)
+
+    @model_validator(mode="after")
+    def _validate_apps(self) -> AppConfig:
+        app_ids = [item.app_id for item in self.app_list]
+        if len(app_ids) != len(set(app_ids)):
+            raise ValueError("app_config.app_list contains duplicate app_id values")
+        if self.default_app_id is not None and self.default_app_id not in app_ids:
+            raise ValueError("app_config.default_app_id must reference app_config.app_list")
+        return self
 
 
 class IMAccessPolicy(BaseModel):
@@ -298,8 +325,8 @@ class BudgetConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    daily_token_budget: Optional[int] = None
-    daily_cost_limit: Optional[float] = None
+    daily_token_budget: Optional[int] = Field(default=None, gt=0)
+    daily_cost_limit: Optional[float] = Field(default=None, gt=0)
 
 
 class Tenant(BaseModel):
@@ -332,3 +359,12 @@ class Tenant(BaseModel):
         if ":" in value or "/" in value:
             raise ValueError("tenant_id must not contain ':' or '/' (they are storage key delimiters)")
         return value
+
+    @model_validator(mode="after")
+    def _validate_channel_app_bindings(self) -> Tenant:
+        app_ids = {item.app_id for item in self.app_config.app_list}
+        for binding_id, channel in self.channel_configs.items():
+            if channel.agent_app_id is not None and channel.agent_app_id not in app_ids:
+                raise ValueError(f"channel binding '{binding_id}' references unknown agent_app_id "
+                                 f"'{channel.agent_app_id}'")
+        return self

@@ -16,6 +16,8 @@ from ._filters import TenantResolver
 from ._filters import ToolAllowlistFilter
 from ._filters import ToolOutputRedactionFilter
 from ._filters import ToolCallLimitFilter
+from ._filters import ToolExecutionTimeoutFilter
+from ._filters import GovernedToolSet
 from ._filters import build_governance
 from ._filters import build_governance_filters
 from ._filters import apply_tenant_governance
@@ -44,6 +46,8 @@ __all__ = [
     "ToolConfirmationRequired",
     "ToolOutputRedactionFilter",
     "ToolCallLimitFilter",
+    "ToolExecutionTimeoutFilter",
+    "GovernedToolSet",
     "build_governance",
     "build_governance_filters",
     "apply_tenant_governance",

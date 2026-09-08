@@ -20,6 +20,7 @@ from ._models import DesensitizeRule
 from ._models import DingTalkChannelConfig
 from ._models import FeishuChannelConfig
 from ._models import ModelEndpoint
+from ._models import ModelPricingConfig
 from ._models import IMAccessPolicy
 from ._models import ObjectBackendConfig
 from ._models import QQChannelConfig
@@ -48,6 +49,7 @@ __all__ = [
     "DingTalkChannelConfig",
     "FeishuChannelConfig",
     "ModelEndpoint",
+    "ModelPricingConfig",
     "MySqlTenantRepository",
     "ObjectBackendConfig",
     "QQChannelConfig",

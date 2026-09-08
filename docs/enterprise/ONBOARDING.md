@@ -38,7 +38,7 @@ tenants:
 
 | 配置域 | 字段 | 说明 |
 |---|---|---|
-| 应用 | `app_config.app_list` / `default_instruction` / `max_concurrent_sessions` | 绑定 App、默认提示词、并发上限 |
+| 应用 | `app_config.app_list` / `default_app_id` / `default_instruction` / `max_concurrent_sessions` | 多 Agent App、默认路由、提示词、容量目标 |
 | 模型 | `model.provider` / `model_name` / `api_endpoint` / `timeout` / `retry` / `fallback_model` | 主模型与降级 |
 | 工具 | `tool_permissions.tool_whitelist` / `tool_denylist` / `dangerous_tools` | 白名单（空=全放行）/黑名单/需二次确认 |
 | IM | `channel_configs.<channel>` | 每通道密钥（`SecretStr`） |
@@ -122,8 +122,8 @@ channel_configs:
     encrypt_key: ${FEISHU_ENCRYPT_KEY}
 ```
 
-回调地址分别使用 `/wechat_kf`、`/dingtalk`、`/feishu`。没有真实凭据时，可在
-MyTestWeb 的「IM 接入」页用四种平台 fixture 验证标准化、session 路由和回复转换。
+回调地址分别使用 `/wechat_kf`、`/dingtalk`、`/feishu`。没有真实凭据时，可通过
+`tests/service/test_channels.py` 中的平台 fixture 验证标准化、session 路由和回复转换。
 
 ### QQ 机器人
 
@@ -185,6 +185,13 @@ storage_config:
 ## 8. 步骤七：配置审计与预算
 
 ```yaml
+model:
+  model_name: gpt-4o
+  pricing:                           # 示例；按供应商合同价维护
+    gpt-4o:
+      input_per_mtok: 2.5
+      output_per_mtok: 10.0
+
 audit_policy:
   enabled: true
   retention_days: 90
@@ -197,7 +204,9 @@ budget:
   daily_cost_limit: 50.0
 ```
 
-预算由 `ModelBudgetFilter` 在每次模型调用前后检查/累计；超限抛出 `BudgetExceededError`。
+预算由 `ModelBudgetFilter` 在每次模型调用前后检查/累计；调用前会同时原子预留 token 和保守估算成本，
+超限抛出 `BudgetExceededError`。配置 `daily_cost_limit` 时若当前模型没有价格，系统会 fail closed 拒绝调用，
+防止成本控制静默失效。模型供应商调价时应通过租户配置灰度更新 `pricing`。
 
 ## 9. 步骤八：验证接入
 

@@ -311,13 +311,14 @@ async def test_redis_budget_full_lifecycle_and_limits():
     tracker.set_pricing("m", ModelPricing(input_per_mtok=2, output_per_mtok=4))
     item = tenant()
     item.budget = BudgetConfig(daily_token_budget=20, daily_cost_limit=0.00002)
-    assert await tracker.reserve(item, 10, "2026-01-01") is True
-    assert await tracker.reserve(item, 11, "2026-01-01") is False
-    await tracker.release(item.tenant_id, 99, "2026-01-01")
+    assert await tracker.reserve(item, 4, "2026-01-01", model_name="m") is True
+    assert await tracker.reserve(item, 2, "2026-01-01", model_name="m") is False
+    await tracker.release(item.tenant_id, 99, "2026-01-01", model_name="m")
     await tracker.record(item.tenant_id, "m", 5, 5, "2026-01-01")
     usage = await tracker.usage(item.tenant_id, "2026-01-01")
     assert usage["input"] == usage["output"] == 5
     assert usage["reserved"] == 0
+    assert usage["reserved_cost"] == 0
     assert await tracker.is_within_budget(item, "2026-01-01") is False
 
     unlimited = tenant()

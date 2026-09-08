@@ -19,6 +19,8 @@ from trpc_service.web.gateway import ChannelRegistry
 from trpc_service.web.gateway import LocalIdempotencyStore
 from trpc_service.web.gateway import create_gateway_app
 from trpc_service.tenant import ModelEndpoint
+from trpc_service.tenant import AppConfig
+from trpc_service.tenant import AppInfo
 from trpc_service.tenant import Tenant
 from trpc_service.tenant import TenantConfigManager
 from trpc_service.tenant import TenantStatus
@@ -61,6 +63,7 @@ class FakeWorker:
     def __init__(self, manager):
         self.manager = manager
         self.handled: list[tuple[str, str, str]] = []
+        self.handled_metadata: list[dict] = []
         self.metrics = EnterpriseMetrics(meter=False)
 
     def resolve_tenant(self, tenant_id):
@@ -71,6 +74,7 @@ class FakeWorker:
 
     async def handle(self, tenant_id, channel, inbound):
         self.handled.append((tenant_id, channel, inbound.text))
+        self.handled_metadata.append(dict(inbound.metadata))
         return "echo: " + inbound.text
 
 
@@ -125,6 +129,55 @@ def test_gateway_routes_and_dispatches():
     callback = next(item for item in snapshot["counters"] if item["name"] == "agent_callback_total")
     assert callback["attributes"]["outcome"] == "success"
     assert next(item for item in snapshot["histograms"] if item["name"] == "agent_callback_duration_ms")["count"] == 1
+
+
+def test_gateway_routes_binding_to_configured_agent_app():
+    manager = TenantConfigManager()
+    tenant = Tenant(
+        tenant_id="tenant_a",
+        name="t",
+        model=ModelEndpoint(model_name="gpt-4o"),
+        app_config=AppConfig(
+            app_list=[AppInfo(app_id="sales"), AppInfo(app_id="support")],
+            default_app_id="sales",
+        ),
+        channel_configs={
+            "support_wecom":
+            WeComChannelConfig(
+                token="token",
+                aes_key="aes",
+                corp_id="corp",
+                agent_id="1",
+                agent_app_id="support",
+            )
+        },
+    )
+    manager.register(tenant)
+    worker = FakeWorker(manager)
+    registry = ChannelRegistry(factories={"wecom": lambda cfg: FakeAdapter(cfg)})
+    app = create_gateway_app(
+        manager=manager,
+        worker=worker,
+        registry=registry,
+        idempotency_store=LocalIdempotencyStore(),
+        async_dispatch=False,
+    )
+
+    response = TestClient(app).post(
+        "/webhook/tenant_a/support_wecom",
+        json={
+            "message_id": "binding-1",
+            "text": "hello"
+        },
+        headers={"x-signature": "good"},
+    )
+
+    assert response.status_code == 200
+    assert worker.handled == [("tenant_a", "support_wecom", "hello")]
+    assert worker.handled_metadata == [{
+        "channel_binding_id": "support_wecom",
+        "agent_app_id": "support",
+    }]
 
 
 def test_gateway_records_platform_challenge_separately_from_user_messages():

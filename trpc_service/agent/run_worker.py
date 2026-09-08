@@ -65,7 +65,10 @@ def build_stream_worker(manager: Optional[TenantConfigManager] = None,
         confirmation_manager=create_confirmation_manager(),
         session_lock_manager=create_session_lock_manager(),
     )
-    queue = StreamQueue(redis_url=os.environ.get("REDIS_URL"))
+    queue = StreamQueue(
+        redis_url=os.environ.get("REDIS_URL"),
+        consumer=os.environ.get("AGENT_WORKER_ID"),
+    )
     result_store = RedisTaskResultStore(redis_url=os.environ.get("REDIS_URL"))
     stream_worker = StreamWorker(
         queue=queue,

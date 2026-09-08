@@ -20,7 +20,7 @@
 
 | 需求 | 实现 | 验证 |
 |---|---|---|
-| 不同租户为 Session/Memory 选择 Redis/MySQL，Vector 选择 Memory/Qdrant，Object 选择 Local/S3/MinIO/COS | `tenant/_models.py::StorageBackendConfig` + `workspace/_router.py` | `test_tenant_storage.py`、`test_data_backends.py`、MyTestWeb API 测试 |
+| 不同租户为 Session/Memory 选择 Redis/MySQL，Vector 选择 Memory/Qdrant，Object 选择 Local/S3/MinIO/COS | `tenant/_models.py::StorageBackendConfig` + `workspace/_router.py` | `test_tenant_storage.py`、`test_data_backends.py` |
 | 统一数据访问抽象 | 复用 `SessionServiceABC`/`MemoryServiceABC`；新增 `VectorStoreABC`/`ObjectStoreABC` 及租户包装器 | `test_tenant_storage.py`、`test_data_backends.py` |
 | Session/Summary 存储 | 复用 `sessions/`（summary 作为 summary event） | core `tests/sessions/` |
 | Memory 存储 | 复用 `memory/` + `TenantMemoryService` | `test_tenant_storage.py::test_memory_search_key_is_tenant_scoped` |
@@ -28,7 +28,7 @@
 | 多节点并发一致性 | Session lock + 配置 `config_version` CAS/outbox | `test_adversarial.py`、`test_tenant_persistence.py::test_two_managers_reject_stale_concurrent_update` |
 | IM 幂等 | `web/gateway/_idempotency.py` | `test_gateway.py::test_gateway_dedups_redelivered_message`、`test_adversarial.py::test_idempotency_store_dedups_concurrent_duplicates` |
 | 最小数据模型 | `data/schema.mysql.sql` + `DATA_MODEL.md` + `log/_sql_sink.py::AuditLogRecord` | `test_data_model.py`、`test_audit.py`、`test_tenant_persistence.py` |
-| Session/Memory Redis→MySQL 真实迁移 | `workspace/_backend_migration.py` + MyTestWeb migration API | `test_backend_migration.py` + Docker 单向实测 |
+| Session/Memory Redis→MySQL 真实迁移 | `workspace/_backend_migration.py` | `test_backend_migration.py` + Docker 单向实测 |
 | 异构数据同步/幂等 | `storage_outbox`、版本/CAS、内容 checksum、确定性向量 point id | `SYNC_AND_IDEMPOTENCY.md`、`test_data_backends.py`、`test_data_model.py` |
 
 ## 2.3 IM 软件接入
@@ -37,7 +37,7 @@
 |---|---|---|
 | 四类 Channel Adapter | `_wecom.py`、`_wechat_kf.py`、`_dingtalk.py`、`_feishu.py` | `test_channels.py`、`test_channel_send.py` |
 | QQ Bot 扩展 Adapter | `_qq.py` + `web/gateway/_app.py` | `test_qq_channel.py`（签名、事件、发送与端到端回调） |
-| 消息转换（IM↔Agent） | 四类 Adapter + `agent/_worker.py` | `test_channels.py`、MyTestWeb `/api/im/simulate` 测试 |
+| 消息转换（IM↔Agent） | 四类 Adapter + `agent/_worker.py` | `test_channels.py`、`test_e2e.py` |
 | 验签 | `_crypto.py` + 平台 token/secret 校验边界 | `test_channels.py::test_wecom_signature_verification`、四平台签名测试 |
 | 账号绑定 + 身份映射 | 四类 Adapter + `DESIGN.md` §5.3 | `test_channels.py` |
 | session_id 生成（单聊/群聊/跨租户） | `channels/_models.py::generate_session_id` | `test_channels.py::test_generate_session_id_*` |
@@ -79,8 +79,8 @@
 
 ## 验收基线（2026-09-07）
 
-- `pytest tests/service`：233 passed；
-- `--cov=trpc_service --cov-fail-under=95`：95.85%；
+- `pytest tests/service`：241 passed；
+- `--cov=trpc_service --cov-fail-under=95`：95.78%；
 - `diff-cover coverage.xml --fail-under=85`：95%；
 - Redis pending reclaim/DLQ、跨节点锁、结果缓存、fallback model、Admin API、迁移双写、OTel Trace/Metrics 和 Prometheus 部署契约已纳入自动测试；
 - 完整的环境、故障、迁移、容量和逐项验收方法见 `ACCEPTANCE_TEST_PLAN.md`。

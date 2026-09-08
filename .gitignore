@@ -30,9 +30,8 @@ __pycache__
 .wrangler
 node_modules
 
-# Duplicate/temporary frontend prototype; MyTestWeb is the retained frontend.
+# Local frontend prototypes; the tracked Admin UI lives under trpc_service/web/admin.
 /MyTestUserWeb/
-# Local frontend sandbox; do not publish local experiments from this checkout.
 /MyTestWeb/
 
 .coverage

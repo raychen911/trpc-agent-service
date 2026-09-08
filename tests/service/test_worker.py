@@ -17,9 +17,12 @@ from trpc_service import TenantConfigManager
 from trpc_service import TenantWorker
 from trpc_service import generate_session_id
 from trpc_service.channels import CHAT_PRIVATE
+from trpc_service.channels import CHAT_GROUP
 from trpc_service.tool import ConfirmationManager
 from trpc_service.tool import parse_confirmation_token
 from trpc_service.tenant import ModelEndpoint
+from trpc_service.tenant import AppConfig
+from trpc_service.tenant import AppInfo
 from trpc_service.tenant import Tenant
 from trpc_agent_sdk.events import Event
 from trpc_agent_sdk.sessions import InMemorySessionService
@@ -44,6 +47,17 @@ class FailingAgent(BaseAgent):
         if False:  # pragma: no cover - makes this an async generator
             yield
         raise RuntimeError("runner failed")
+
+
+class ConfirmationCaptureAgent(BaseAgent):
+
+    def __init__(self, name: str, captured: list[list[str]]) -> None:
+        super().__init__(name=name)
+        self._captured = captured
+
+    async def _run_async_impl(self, ctx):
+        self._captured.append(ctx.agent_context.get_metadata("confirmed_tools") or [])
+        yield Event(author=self.name, content=Content(parts=[Part.from_text(text="ok")]), partial=False)
 
 
 def _has_metric(metrics, kind, name, **expected):
@@ -117,6 +131,88 @@ async def test_worker_isolates_tenants_on_shared_backend():
     sid_a = generate_session_id("t_a", "wecom", CHAT_PRIVATE, "u1", "u1")
     sid_b = generate_session_id("t_b", "wecom", CHAT_PRIVATE, "u1", "u1")
     assert sid_a != sid_b
+
+
+async def test_group_members_share_session_and_binding_selects_agent_app():
+    manager = TenantConfigManager()
+    manager.register(
+        Tenant(
+            tenant_id="t_a",
+            name="A",
+            model=ModelEndpoint(model_name="m"),
+            app_config=AppConfig(
+                app_list=[
+                    AppInfo(app_id="sales", instruction="sales prompt"),
+                    AppInfo(app_id="support", instruction="support prompt"),
+                ],
+                default_app_id="sales",
+            ),
+        ))
+    shared = InMemorySessionService()
+    selected = []
+
+    def agent_factory(tenant):
+        selected.append((tenant.app_config.default_app_id, tenant.app_config.default_instruction))
+        return EchoAgent(name=tenant.app_config.default_app_id or tenant.tenant_id)
+
+    worker = TenantWorker(
+        manager=manager,
+        agent_factory=agent_factory,
+        session_service_factory=lambda tenant: shared,
+    )
+    first = InboundMessage(
+        channel="wecom",
+        chat_id="group-1",
+        chat_type=CHAT_GROUP,
+        sender_id="alice",
+        message_id="group-1-a",
+        text="one",
+        metadata={"agent_app_id": "support"},
+    )
+    second = first.model_copy(update={"sender_id": "bob", "message_id": "group-1-b", "text": "two"})
+
+    await worker.handle("t_a", "support_wecom", first)
+    await worker.handle("t_a", "support_wecom", second)
+
+    session_id = generate_session_id("t_a", "support_wecom", CHAT_GROUP, "alice", "group-1")
+    shared_session = await shared.get_session(
+        app_name="t_a:support",
+        user_id="group:group-1",
+        session_id=session_id,
+    )
+    assert shared_session is not None
+    assert await shared.get_session(app_name="t_a:support", user_id="alice", session_id=session_id) is None
+    assert await shared.get_session(app_name="t_a:support", user_id="bob", session_id=session_id) is None
+    assert selected == [("support", "support prompt"), ("support", "support prompt")]
+
+
+async def test_worker_rejects_ambiguous_or_unknown_agent_app():
+    manager = TenantConfigManager()
+    manager.register(
+        Tenant(
+            tenant_id="t_a",
+            name="A",
+            model=ModelEndpoint(model_name="m"),
+            app_config=AppConfig(app_list=[AppInfo(app_id="one"), AppInfo(app_id="two")]),
+        ))
+    worker = TenantWorker(
+        manager=manager,
+        agent_factory=lambda tenant: EchoAgent(name=tenant.tenant_id),
+        session_service_factory=lambda tenant: InMemorySessionService(),
+    )
+    inbound = InboundMessage(channel="wecom", chat_id="u1", sender_id="u1", message_id="app", text="hi")
+
+    with pytest.raises(ValueError, match="explicit agent_app_id"):
+        await worker.handle("t_a", "wecom", inbound)
+    with pytest.raises(ValueError, match="not configured"):
+        await worker.handle(
+            "t_a",
+            "wecom",
+            inbound.model_copy(update={"metadata": {
+                "agent_app_id": "missing"
+            }}),
+        )
+    assert _has_metric(worker.metrics, "counters", "agent_requests_total", outcome="error", error_type="ValueError")
 
 
 async def test_worker_rejects_unknown_tenant():
@@ -219,7 +315,61 @@ async def test_worker_hitl_confirmation_flow():
     session_id = generate_session_id("t_a", "wecom", CHAT_PRIVATE, "u1", "u1")
     session = await shared.get_session(app_name="t_a:default", user_id="u1", session_id=session_id)
     assert session is not None
-    assert "cancel_order" in session.state.get("confirmed_tools", [])
+    assert "cancel_order" in session.state.get("confirmed_tools", {}).get("u1", [])
+
+
+async def test_group_hitl_grant_is_sender_bound_and_one_shot():
+    manager = TenantConfigManager()
+    manager.register(Tenant(tenant_id="t_a", name="A", model=ModelEndpoint(model_name="m")))
+    shared = InMemorySessionService()
+    confirmations = ConfirmationManager()
+    captured: list[list[str]] = []
+    worker = TenantWorker(
+        manager=manager,
+        agent_factory=lambda tenant: ConfirmationCaptureAgent(tenant.tenant_id, captured),
+        session_service_factory=lambda tenant: shared,
+        confirmation_manager=confirmations,
+    )
+    session_id = generate_session_id("t_a", "wecom", CHAT_GROUP, "u1", "group-1")
+    pending = confirmations.request(
+        "t_a",
+        "cancel_order",
+        user_id="u1",
+        session_id=session_id,
+    )
+
+    def inbound(sender_id: str, message_id: str, text: str) -> InboundMessage:
+        return InboundMessage(
+            channel="wecom",
+            chat_id="group-1",
+            chat_type=CHAT_GROUP,
+            sender_id=sender_id,
+            message_id=message_id,
+            text=text,
+        )
+
+    await worker.handle("t_a", "wecom", inbound("u1", "confirm", f"确认 {pending.token}"))
+    await worker.handle("t_a", "wecom", inbound("u2", "other", "do it"))
+    assert captured[-1] == []
+
+    session = await shared.get_session(
+        app_name="t_a:default",
+        user_id="group:group-1",
+        session_id=session_id,
+    )
+    assert session.state["confirmed_tools"]["u1"] == ["cancel_order"]
+
+    await worker.handle("t_a", "wecom", inbound("u1", "owner", "do it"))
+    assert captured[-1] == ["cancel_order"]
+    session = await shared.get_session(
+        app_name="t_a:default",
+        user_id="group:group-1",
+        session_id=session_id,
+    )
+    assert "u1" not in session.state["confirmed_tools"]
+
+    await worker.handle("t_a", "wecom", inbound("u1", "again", "do it again"))
+    assert captured[-1] == []
 
 
 async def test_worker_hitl_invalid_token():
