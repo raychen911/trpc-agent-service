@@ -1,0 +1,570 @@
+{
+  "data": [
+    {
+      "traceID": "13336cacaf006268e0532a903e3d540c",
+      "spans": [
+        {
+          "traceID": "13336cacaf006268e0532a903e3d540c",
+          "spanID": "8ff37e73303aee82",
+          "operationName": "HTTP POST /webhooks/wecom/demo-bot",
+          "references": [],
+          "startTime": 1788441532900449,
+          "duration": 9415,
+          "tags": [
+            {
+              "key": "otel.scope.name",
+              "type": "string",
+              "value": "trpc_service"
+            },
+            {
+              "key": "http.request.method",
+              "type": "string",
+              "value": "POST"
+            },
+            {
+              "key": "http.response.status_code",
+              "type": "int64",
+              "value": 200
+            },
+            {
+              "key": "trpc.request_id",
+              "type": "string",
+              "value": "request-demo-001"
+            },
+            {
+              "key": "url.path",
+              "type": "string",
+              "value": "/webhooks/wecom/demo-bot"
+            },
+            {
+              "key": "span.kind",
+              "type": "string",
+              "value": "internal"
+            }
+          ],
+          "logs": [],
+          "processID": "p1",
+          "warnings": null
+        },
+        {
+          "traceID": "13336cacaf006268e0532a903e3d540c",
+          "spanID": "28f7137ca2ade470",
+          "operationName": "storage.session.read",
+          "references": [
+            {
+              "refType": "CHILD_OF",
+              "traceID": "13336cacaf006268e0532a903e3d540c",
+              "spanID": "95e6d9ae3c37d7bb"
+            }
+          ],
+          "startTime": 1788441533115714,
+          "duration": 1289,
+          "tags": [
+            {
+              "key": "otel.scope.name",
+              "type": "string",
+              "value": "trpc_service"
+            },
+            {
+              "key": "trpc.session_id",
+              "type": "string",
+              "value": "wecom:demo-bot:direct:user-demo-001"
+            },
+            {
+              "key": "trpc.tenant_id",
+              "type": "string",
+              "value": "tenant-demo-001"
+            },
+            {
+              "key": "span.kind",
+              "type": "string",
+              "value": "internal"
+            }
+          ],
+          "logs": [],
+          "processID": "p1",
+          "warnings": null
+        },
+        {
+          "traceID": "13336cacaf006268e0532a903e3d540c",
+          "spanID": "30d683ce7580b56f",
+          "operationName": "agent.execute",
+          "references": [
+            {
+              "refType": "CHILD_OF",
+              "traceID": "13336cacaf006268e0532a903e3d540c",
+              "spanID": "95e6d9ae3c37d7bb"
+            }
+          ],
+          "startTime": 1788441533124035,
+          "duration": 1118695,
+          "tags": [
+            {
+              "key": "otel.scope.name",
+              "type": "string",
+              "value": "trpc_service"
+            },
+            {
+              "key": "trpc.agent_app_id",
+              "type": "string",
+              "value": "app-demo-001"
+            },
+            {
+              "key": "trpc.session_id",
+              "type": "string",
+              "value": "wecom:demo-bot:direct:user-demo-001"
+            },
+            {
+              "key": "trpc.tenant_id",
+              "type": "string",
+              "value": "tenant-demo-001"
+            },
+            {
+              "key": "span.kind",
+              "type": "string",
+              "value": "internal"
+            }
+          ],
+          "logs": [],
+          "processID": "p1",
+          "warnings": null
+        },
+        {
+          "traceID": "13336cacaf006268e0532a903e3d540c",
+          "spanID": "f965c5d0e4268740",
+          "operationName": "storage.commit_turn",
+          "references": [
+            {
+              "refType": "CHILD_OF",
+              "traceID": "13336cacaf006268e0532a903e3d540c",
+              "spanID": "95e6d9ae3c37d7bb"
+            }
+          ],
+          "startTime": 1788441534249627,
+          "duration": 10305,
+          "tags": [
+            {
+              "key": "otel.scope.name",
+              "type": "string",
+              "value": "trpc_service"
+            },
+            {
+              "key": "trpc.session_id",
+              "type": "string",
+              "value": "wecom:demo-bot:direct:user-demo-001"
+            },
+            {
+              "key": "trpc.tenant_id",
+              "type": "string",
+              "value": "tenant-demo-001"
+            },
+            {
+              "key": "span.kind",
+              "type": "string",
+              "value": "internal"
+            }
+          ],
+          "logs": [],
+          "processID": "p1",
+          "warnings": null
+        },
+        {
+          "traceID": "13336cacaf006268e0532a903e3d540c",
+          "spanID": "95e6d9ae3c37d7bb",
+          "operationName": "gateway.route",
+          "references": [
+            {
+              "refType": "CHILD_OF",
+              "traceID": "13336cacaf006268e0532a903e3d540c",
+              "spanID": "ec9b09b7a09390b4"
+            }
+          ],
+          "startTime": 1788441533111923,
+          "duration": 1148429,
+          "tags": [
+            {
+              "key": "otel.scope.name",
+              "type": "string",
+              "value": "trpc_service"
+            },
+            {
+              "key": "trpc.channel",
+              "type": "string",
+              "value": "wecom"
+            },
+            {
+              "key": "trpc.node_id",
+              "type": "string",
+              "value": "node-demo-1"
+            },
+            {
+              "key": "trpc.session_id",
+              "type": "string",
+              "value": "wecom:demo-bot:direct:user-demo-001"
+            },
+            {
+              "key": "trpc.tenant_id",
+              "type": "string",
+              "value": "tenant-demo-001"
+            },
+            {
+              "key": "span.kind",
+              "type": "string",
+              "value": "internal"
+            }
+          ],
+          "logs": [],
+          "processID": "p1",
+          "warnings": null
+        },
+        {
+          "traceID": "13336cacaf006268e0532a903e3d540c",
+          "spanID": "ec9b09b7a09390b4",
+          "operationName": "im.consume",
+          "references": [
+            {
+              "refType": "CHILD_OF",
+              "traceID": "13336cacaf006268e0532a903e3d540c",
+              "spanID": "8ff37e73303aee82"
+            }
+          ],
+          "startTime": 1788441533111895,
+          "duration": 1152812,
+          "tags": [
+            {
+              "key": "otel.scope.name",
+              "type": "string",
+              "value": "trpc_service"
+            },
+            {
+              "key": "messaging.message.id",
+              "type": "string",
+              "value": "message-demo-001"
+            },
+            {
+              "key": "messaging.system",
+              "type": "string",
+              "value": "wecom"
+            },
+            {
+              "key": "span.kind",
+              "type": "string",
+              "value": "consumer"
+            }
+          ],
+          "logs": [],
+          "processID": "p1",
+          "warnings": null
+        },
+        {
+          "traceID": "13336cacaf006268e0532a903e3d540c",
+          "spanID": "ba0dc8c6fa7ad93c",
+          "operationName": "outbox.deliver",
+          "references": [
+            {
+              "refType": "CHILD_OF",
+              "traceID": "13336cacaf006268e0532a903e3d540c",
+              "spanID": "8ff37e73303aee82"
+            }
+          ],
+          "startTime": 1788441534488450,
+          "duration": 528403,
+          "tags": [
+            {
+              "key": "otel.scope.name",
+              "type": "string",
+              "value": "trpc_service"
+            },
+            {
+              "key": "messaging.destination.name",
+              "type": "string",
+              "value": "im.reply.wecom"
+            },
+            {
+              "key": "trpc.tenant_id",
+              "type": "string",
+              "value": "tenant-demo-001"
+            },
+            {
+              "key": "span.kind",
+              "type": "string",
+              "value": "producer"
+            }
+          ],
+          "logs": [],
+          "processID": "p1",
+          "warnings": null
+        },
+        {
+          "traceID": "13336cacaf006268e0532a903e3d540c",
+          "spanID": "da4eea76006db142",
+          "operationName": "call_llm",
+          "references": [
+            {
+              "refType": "CHILD_OF",
+              "traceID": "13336cacaf006268e0532a903e3d540c",
+              "spanID": "ed23e17f599d8ab4"
+            }
+          ],
+          "startTime": 1788441533131122,
+          "duration": 1109777,
+          "tags": [
+            {
+              "key": "otel.scope.name",
+              "type": "string",
+              "value": "trpc.python.agent"
+            },
+            {
+              "key": "gen_ai.operation.name",
+              "type": "string",
+              "value": "call_llm"
+            },
+            {
+              "key": "gen_ai.request.model",
+              "type": "string",
+              "value": "deepseek-chat"
+            },
+            {
+              "key": "gen_ai.system",
+              "type": "string",
+              "value": "trpc.python.agent"
+            },
+            {
+              "key": "gen_ai.usage.cache_read_input_tokens",
+              "type": "int64",
+              "value": 0
+            },
+            {
+              "key": "gen_ai.usage.input_tokens",
+              "type": "int64",
+              "value": 25
+            },
+            {
+              "key": "gen_ai.usage.output_tokens",
+              "type": "int64",
+              "value": 2
+            },
+            {
+              "key": "trpc.python.agent.event_id",
+              "type": "string",
+              "value": "event-demo-001"
+            },
+            {
+              "key": "trpc.python.agent.invocation_id",
+              "type": "string",
+              "value": "invocation-demo-001"
+            },
+            {
+              "key": "trpc.python.agent.llm_request",
+              "type": "string",
+              "value": "{\"model\": \"deepseek-chat\", \"config\": {\"temperature\": 0.2}, \"contents\": [{\"parts\": [{\"text\": \"企业微信完整链路验证消息\"}], \"role\": \"user\"}]}"
+            },
+            {
+              "key": "trpc.python.agent.llm_response",
+              "type": "string",
+              "value": "{\"content\":{\"parts\":[{\"text\":\"验证成功\",\"thought\":false}],\"role\":\"model\"},\"partial\":false,\"custom_metadata\":{\"stream_complete\":true},\"usage_metadata\":{\"candidates_token_count\":2,\"prompt_token_count\":25,\"total_token_count\":27,\"cache_read_input_tokens\":0},\"response_id\":\"response-demo-001\"}"
+            },
+            {
+              "key": "trpc.python.agent.session_id",
+              "type": "string",
+              "value": "wecom:demo-bot:direct:user-demo-001"
+            },
+            {
+              "key": "span.kind",
+              "type": "string",
+              "value": "internal"
+            }
+          ],
+          "logs": [],
+          "processID": "p1",
+          "warnings": null
+        },
+        {
+          "traceID": "13336cacaf006268e0532a903e3d540c",
+          "spanID": "ed23e17f599d8ab4",
+          "operationName": "agent_run [support_agent]",
+          "references": [
+            {
+              "refType": "CHILD_OF",
+              "traceID": "13336cacaf006268e0532a903e3d540c",
+              "spanID": "44983bf1cd2a839a"
+            }
+          ],
+          "startTime": 1788441533130802,
+          "duration": 1111848,
+          "tags": [
+            {
+              "key": "otel.scope.name",
+              "type": "string",
+              "value": "trpc.python.agent"
+            },
+            {
+              "key": "gen_ai.operation.name",
+              "type": "string",
+              "value": "run_agent"
+            },
+            {
+              "key": "gen_ai.system",
+              "type": "string",
+              "value": "trpc.python.agent"
+            },
+            {
+              "key": "trpc.python.agent.agent.input",
+              "type": "string",
+              "value": "企业微信完整链路验证消息"
+            },
+            {
+              "key": "trpc.python.agent.agent.name",
+              "type": "string",
+              "value": "support_agent"
+            },
+            {
+              "key": "trpc.python.agent.agent.output",
+              "type": "string",
+              "value": "验证成功"
+            },
+            {
+              "key": "trpc.python.agent.agent.session_id",
+              "type": "string",
+              "value": "wecom:demo-bot:direct:user-demo-001"
+            },
+            {
+              "key": "trpc.python.agent.agent.user_id",
+              "type": "string",
+              "value": "user-demo-001"
+            },
+            {
+              "key": "trpc.python.agent.state.begin",
+              "type": "string",
+              "value": "{}"
+            },
+            {
+              "key": "trpc.python.agent.state.end",
+              "type": "string",
+              "value": "{}"
+            },
+            {
+              "key": "span.kind",
+              "type": "string",
+              "value": "internal"
+            }
+          ],
+          "logs": [],
+          "processID": "p1",
+          "warnings": null
+        },
+        {
+          "traceID": "13336cacaf006268e0532a903e3d540c",
+          "spanID": "44983bf1cd2a839a",
+          "operationName": "invocation",
+          "references": [
+            {
+              "refType": "CHILD_OF",
+              "traceID": "13336cacaf006268e0532a903e3d540c",
+              "spanID": "30d683ce7580b56f"
+            }
+          ],
+          "startTime": 1788441533127453,
+          "duration": 1115254,
+          "tags": [
+            {
+              "key": "otel.scope.name",
+              "type": "string",
+              "value": "trpc.python.agent"
+            },
+            {
+              "key": "gen_ai.operation.name",
+              "type": "string",
+              "value": "run_runner"
+            },
+            {
+              "key": "gen_ai.system",
+              "type": "string",
+              "value": "trpc.python.agent"
+            },
+            {
+              "key": "trpc.python.agent.runner.app_name",
+              "type": "string",
+              "value": "tenant-demo-001:app-demo-001:v6"
+            },
+            {
+              "key": "trpc.python.agent.runner.input",
+              "type": "string",
+              "value": "企业微信完整链路验证消息"
+            },
+            {
+              "key": "trpc.python.agent.runner.name",
+              "type": "string",
+              "value": "[trpc-agent]: tenant-demo-001:app-demo-001:v6/support_agent"
+            },
+            {
+              "key": "trpc.python.agent.runner.output",
+              "type": "string",
+              "value": "验证成功"
+            },
+            {
+              "key": "trpc.python.agent.runner.session_id",
+              "type": "string",
+              "value": "wecom:demo-bot:direct:user-demo-001"
+            },
+            {
+              "key": "trpc.python.agent.runner.user_id",
+              "type": "string",
+              "value": "user-demo-001"
+            },
+            {
+              "key": "trpc.python.agent.state.begin",
+              "type": "string",
+              "value": "{}"
+            },
+            {
+              "key": "trpc.python.agent.state.end",
+              "type": "string",
+              "value": "{}"
+            },
+            {
+              "key": "span.kind",
+              "type": "string",
+              "value": "internal"
+            }
+          ],
+          "logs": [],
+          "processID": "p1",
+          "warnings": null
+        }
+      ],
+      "processes": {
+        "p1": {
+          "serviceName": "trpc-agent-service",
+          "tags": [
+            {
+              "key": "service.instance.id",
+              "type": "string",
+              "value": "service-instance-demo-001"
+            },
+            {
+              "key": "telemetry.sdk.language",
+              "type": "string",
+              "value": "python"
+            },
+            {
+              "key": "telemetry.sdk.name",
+              "type": "string",
+              "value": "opentelemetry"
+            },
+            {
+              "key": "telemetry.sdk.version",
+              "type": "string",
+              "value": "1.44.0"
+            }
+          ]
+        }
+      },
+      "warnings": null
+    }
+  ],
+  "total": 0,
+  "limit": 0,
+  "offset": 0,
+  "errors": null
+}

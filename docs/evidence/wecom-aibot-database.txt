@@ -1,0 +1,6 @@
+SET
+ channel |  account_id   |       external_message_id        | inbox_status | attempts | execution_status  |             trace_id             |          created_at           
+---------+---------------+----------------------------------+--------------+----------+-------------------+----------------------------------+-------------------------------
+ wecom   | demo-bot      | message-demo-001                 | completed    |        1 | delivery_enqueued | 13336cacaf006268e0532a903e3d540c | 2026-09-03 13:18:52.906009+00
+(1 row)
+

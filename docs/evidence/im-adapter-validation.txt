@@ -1,0 +1,41 @@
+============================= test session starts =============================
+platform win32 -- Python 3.10.20, pytest-8.4.2, pluggy-1.6.0 -- <project-root>\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: <project-root>
+configfile: pyproject.toml
+plugins: anyio-4.14.2, cov-6.3.0
+collecting ... collected 31 items
+
+tests/test_channels.py::test_telegram_normalizes_private_messages PASSED [  3%]
+tests/test_channels.py::test_telegram_normalizes_photo_and_document_metadata PASSED [  6%]
+tests/test_channels.py::test_wecom_crypto_verify_normalize_and_encrypted_reply PASSED [  9%]
+tests/test_channels.py::test_wecom_plaintext_requires_explicit_development_option PASSED [ 12%]
+tests/test_channels.py::test_wecom_normalizes_media_message PASSED       [ 16%]
+tests/test_channels.py::test_wecom_aibot_normalizes_encrypted_json_and_rejects_wrong_bot PASSED [ 19%]
+tests/test_channels.py::test_wecom_aibot_normalizes_voice_mixed_and_media[message_part0-voice transcript-0] PASSED [ 22%]
+tests/test_channels.py::test_wecom_aibot_normalizes_voice_mixed_and_media[message_part1-mixed text-1] PASSED [ 25%]
+tests/test_channels.py::test_wecom_aibot_normalizes_voice_mixed_and_media[message_part2-[WeCom AIBot image attachment]-1] PASSED [ 29%]
+tests/test_channels.py::test_wecom_aibot_normalizes_voice_mixed_and_media[message_part3-[WeCom AIBot file attachment]-1] PASSED [ 32%]
+tests/test_channels.py::test_wecom_aibot_normalizes_voice_mixed_and_media[message_part4-[WeCom AIBot video attachment]-1] PASSED [ 35%]
+tests/test_channels.py::test_wecom_aibot_uses_one_time_response_url_for_async_reply PASSED [ 38%]
+tests/test_channels.py::test_telegram_stream_edits_once_without_duplicate_final_reply PASSED [ 41%]
+tests/test_web.py::test_service_info PASSED                              [ 45%]
+tests/test_web.py::test_liveness_preserves_request_id PASSED             [ 48%]
+tests/test_web.py::test_prometheus_metrics_are_exposed PASSED            [ 51%]
+tests/test_web.py::test_artifact_upload_and_download PASSED              [ 54%]
+tests/test_web.py::test_readiness PASSED                                 [ 58%]
+tests/test_web.py::test_gateway_node_registration_and_route_resolution PASSED [ 61%]
+tests/test_web.py::test_gateway_auth_internal_forward_and_telegram_webhook PASSED [ 64%]
+tests/test_web.py::test_wecom_aibot_url_verification_callback_and_deduplication PASSED [ 67%]
+tests/test_inbound_queue.py::test_inbound_enqueue_dedupe_worker_and_delivery_outbox PASSED [ 70%]
+tests/test_inbound_queue.py::test_runner_result_is_reused_after_platform_commit_failure PASSED [ 74%]
+tests/test_inbound_queue.py::test_uncertain_runner_attempt_is_not_automatically_replayed PASSED [ 77%]
+tests/test_gateway.py::test_message_service_commits_turn_and_rejects_duplicate PASSED [ 80%]
+tests/test_gateway.py::test_group_session_is_shared_without_using_sender_as_owner PASSED [ 83%]
+tests/test_gateway.py::test_agent_metrics_include_tenant_tokens_and_cost PASSED [ 87%]
+tests/test_gateway.py::test_trpc_executor_timeout_stops_automatic_replay_boundary PASSED [ 90%]
+tests/test_gateway.py::test_node_capacity_limits_concurrent_session_execution PASSED [ 93%]
+tests/test_gateway.py::test_rendezvous_route_is_stable_and_fails_over PASSED [ 96%]
+tests/test_gateway.py::test_router_forwards_to_selected_remote_node PASSED [100%]
+
+============================= 31 passed in 5.10s ==============================

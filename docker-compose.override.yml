@@ -1,0 +1,23 @@
+services:
+  postgres:
+    ports:
+      - "15432:5432"
+
+  redis:
+    ports:
+      - "16379:6379"
+
+  minio:
+    ports:
+      - "19000:9000"
+      - "19001:9001"
+
+  qdrant:
+    ports:
+      - "16333:6333"
+
+  app:
+    environment:
+      TRPC_AGENT_API_KEY: ${TRPC_AGENT_API_KEY}
+      WECOM_AIBOT_CALLBACK_TOKEN: ${WECOM_AIBOT_CALLBACK_TOKEN}
+      WECOM_AIBOT_ENCODING_AES_KEY: ${WECOM_AIBOT_ENCODING_AES_KEY}
