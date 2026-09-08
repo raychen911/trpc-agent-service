@@ -1,0 +1,25 @@
+﻿              List of relations
+ Schema |        Name         | Type  | Owner 
+--------+---------------------+-------+-------
+ public | agent_app_revisions | table | trpc
+ public | agent_apps          | table | trpc
+ public | agent_executions    | table | trpc
+ public | alembic_version     | table | trpc
+ public | artifacts           | table | trpc
+ public | audit_logs          | table | trpc
+ public | backend_configs     | table | trpc
+ public | channel_bindings    | table | trpc
+ public | im_user_identities  | table | trpc
+ public | inbound_messages    | table | trpc
+ public | memories            | table | trpc
+ public | model_configs       | table | trpc
+ public | outbox_dead_letters | table | trpc
+ public | outbox_messages     | table | trpc
+ public | session_events      | table | trpc
+ public | sessions            | table | trpc
+ public | summaries           | table | trpc
+ public | tenant_budget_usage | table | trpc
+ public | tenants             | table | trpc
+ public | tool_permissions    | table | trpc
+(20 rows)
+

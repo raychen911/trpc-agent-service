@@ -1,0 +1,4 @@
+.......................................................s........         [100%]
+=========================== short test summary info ===========================
+SKIPPED [1] tests\test_two_node_integration.py:76: set TRPC_INTEGRATION_DATABASE_URL and TRPC_INTEGRATION_REDIS_URL
+63 passed, 1 skipped in 6.02s

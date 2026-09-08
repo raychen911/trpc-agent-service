@@ -25,3 +25,32 @@ pyrightconfig.json
 
 # spec-workflow tool artifacts
 .spec-workflow
+__pycache__/
+*.py[cod]
+.coverage
+.env
+.env.*
+!.env.example
+.pytest_cache/
+.ruff_cache/
+.venv/
+build/
+dist/
+htmlcov/
+*.egg-info/
+
+# Local runtime state and secrets; never submit these artifacts.
+data/*
+!data/README.md
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+backups/
+secrets/
+*.pem
+*.key
+
+# Local PowerPoint/image generation workspaces.
+.pptx-*/

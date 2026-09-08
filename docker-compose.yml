@@ -1,0 +1,78 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: trpc
+      POSTGRES_USER: trpc
+      POSTGRES_PASSWORD: trpc-dev-only
+    volumes: ["postgres-data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trpc"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: ["redis-data:/data"]
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes: ["minio-data:/data"]
+  qdrant:
+    image: qdrant/qdrant:latest
+    volumes: ["qdrant-data:/qdrant/storage"]
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.118.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./deploy/otel-collector-config.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+      - "8889:8889"
+  migrate:
+    build: .
+    command: ["alembic", "upgrade", "head"]
+    environment: &app-env
+      TRPC_SERVICE_ENVIRONMENT: staging
+      TRPC_SERVICE_DATABASE_URL: postgresql+psycopg://trpc:trpc-dev-only@postgres/trpc
+      TRPC_SERVICE_AUTO_CREATE_SCHEMA: "false"
+      TRPC_SERVICE_COORDINATION_BACKEND: redis
+      TRPC_SERVICE_REDIS_URL: redis://redis:6379/0
+      TRPC_SERVICE_ARTIFACT_BACKEND: minio
+      TRPC_SERVICE_MINIO_ENDPOINT: minio:9000
+      TRPC_SERVICE_MINIO_ACCESS_KEY: minioadmin
+      TRPC_SERVICE_MINIO_SECRET_KEY: minioadmin
+      TRPC_SERVICE_VECTOR_BACKEND: qdrant
+      TRPC_SERVICE_QDRANT_URL: http://qdrant:6333
+      TRPC_SERVICE_GATEWAY_INTERNAL_SECRET: compose-change-me
+      TRPC_SERVICE_OTEL_ENABLED: "true"
+      TRPC_SERVICE_OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318/v1/traces
+    depends_on:
+      postgres: {condition: service_healthy}
+  app:
+    build: .
+    environment:
+      <<: *app-env
+      TRPC_SERVICE_NODE_BASE_URL: http://app:8000
+    ports: ["8000:8000"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_started}
+      minio: {condition: service_started}
+      qdrant: {condition: service_started}
+      otel-collector: {condition: service_started}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready')"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:
+  qdrant-data:

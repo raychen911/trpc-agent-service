@@ -1,0 +1,187 @@
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: trpc-agent-config}
+data:
+  TRPC_SERVICE_ENVIRONMENT: production
+  TRPC_SERVICE_AUTO_CREATE_SCHEMA: "false"
+  TRPC_SERVICE_CONVERSATION_BACKEND: sql
+  TRPC_SERVICE_COORDINATION_BACKEND: redis
+  TRPC_SERVICE_ARTIFACT_BACKEND: minio
+  TRPC_SERVICE_VECTOR_BACKEND: qdrant
+  TRPC_SERVICE_RELEASE_TRACK: stable
+  TRPC_SERVICE_OTEL_ENABLED: "true"
+  TRPC_SERVICE_OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318/v1/traces
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: trpc-agent-stable}
+spec:
+  replicas: 3
+  selector: {matchLabels: {app: trpc-agent, track: stable}}
+  strategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 0, maxSurge: 1}}
+  template:
+    metadata: {labels: {app: trpc-agent, track: stable}}
+    spec:
+      serviceAccountName: trpc-agent
+      containers:
+        - name: app
+          image: trpc-agent-service:0.6.0
+          env:
+            - name: POD_NAME
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+            - name: POD_IP
+              valueFrom: {fieldRef: {fieldPath: status.podIP}}
+            - {name: TRPC_SERVICE_NODE_ID, value: "$(POD_NAME)"}
+            - {name: TRPC_SERVICE_NODE_BASE_URL, value: "http://$(POD_IP):8000"}
+          envFrom:
+            - configMapRef: {name: trpc-agent-config}
+            - secretRef: {name: trpc-agent-secrets}
+          ports: [{name: http, containerPort: 8000}]
+          readinessProbe: {httpGet: {path: /health/ready, port: http}, periodSeconds: 5}
+          livenessProbe: {httpGet: {path: /health/live, port: http}, periodSeconds: 10}
+          resources:
+            requests: {cpu: 500m, memory: 512Mi}
+            limits: {cpu: "2", memory: 2Gi}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: trpc-agent-canary}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: trpc-agent, track: canary}}
+  template:
+    metadata: {labels: {app: trpc-agent, track: canary}}
+    spec:
+      serviceAccountName: trpc-agent
+      containers:
+        - name: app
+          image: trpc-agent-service:0.6.0
+          env:
+            - {name: TRPC_SERVICE_RELEASE_TRACK, value: canary}
+            - name: POD_NAME
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+            - name: POD_IP
+              valueFrom: {fieldRef: {fieldPath: status.podIP}}
+            - {name: TRPC_SERVICE_NODE_ID, value: "$(POD_NAME)"}
+            - {name: TRPC_SERVICE_NODE_BASE_URL, value: "http://$(POD_IP):8000"}
+          envFrom:
+            - configMapRef: {name: trpc-agent-config}
+            - secretRef: {name: trpc-agent-secrets}
+          ports: [{name: http, containerPort: 8000}]
+          readinessProbe: {httpGet: {path: /health/ready, port: http}}
+          resources:
+            requests: {cpu: 500m, memory: 512Mi}
+            limits: {cpu: "2", memory: 2Gi}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: trpc-agent}
+spec:
+  selector: {app: trpc-agent}
+  ports: [{name: http, port: 8000, targetPort: http}]
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: {name: trpc-agent-stable}
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: trpc-agent-stable}
+  minReplicas: 3
+  maxReplicas: 30
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: {type: Utilization, averageUtilization: 65}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: trpc-agent}
+spec:
+  minAvailable: 2
+  selector: {matchLabels: {app: trpc-agent, track: stable}}
+---
+apiVersion: batch/v1
+kind: Job
+metadata: {name: trpc-agent-migrate}
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: alembic
+          image: trpc-agent-service:0.6.0
+          command: ["alembic", "upgrade", "head"]
+          envFrom: [{secretRef: {name: trpc-agent-secrets}}]
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: trpc-agent}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: otel-collector-config}
+data:
+  collector.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc: {endpoint: 0.0.0.0:4317}
+          http: {endpoint: 0.0.0.0:4318}
+    processors:
+      memory_limiter: {check_interval: 1s, limit_mib: 384}
+      batch: {}
+      attributes/sanitize:
+        actions:
+          - {key: http.request.header.authorization, action: delete}
+          - {key: http.request.body, action: delete}
+          - {key: db.statement, action: delete}
+    exporters:
+      debug: {verbosity: basic}
+      prometheus: {endpoint: 0.0.0.0:8889}
+    service:
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, attributes/sanitize, batch]
+          exporters: [debug]
+        metrics:
+          receivers: [otlp]
+          processors: [memory_limiter, attributes/sanitize, batch]
+          exporters: [prometheus]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: otel-collector}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: otel-collector}}
+  template:
+    metadata: {labels: {app: otel-collector}}
+    spec:
+      containers:
+        - name: collector
+          image: otel/opentelemetry-collector-contrib:0.118.0
+          args: ["--config=/etc/otelcol/collector.yaml"]
+          ports:
+            - {name: otlp-grpc, containerPort: 4317}
+            - {name: otlp-http, containerPort: 4318}
+            - {name: metrics, containerPort: 8889}
+          volumeMounts:
+            - {name: config, mountPath: /etc/otelcol}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+      volumes:
+        - name: config
+          configMap: {name: otel-collector-config}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: otel-collector}
+spec:
+  selector: {app: otel-collector}
+  ports:
+    - {name: otlp-grpc, port: 4317, targetPort: otlp-grpc}
+    - {name: otlp-http, port: 4318, targetPort: otlp-http}
+    - {name: metrics, port: 8889, targetPort: metrics}

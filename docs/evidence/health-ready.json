@@ -1,0 +1,9 @@
+{
+    "status":  "ok",
+    "service":  "trpc-agent-service",
+    "version":  "0.6.0",
+    "checks":  {
+                   "application":  "ok",
+                   "database":  "ok"
+               }
+}

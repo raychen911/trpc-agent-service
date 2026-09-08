@@ -1,0 +1,70 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "trpc-agent-service"
+version = "0.6.0"
+description = "Multi-tenant agent service platform built on tRPC-Agent-Python"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "cryptography>=43,<51",
+    "fastapi>=0.115,<1.0",
+    "httpx>=0.27,<1.0",
+    "opentelemetry-api>=1.30,<2.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.30,<2.0",
+    "opentelemetry-sdk>=1.30,<2.0",
+    "prometheus-client>=0.21,<1.0",
+    "pydantic-settings>=2.6,<3.0",
+    "sqlalchemy>=2.0.36,<2.1",
+    "trpc-agent-py>=1.1,<2.0",
+    "uvicorn[standard]>=0.30,<1.0",
+    "PyJWT[crypto]>=2.9,<3.0",
+    "alembic>=1.14,<2.0",
+]
+
+[project.optional-dependencies]
+storage = [
+    "minio>=7.2,<8.0",
+    "redis>=5.2,<7.0",
+]
+production = [
+    "boto3>=1.35,<2.0",
+    "psycopg[binary]>=3.2,<4.0",
+]
+dev = [
+    "fakeredis[lua]>=2.26,<3.0",
+    "pytest>=8.3,<9.0",
+    "pytest-cov>=6.0,<7.0",
+    "ruff>=0.8,<1.0",
+]
+
+[project.scripts]
+trpc-agent-service = "trpc_service._cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["trpc_service"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+markers = [
+    "integration: requires explicitly configured external services",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["trpc_service"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+fail_under = 80
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
