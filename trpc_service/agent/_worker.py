@@ -351,6 +351,7 @@ class TenantWorker:
             tenant,
             confirmation_manager=self._confirmation_manager,
             audit_logger=self._audit_logger,
+            metrics=self._metrics,
         )
         runner = Runner(
             app_name=app_name,

@@ -35,6 +35,8 @@ METRIC_DEFINITIONS: dict[str, MetricDefinition] = {
     MetricDefinition("histogram", "End-to-end Gateway callback duration.", "ms", DURATION_BUCKETS_MS),
     "agent_callback_enqueue_total":
     MetricDefinition("counter", "Number of callback enqueue attempts."),
+    "agent_callback_rate_limited_total":
+    MetricDefinition("counter", "Number of callbacks rejected by tenant rate limits."),
     "agent_queue_operation_total":
     MetricDefinition("counter", "Number of queue backend operations."),
     "agent_queue_operation_duration_ms":
@@ -67,6 +69,10 @@ METRIC_DEFINITIONS: dict[str, MetricDefinition] = {
     MetricDefinition("counter", "Number of Agent turn attempts."),
     "agent_runner_latency_ms":
     MetricDefinition("histogram", "Agent Runner duration.", "ms", DURATION_BUCKETS_MS),
+    "agent_tool_call_total":
+    MetricDefinition("counter", "Number of governed Tool call attempts."),
+    "agent_tool_call_duration_ms":
+    MetricDefinition("histogram", "Governed Tool call duration.", "ms", DURATION_BUCKETS_MS),
     "agent_llm_input_tokens_total":
     MetricDefinition("counter", "Number of prompt tokens consumed.", "{token}"),
     "agent_llm_output_tokens_total":

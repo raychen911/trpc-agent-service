@@ -60,6 +60,8 @@ tenants:
     audit_policy:
       enabled: true
       retention_days: 30
+    im_access_policy:
+      callback_requests_per_minute: 600
 
   - tenant_id: chat_assistant
     name: Chat Assistant
@@ -98,3 +100,5 @@ tenants:
     audit_policy:
       enabled: true
       retention_days: 30
+    im_access_policy:
+      callback_requests_per_minute: 600

@@ -72,7 +72,7 @@ P0-3 企业微信流式（独立）✅
 
 三项 P0 全部完成。
 
-## 完成后的回归 ✅
+## 阶段完成时的回归（历史记录）✅
 
 - [x] `pytest tests/service`（224 passed）
 - [x] `flake8 trpc_service tests/service` 零告警

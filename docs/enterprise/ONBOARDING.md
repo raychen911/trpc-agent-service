@@ -42,6 +42,7 @@ tenants:
 | 模型 | `model.provider` / `model_name` / `api_endpoint` / `timeout` / `retry` / `fallback_model` | 主模型与降级 |
 | 工具 | `tool_permissions.tool_whitelist` / `tool_denylist` / `dangerous_tools` | 白名单（空=全放行）/黑名单/需二次确认 |
 | IM | `channel_configs.<channel>` | 每通道密钥（`SecretStr`） |
+| IM 入口治理 | `im_access_policy.callback_requests_per_minute` | 租户/通道级回调限流（`None`=不限流） |
 | 后端 | `session_backend` / `memory_backend` / `vector` / `object` | Session/Memory 选 Redis/MySQL；Knowledge 选向量库；Artifact 选对象存储 |
 | 审计 | `audit_policy.enabled` / `retention_days` / `desensitize_rules` | 审计开关与脱敏规则 |
 | 预算 | `budget.daily_token_budget` / `daily_cost_limit` | 日 token / 成本上限（`None`=不限额） |
@@ -84,6 +85,14 @@ tool_permissions:
   用户在 IM 回显 token 后由 `ConfirmationManager.resolve()` 放行。
 
 ## 6. 步骤五：配置 IM 通道
+
+建议同时配置入口限流。生产多 Gateway 节点共用 Redis 原子计数；未配置 Redis 的单节点演示
+使用进程内计数。Redis 限流后端不可用时 Gateway 默认 fail-closed 返回 `503`，避免治理旁路：
+
+```yaml
+im_access_policy:
+  callback_requests_per_minute: 600
+```
 
 ### 企业微信
 
@@ -146,8 +155,11 @@ QQ 公网访问。
 
 ### 身份映射与 session 隔离
 
-- 单聊：`session_id = sha256(tenant:channel:user_id)`
-- 群聊：`session_id = sha256(tenant:channel:chat_id)`
+- 单聊：`session_id = sha256(JSON[tenant, channel, private, user_id])`
+- 群聊：`session_id = sha256(JSON[tenant, channel, group, chat_id])`
+
+结构化 JSON 编码保留字段边界，即使平台 ID 含 `:` 也不会与另一组字段发生拼接碰撞；把
+`chat_type` 纳入哈希可避免同名用户和群 ID 得到相同 `session_id`。
 
 session_id 已内嵌租户与通道，用户跨群/跨租户自动落到不同会话，无需额外映射表。
 

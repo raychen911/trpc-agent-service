@@ -179,7 +179,8 @@ def test_stream_worker_assembly_and_main(monkeypatch):
     assert captured["queue"]["redis_url"] == "redis://worker/0"
     assert captured["results"]["redis_url"] == "redis://worker/0"
     assert captured["tenant"]["audit_logger"] is audit_logger
-    assert result.audit_sink is audit_sink
+    assert audit_sink in captured["stream"]["owned_resources"]
+    assert manager not in captured["stream"]["owned_resources"]
 
 
 def test_create_audit_logger_without_mysql(monkeypatch):
@@ -203,12 +204,17 @@ async def test_stream_worker_main_runs(monkeypatch):
 
     class Runner:
         ran = False
+        closed = False
 
         async def run(self):
             self.ran = True
+
+        async def close(self):
+            self.closed = True
 
     runner = Runner()
     monkeypatch.setattr(run_worker, "build_stream_worker", lambda **kwargs: runner)
     monkeypatch.setenv("TRPC_SERVICE_TENANTS_CONFIG", "tenants.yml")
     await run_worker.main()
     assert runner.ran is True
+    assert runner.closed is True

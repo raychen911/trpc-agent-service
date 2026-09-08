@@ -8,7 +8,9 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from typing import Any
+from typing import Literal
 from typing import Optional
 
 from pydantic import BaseModel
@@ -27,18 +29,22 @@ def generate_session_id(
 ) -> str:
     """Derive a stable, tenant-scoped session id.
 
-    Single chat: ``sha256(tenant:channel:user_id)``
-    Group chat:  ``sha256(tenant:channel:chat_id)``
+    Single chat hashes ``[tenant, channel, "private", user_id]``.
+    Group chat hashes ``[tenant, channel, "group", chat_id]``.
 
-    Because the id already embeds the tenant and channel, a user jumping across
-    groups or tenants is always routed to a distinct session, providing hard
-    isolation without any additional mapping table.
+    JSON encoding preserves field boundaries even when platform identifiers
+    contain delimiter characters. Including ``chat_type`` also prevents a
+    private user id from colliding with a group chat id of the same value.
     """
     if chat_type == CHAT_GROUP:
         identity = chat_id or user_id
     else:
         identity = user_id
-    raw = f"{tenant_id}:{channel}:{identity}".encode("utf-8")
+    raw = json.dumps(
+        [tenant_id, channel, chat_type, identity],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
 
 
@@ -82,7 +88,7 @@ class InboundMessage(BaseModel):
     """Channel identifier: ``wecom`` / ``wechat_kf`` / ``dingtalk`` / ``feishu`` / ``qq``."""
     chat_id: str
     """Platform chat id (group chat id or peer user id)."""
-    chat_type: str = CHAT_PRIVATE
+    chat_type: Literal["private", "group"] = CHAT_PRIVATE
     """``private`` or ``group``."""
     sender_id: str
     """Platform user id of the sender."""

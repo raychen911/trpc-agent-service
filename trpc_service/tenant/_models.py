@@ -318,6 +318,8 @@ class IMAccessPolicy(BaseModel):
     allowed_users: list[str] = Field(default_factory=list)
     denied_users: list[str] = Field(default_factory=list)
     allowed_groups: list[str] = Field(default_factory=list)
+    callback_requests_per_minute: Optional[int] = Field(default=None, gt=0)
+    """Tenant-wide inbound callback limit; ``None`` disables rate limiting."""
 
 
 class BudgetConfig(BaseModel):

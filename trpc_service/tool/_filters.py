@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import threading
+import time
 from typing import Any
 from typing import Callable
 from typing import Optional
@@ -34,6 +35,9 @@ from trpc_agent_sdk.tools import BaseToolSet
 from trpc_agent_sdk.tools import get_tool_var
 
 from trpc_service.log import AuditLogEntry
+from trpc_service.metrics import EnterpriseMetrics
+from trpc_service.metrics import get_enterprise_metrics
+from trpc_service.metrics import operation_span
 from trpc_service.tenant import Tenant
 from trpc_service.tenant import ToolPermissions
 from ._exceptions import ToolConfirmationRequired
@@ -240,6 +244,83 @@ class ToolExecutionTimeoutFilter(BaseFilter):
             )
 
 
+class ToolMetricsFilter(BaseFilter):
+    """Measure every governed Tool attempt and create its platform span."""
+
+    def __init__(self, metrics: Optional[EnterpriseMetrics] = None) -> None:
+        super().__init__()
+        self._type = FilterType.TOOL
+        self._name = "tenant_tool_metrics"
+        self._metrics = metrics or get_enterprise_metrics()
+
+    def _record(self, ctx: AgentContext, tool_name: str, started: float, outcome: str,
+                error_type: Optional[str]) -> None:
+        attributes = {
+            "tenant_id": ctx.get_metadata("tenant_id"),
+            "tool_name": tool_name,
+            "outcome": outcome,
+            "error_type": error_type,
+        }
+        self._metrics.increment("agent_tool_call_total", **attributes)
+        self._metrics.observe(
+            "agent_tool_call_duration_ms",
+            (time.perf_counter() - started) * 1000,
+            **attributes,
+        )
+
+    async def run(self, ctx: AgentContext, req: Any, handle):
+        tool_name = _resolve_tool_name(req)
+        started = time.perf_counter()
+        outcome = "error"
+        error_type = None
+        try:
+            with operation_span(
+                    "tool.call",
+                    **{
+                        "tenant.id": ctx.get_metadata("tenant_id"),
+                        "tool.name": tool_name,
+                    },
+            ):
+                result = await super().run(ctx, req, handle)
+            error = getattr(result, "error", None)
+            if error is None:
+                outcome = "success"
+            else:
+                error_type = type(error).__name__
+            return result
+        except Exception as exc:
+            error_type = type(exc).__name__
+            raise
+        finally:
+            self._record(ctx, tool_name, started, outcome, error_type)
+
+    async def run_stream(self, ctx: AgentContext, req: Any, handle):
+        tool_name = _resolve_tool_name(req)
+        started = time.perf_counter()
+        outcome = "success"
+        error_type = None
+        try:
+            with operation_span(
+                    "tool.call",
+                    **{
+                        "tenant.id": ctx.get_metadata("tenant_id"),
+                        "tool.name": tool_name,
+                    },
+            ):
+                async for event in super().run_stream(ctx, req, handle):
+                    error = getattr(event, "error", None)
+                    if error is not None:
+                        outcome = "error"
+                        error_type = type(error).__name__
+                    yield event
+        except Exception as exc:
+            outcome = "error"
+            error_type = type(exc).__name__
+            raise
+        finally:
+            self._record(ctx, tool_name, started, outcome, error_type)
+
+
 class GovernedToolSet(BaseToolSet):
     """Fail-closed ToolSet wrapper applying tenant filters after expansion."""
 
@@ -293,6 +374,7 @@ def build_governance(
     tracker: Any = None,
     confirmation_manager: Optional[ConfirmationManager] = None,
     audit_logger: Any = None,
+    metrics: Optional[EnterpriseMetrics] = None,
 ) -> dict[str, list[BaseFilter]]:
     """Build the complete governance filter chains (tool + model) for a tenant.
 
@@ -302,6 +384,7 @@ def build_governance(
     budget-enforcement model filter.
     """
     tool_filters = [
+        ToolMetricsFilter(metrics),
         ToolAllowlistFilter(
             permissions=tenant.tool_permissions,
             audit_logger=audit_logger,
@@ -328,6 +411,7 @@ def apply_tenant_governance(
     *,
     confirmation_manager: Optional[ConfirmationManager] = None,
     audit_logger: Any = None,
+    metrics: Optional[EnterpriseMetrics] = None,
 ) -> Any:
     """Attach tenant tool policies to an agent produced by any factory.
 
@@ -349,6 +433,7 @@ def apply_tenant_governance(
         tenant,
         confirmation_manager=confirmation_manager,
         audit_logger=audit_logger,
+        metrics=metrics,
     )["tool_filters"]
     governed_tools = []
     for tool in tools:

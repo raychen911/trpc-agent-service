@@ -38,6 +38,7 @@ def build_outbox_relay(
     redis_url = resolve_secret(settings.redis_url, resolver=resolver) or None
     if not mysql_url:
         raise ValueError("outbox requires TRPC_SERVICE_MYSQL_URL")
+    owns_manager = manager is None
     manager = manager or build_tenant_config_manager(
         mysql_url=mysql_url,
         redis_url=redis_url,
@@ -55,8 +56,8 @@ def build_outbox_relay(
         transport=ChannelDeliveryTransport(manager=manager, registry=registry),
         owner=f"outbox-{owner}",
         max_attempts=settings.outbox_max_attempts,
+        owned_resources=[registry, manager if owns_manager else None],
     )
-    relay.manager = manager
     return relay
 
 
@@ -67,6 +68,7 @@ async def run() -> None:
     try:
         await relay.run(settings.outbox_poll_interval_seconds)
     finally:
+        await relay.close()
         shutdown_telemetry()
 
 

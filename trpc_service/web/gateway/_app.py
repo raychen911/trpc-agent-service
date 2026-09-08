@@ -13,9 +13,11 @@ the tenant's :class:`ChannelConfig` and cached.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import time
+from contextlib import suppress
 from typing import Any
 from typing import Optional
 
@@ -31,10 +33,13 @@ from trpc_service.metrics._observability import operation_span
 from trpc_service.metrics import EnterpriseMetrics
 from trpc_service.metrics import get_enterprise_metrics
 from trpc_service.log import safe_error_message
+from trpc_service.runtime import RuntimeResources
 from trpc_service.tenant import TenantConfigManager
 from trpc_service.agent import TenantWorker
 from ._idempotency import LocalIdempotencyStore
 from ._idempotency import build_idempotency_store
+from ._rate_limit import LocalRateLimiter
+from ._rate_limit import build_rate_limiter
 from ._registry import ChannelRegistry
 
 logger = logging.getLogger(__name__)
@@ -46,10 +51,12 @@ def create_gateway_app(
     worker: TenantWorker,
     registry: Optional[ChannelRegistry] = None,
     idempotency_store: Optional[LocalIdempotencyStore] = None,
+    rate_limiter: Optional[LocalRateLimiter] = None,
     async_dispatch: bool = True,
     queue: Any = None,
     metrics: Optional[EnterpriseMetrics] = None,
     test_api_key: Optional[str] = None,
+    owned_resources: Optional[list[Any]] = None,
 ) -> FastAPI:
     """Build the gateway FastAPI application.
 
@@ -64,8 +71,10 @@ def create_gateway_app(
     registry = registry or ChannelRegistry()
     manager.subscribe(lambda tenant_id, _tenant: registry.invalidate(tenant_id))
     store = idempotency_store or build_idempotency_store()
+    limiter = rate_limiter or build_rate_limiter()
     metrics = metrics or getattr(worker, "metrics", None) or get_enterprise_metrics()
     background_tasks: set[asyncio.Task] = set()
+    resources = RuntimeResources(*(owned_resources or []), queue, registry, limiter, store)
 
     app = FastAPI(title="tRPC-Agent Enterprise Gateway")
 
@@ -143,6 +152,16 @@ def create_gateway_app(
         except Exception as exc:  # noqa: BLE001 - malformed payloads are client errors
             return JSONResponse({"error": f"parse failed: {safe_error_message(exc)}"}, status_code=400), "parse_failed"
 
+        if not inbound.message_id.strip():
+            # Some platform event types omit a provider message id. Hashing the
+            # exact callback body preserves retry de-duplication without making
+            # every id-less callback collide on one empty key.
+            inbound.message_id = f"callback-{hashlib.sha256(body).hexdigest()}"
+            inbound.metadata = {
+                **inbound.metadata,
+                "message_id_synthesized": True,
+            }
+
         binding = tenant.channel_configs[channel]
         inbound.metadata = {
             **inbound.metadata,
@@ -167,6 +186,25 @@ def create_gateway_app(
         if duplicate:
             return JSONResponse(adapter.callback_response(duplicate=True), status_code=200), "duplicate"
 
+        rate_limit = tenant.im_access_policy.callback_requests_per_minute
+        if rate_limit is not None:
+            try:
+                with operation_span("rate_limit.check", **{"tenant.id": tenant_id, "channel": channel}):
+                    allowed = await limiter.allow(f"{tenant_id}:{channel}", rate_limit)
+            except Exception:  # noqa: BLE001 - fail closed when shared governance is unavailable
+                await store.release(dedup_key)
+                logger.exception("rate-limit backend failed for tenant=%s channel=%s", tenant_id, channel)
+                return JSONResponse({"error": "rate_limit_backend_unavailable"},
+                                    status_code=503), "rate_limit_backend_unavailable"
+            if not allowed:
+                await store.release(dedup_key)
+                metrics.increment("agent_callback_rate_limited_total", tenant_id=tenant_id, channel=channel)
+                return JSONResponse(
+                    {"error": "tenant callback rate limit exceeded"},
+                    status_code=429,
+                    headers={"Retry-After": "60"},
+                ), "rate_limited"
+
         async def _dispatch() -> None:
             await run_and_reply(
                 tenant_id=tenant_id,
@@ -179,6 +217,10 @@ def create_gateway_app(
         async def _background_dispatch() -> None:
             try:
                 await _dispatch()
+            except asyncio.CancelledError:
+                with suppress(Exception):
+                    await store.release(dedup_key)
+                raise
             except Exception:  # noqa: BLE001 - background failures are logged and released
                 await store.release(dedup_key)
                 logger.exception("background dispatch failed for tenant=%s channel=%s", tenant_id, channel)
@@ -247,5 +289,15 @@ def create_gateway_app(
 
     if test_api_key:
         app.include_router(create_test_message_router(worker=worker, api_key=test_api_key, queue=queue))
+
+    async def _shutdown_gateway_resources() -> None:
+        tasks = list(background_tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        await resources.close()
+
+    app.router.add_event_handler("shutdown", _shutdown_gateway_resources)
 
     return app

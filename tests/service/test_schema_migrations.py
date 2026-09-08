@@ -59,3 +59,14 @@ def test_migration_discovery_order_validation_and_ignored_files(tmp_path):
             f"sqlite:///{tmp_path / 'duplicate.db'}",
             [Migration(1, "one", schema), Migration(1, "again", schema)],
         )
+
+
+def test_audit_index_migration_is_restart_safe_after_mysql_ddl_autocommit():
+    root = Path(__file__).resolve().parents[2]
+    script = (root / "data" / "migrations" / "0003_audit_correlation.sql").read_text(encoding="utf-8")
+    statements = SchemaMigrator._statements(script)
+
+    assert "information_schema.statistics" in script
+    assert "PREPARE idx_audit_message_stmt" in script
+    assert "EXECUTE idx_audit_message_stmt" in statements
+    assert not any(statement.startswith("CREATE INDEX idx_audit_message") for statement in statements)

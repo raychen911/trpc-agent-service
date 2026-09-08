@@ -244,6 +244,28 @@ def test_gateway_health_registry_factories_and_client_errors():
     defaults.invalidate()
 
 
+async def test_channel_registry_retires_invalidated_adapters_and_closes_each_once():
+    closed = []
+
+    class ClosingAdapter(EdgeAdapter):
+
+        async def close(self):
+            closed.append(self)
+
+    item = tenant()
+    item.channel_configs["edge"] = edge_channel_config()
+    registry = ChannelRegistry({"edge": lambda _cfg: ClosingAdapter()})
+    first = registry.get(item, "edge")
+    registry.invalidate(item.tenant_id)
+    second = registry.get(item, "edge")
+    assert first is not second
+
+    await registry.close()
+    await registry.close()
+
+    assert closed == [second, first]
+
+
 def test_gateway_sync_failure_releases_idempotency_reservation():
     store = LocalIdempotencyStore()
     app, _, _ = gateway_fixture(fail=True)

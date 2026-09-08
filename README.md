@@ -11,7 +11,7 @@
                     │ Webhook
                     ▼
             Gateway + Channel Adapter
-            验签、解析、幂等、快速 ACK
+          验签、解析、幂等、租户限流、快速 ACK
                     │
           ┌─────────┴─────────┐
           │ 进程内调用         │ Redis Streams
@@ -38,7 +38,8 @@ Gateway 和 Worker 不保存租户会话状态。会话与记忆通过共享 Red
 - [数据同步与幂等策略](docs/enterprise/SYNC_AND_IDEMPOTENCY.md)
 - [企业监控链路与指标调试](docs/enterprise/METRICS.md)
 - [验收测试方案](docs/enterprise/ACCEPTANCE_TEST_PLAN.md)
-- [PR7 / PR8 / PR9 架构整合与运维手册](docs/enterprise/ARCHITECTURE_EVOLUTION.md)
+- [架构演进与运维手册](docs/enterprise/ARCHITECTURE_EVOLUTION.md)
+- [实现审计与生产差距](docs/enterprise/IMPLEMENTATION_AUDIT.md)
 - [完整方案与数据模型](docs/SUBMISSION_PROPOSAL.md)
 
 ## 代码结构

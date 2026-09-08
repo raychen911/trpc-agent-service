@@ -21,6 +21,7 @@ from trpc_service.tenant import QQChannelConfig
 from trpc_service.tenant import Tenant
 from trpc_service.tenant import WeComChannelConfig
 from trpc_service.tenant import WechatCustomerServiceChannelConfig
+from trpc_service.runtime import RuntimeResources
 
 ChannelAdapterFactory = Callable[[ChannelConfig], ChannelAdapter]
 
@@ -93,16 +94,26 @@ class ChannelRegistry:
         self._factories = factories or default_channel_factories()
         self._secret_resolver = secret_resolver or DEFAULT_SECRET_RESOLVER
         self._cache: dict[tuple[str, str], ChannelAdapter] = {}
+        self._retired: list[ChannelAdapter] = []
 
     def register_factory(self, channel: str, factory: ChannelAdapterFactory) -> None:
         self._factories[channel] = factory
 
     def invalidate(self, tenant_id: Optional[str] = None) -> None:
         if tenant_id is None:
+            self._retired.extend(self._cache.values())
             self._cache.clear()
             return
         for key in [key for key in self._cache if key[0] == tenant_id]:
-            self._cache.pop(key, None)
+            adapter = self._cache.pop(key, None)
+            if adapter is not None:
+                self._retired.append(adapter)
+
+    async def close(self) -> None:
+        resources = RuntimeResources(*self._retired, *self._cache.values())
+        self._retired.clear()
+        self._cache.clear()
+        await resources.close()
 
     def get(self, tenant: Tenant, channel: str) -> Optional[ChannelAdapter]:
         key = (tenant.tenant_id, channel)

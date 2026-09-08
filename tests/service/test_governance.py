@@ -20,9 +20,11 @@ from trpc_service.tool import ToolAllowlistFilter
 from trpc_service.tool import ToolOutputRedactionFilter
 from trpc_service.tool import ToolCallLimitFilter
 from trpc_service.tool import ToolExecutionTimeoutFilter
+from trpc_service.tool import ToolMetricsFilter
 from trpc_service.tool import GovernedToolSet
 from trpc_service.tool import apply_tenant_governance
 from trpc_service.tool import build_governance_filters
+from trpc_service.metrics import EnterpriseMetrics
 from trpc_service.tenant import ModelEndpoint
 from trpc_service.tenant import IMAccessPolicy
 from trpc_service.tenant import Tenant
@@ -240,6 +242,7 @@ def test_apply_tenant_governance_wraps_callable_and_attaches_filters():
     assert any(isinstance(item, ToolAllowlistFilter) for item in agent.tools[0].filters)
     assert any(isinstance(item, ToolCallLimitFilter) for item in agent.tools[0].filters)
     assert any(isinstance(item, ToolExecutionTimeoutFilter) for item in agent.tools[0].filters)
+    assert any(isinstance(item, ToolMetricsFilter) for item in agent.tools[0].filters)
     assert any(isinstance(item, ToolOutputRedactionFilter) for item in agent.tools[0].filters)
     # Agent-level channel authorization is owned by the deployment factory;
     # applying tool governance must not add a duplicate filter.
@@ -329,3 +332,31 @@ async def test_tool_execution_timeout_cancels_slow_tool():
 
     with pytest.raises(TimeoutError, match="tool execution exceeded"):
         await tool.run_async(tool_context=invocation, args={})
+
+
+async def test_tool_metrics_filter_records_sync_and_stream_outcomes():
+    metrics = EnterpriseMetrics(meter=False)
+    filter_ = ToolMetricsFilter(metrics)
+    ctx = new_agent_context(metadata={"tenant_id": "tenant_a"})
+
+    async def success():
+        return "ok"
+
+    result = await filter_.run(ctx, {"tool_name": "query_order"}, success)
+    assert result.rsp == "ok"
+
+    async def stream_error():
+        yield FilterResult(error=ValueError("failed"), is_continue=False)
+
+    events = [event async for event in filter_.run_stream(ctx, {"tool_name": "query_order"}, stream_error)]
+    assert isinstance(events[0].error, ValueError)
+
+    snapshot = metrics.snapshot("tenant_a")
+    calls = [item for item in snapshot["counters"] if item["name"] == "agent_tool_call_total"]
+    assert {(item["attributes"]["outcome"], item["value"])
+            for item in calls} == {
+                ("success", 1),
+                ("error", 1),
+            }
+    durations = [item for item in snapshot["histograms"] if item["name"] == "agent_tool_call_duration_ms"]
+    assert sum(item["count"] for item in durations) == 2

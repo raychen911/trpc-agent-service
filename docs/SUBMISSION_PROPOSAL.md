@@ -147,9 +147,10 @@ sequenceDiagram
 
 ### 4.2 Session 生成与隔离
 
-- 单聊：`sha256(tenant_id:channel:user_id)`；
-- 群聊：`sha256(tenant_id:channel:chat_id)`；
-- 若同一群需要按成员拆分上下文，可扩展为 `sha256(tenant_id:channel:chat_id:user_id)`；
+- 单聊：`sha256(JSON[tenant_id, channel, private, user_id])`；
+- 群聊：`sha256(JSON[tenant_id, channel, group, chat_id])`；
+- 结构化编码保留字段边界并显式包含聊天类型，避免含分隔符的平台 ID 或同名单聊/群聊碰撞；
+- 若同一群需要按成员拆分上下文，可扩展结构化数组并加入 `user_id`；
 - 存储层继续注入租户前缀，形成 `{tenant_id}:{app_name}:{user_id}:{session_id}` 的复合作用域。
 
 即使用户 ID、群 ID 或 session ID 在不同租户中相同，也不能访问另一租户的数据。
@@ -253,7 +254,11 @@ Channel Adapter 统一提供验签、消息解析、普通回复、流式回复�
 | 回复 | 原生 stream 或分段降级 | webhook/SDK 文本或卡片 |
 | 本地验证 | pytest 平台 fixture | pytest 平台 fixture |
 
-Gateway 必须在平台要求的时间内快速 ACK，Agent 执行转入队列。发送端对限流和临时错误做带抖动的指数退避；永久权限错误进入审计和告警，不进行无限重试。重复回调使用 `tenant:channel:message_id` 幂等键，成功结果可缓存，避免 Agent 副作用被重复执行。
+Gateway 必须在平台要求的时间内快速 ACK，Agent 执行转入队列。入口按
+`im_access_policy.callback_requests_per_minute` 执行租户/通道固定窗口限流，多节点通过 Redis Lua
+原子计数。发送端对限流和临时错误做带抖动的指数退避；永久权限错误进入审计和告警，不进行
+无限重试。重复回调使用 `tenant:channel:message_id` 幂等键；无消息 ID 时使用 callback body
+SHA-256，成功结果可缓存，避免 Agent 副作用被重复执行。
 
 ## 8. 重点技术
 

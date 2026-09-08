@@ -163,6 +163,7 @@ class QQAdapter(ChannelAdapter):
         self.max_retries = max(0, max_retries)
         self.retry_backoff = max(0.0, retry_backoff)
         self._http_client = http_client
+        self._owns_http_client = http_client is None
         self._send_hook = send_hook
         self._token_expires_at = float("inf") if access_token else 0.0
         self._token_lock = asyncio.Lock()
@@ -171,6 +172,11 @@ class QQAdapter(ChannelAdapter):
         if self._http_client is None:
             self._http_client = httpx.AsyncClient(timeout=10.0)
         return self._http_client
+
+    async def close(self) -> None:
+        if self._owns_http_client and self._http_client is not None:
+            await self._http_client.aclose()
+            self._http_client = None
 
     async def challenge_response(self, payload: Any) -> Optional[dict[str, Any]]:
         body = json_body(payload)

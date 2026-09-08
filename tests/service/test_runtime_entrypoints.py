@@ -43,12 +43,12 @@ def test_build_outbox_relay_has_only_delivery_dependencies(monkeypatch):
         outbox_max_attempts=4,
     )
 
-    relay = run_outbox.build_outbox_relay(manager=manager, settings=settings)
+    run_outbox.build_outbox_relay(manager=manager, settings=settings)
 
     assert captured["store_url"] == "sqlite:///outbox.db"
     assert captured["relay"]["owner"] == "outbox-node-a"
     assert captured["relay"]["max_attempts"] == 4
-    assert relay.manager is manager
+    assert manager not in captured["relay"]["owned_resources"]
 
 
 def test_build_outbox_relay_bootstraps_manager_and_requires_mysql(monkeypatch):
@@ -75,7 +75,7 @@ def test_build_outbox_relay_bootstraps_manager_and_requires_mysql(monkeypatch):
     relay = run_outbox.build_outbox_relay(
         settings=ServiceSettings(mysql_url="sqlite:///db", tenants_config="tenants.yaml"))
     assert manager.get("a") is not None
-    assert relay.manager is manager
+    assert manager in relay.kwargs["owned_resources"]
 
 
 async def test_outbox_main_runs_and_shuts_down(monkeypatch):
@@ -86,12 +86,15 @@ async def test_outbox_main_runs_and_shuts_down(monkeypatch):
         async def run(self, interval):
             calls.append(("run", interval))
 
+        async def close(self):
+            calls.append(("close", 0))
+
     monkeypatch.setenv("TRPC_SERVICE_MYSQL_URL", "sqlite:///db")
     monkeypatch.setenv("TRPC_SERVICE_OUTBOX_POLL_INTERVAL_SECONDS", "2")
     monkeypatch.setattr(run_outbox, "build_outbox_relay", lambda settings: Relay())
     monkeypatch.setattr(run_outbox, "shutdown_telemetry", lambda: calls.append(("shutdown", 0)))
     await run_outbox.run()
-    assert calls == [("run", 2.0), ("shutdown", 0)]
+    assert calls == [("run", 2.0), ("close", 0), ("shutdown", 0)]
 
 
 def test_outbox_console_entrypoint(monkeypatch):

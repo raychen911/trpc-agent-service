@@ -8,6 +8,7 @@ from trpc_service.runtime import InMemoryNodeDirectory
 from trpc_service.runtime import NodeInfo
 from trpc_service.runtime import RedisNodeDirectory
 from trpc_service.runtime import RendezvousRouter
+from trpc_service.runtime import RuntimeResources
 
 
 async def test_in_memory_directory_expires_filters_and_removes_nodes():
@@ -56,3 +57,30 @@ def test_redis_directory_requires_connection_and_router_is_stable_and_load_aware
     assert RendezvousRouter.choose("key", []) is None
     choices = [RendezvousRouter.choose(f"session-{index}", nodes).node_id for index in range(100)]
     assert choices.count("b") > choices.count("a")
+
+
+async def test_runtime_resources_close_once_in_reverse_order_and_continue_after_error():
+    calls = []
+
+    class SyncResource:
+
+        def close(self):
+            calls.append("sync")
+
+    class BrokenResource:
+
+        async def close(self):
+            calls.append("broken")
+            raise RuntimeError("close failed")
+
+    class AsyncResource:
+
+        async def close(self):
+            calls.append("async")
+
+    async_resource = AsyncResource()
+    resources = RuntimeResources(SyncResource(), BrokenResource(), async_resource, async_resource, None, object())
+    await resources.close()
+    await resources.close()
+
+    assert calls == ["async", "broken", "sync"]

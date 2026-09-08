@@ -60,6 +60,7 @@ def build_stream_worker(manager: Optional[TenantConfigManager] = None,
     mysql_url = resolve_secret(settings.mysql_url, resolver=secret_resolver) or None
     if not redis_url:
         raise ValueError("worker requires TRPC_SERVICE_REDIS_URL")
+    owns_manager = manager is None
     manager = manager or build_tenant_config_manager(
         mysql_url=mysql_url,
         redis_url=redis_url,
@@ -93,10 +94,11 @@ def build_stream_worker(manager: Optional[TenantConfigManager] = None,
         confirmation_manager=create_confirmation_manager(runtime_settings),
         session_lock_manager=create_session_lock_manager(runtime_settings),
     )
+    node_directory = RedisNodeDirectory(redis_url=redis_url)
     queue = StreamQueue(
         redis_url=redis_url,
         consumer=os.environ.get("TRPC_SERVICE_NODE_ID"),
-        node_directory=RedisNodeDirectory(redis_url=redis_url),
+        node_directory=node_directory,
     )
     result_store = RedisTaskResultStore(redis_url=redis_url)
     if settings.durable_delivery_enabled and not mysql_url:
@@ -108,10 +110,8 @@ def build_stream_worker(manager: Optional[TenantConfigManager] = None,
         registry=ChannelRegistry(secret_resolver=secret_resolver),
         result_store=result_store,
         message_store=message_store,
+        owned_resources=[audit_sink, manager if owns_manager else None, node_directory],
     )
-    # Keep the sink reachable for graceful shutdown hooks and diagnostics.
-    stream_worker.audit_sink = audit_sink
-    stream_worker.message_store = message_store
     return stream_worker
 
 
@@ -121,6 +121,7 @@ async def main() -> None:
     try:
         await worker.run()
     finally:
+        await worker.close()
         shutdown_telemetry()
 
 

@@ -32,6 +32,9 @@ tenants:
     audit_policy:
       enabled: true
       retention_days: 90
+    im_access_policy:
+      # 所有 Gateway 通过 Redis 共享这一租户级固定窗口限额。
+      callback_requests_per_minute: 600
     budget:
       daily_token_budget: 100000
       daily_cost_limit: 20.0
@@ -59,6 +62,8 @@ tenants:
       mysql_url: env://TRPC_SERVICE_MYSQL_URL
     audit_policy:
       enabled: true
+    im_access_policy:
+      callback_requests_per_minute: 300
     budget:
       daily_token_budget: 50000
 
@@ -95,5 +100,7 @@ tenants:
     audit_policy:
       enabled: true
       retention_days: 180
+    im_access_policy:
+      callback_requests_per_minute: 200
     budget:
       daily_cost_limit: 10.0

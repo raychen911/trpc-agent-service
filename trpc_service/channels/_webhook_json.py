@@ -84,6 +84,7 @@ class JsonWebhookAdapter(ChannelAdapter):
         self.webhook_url = webhook_url
         self.secret = secret or ""
         self._http_client = http_client
+        self._owns_http_client = http_client is None
         self._send_hook = send_hook
         self.message_limit_chars = message_limit_chars
         self.max_retries = max(0, max_retries)
@@ -150,3 +151,8 @@ class JsonWebhookAdapter(ChannelAdapter):
             if not last.ok:
                 return last
         return last
+
+    async def close(self) -> None:
+        if self._owns_http_client and self._http_client is not None:
+            await self._http_client.aclose()
+            self._http_client = None

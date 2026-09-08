@@ -13,6 +13,7 @@ from typing import Optional
 from trpc_service.channels._models import SendResult
 from trpc_service.metrics import EnterpriseMetrics
 from trpc_service.metrics import get_enterprise_metrics
+from trpc_service.runtime import RuntimeResources
 from ._models import OutboxMessage
 from ._repository import MessageStoreABC
 
@@ -39,6 +40,7 @@ class OutboxRelay:
         max_attempts: int = 8,
         lease_seconds: float = 30,
         metrics: Optional[EnterpriseMetrics] = None,
+        owned_resources: Optional[list] = None,
     ) -> None:
         self._store = store
         self._transport = transport
@@ -46,6 +48,7 @@ class OutboxRelay:
         self._max_attempts = max_attempts
         self._lease_seconds = lease_seconds
         self._metrics = metrics or get_enterprise_metrics()
+        self._resources = RuntimeResources(*(owned_resources or []), transport, store)
 
     async def run_once(self, limit: int = 20) -> int:
         messages = await self._store.claim_outbox(
@@ -110,3 +113,7 @@ class OutboxRelay:
                 processed = 0
             if processed == 0:
                 await asyncio.sleep(poll_interval_seconds)
+
+    async def close(self) -> None:
+        """Close the store, transport and process-owned dependencies."""
+        await self._resources.close()

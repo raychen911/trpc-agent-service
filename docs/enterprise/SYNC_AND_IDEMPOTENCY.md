@@ -5,7 +5,8 @@
 系统接受 IM 平台的 at-least-once 投递，不声称所有外部副作用具有天然 exactly-once。平台通过
 “唯一键 + 状态机 + 结果缓存 + 业务幂等键”实现效果上的一次执行。
 
-1. Gateway 验签后生成 `dedup_key = tenant_id:channel:message_id`；
+1. Gateway 验签后生成 `dedup_key = tenant_id:channel:message_id`；平台没有提供 `message_id` 时，
+   以原始 callback body 的 SHA-256 作为稳定 fallback，避免空 ID 造成跨消息误去重；
 2. Redis `SET NX EX` 成功才允许入队，失败表示重复回调并立即 ACK；
 3. 入队失败释放 reservation，让 IM 重试可以再次提交；
 4. Redis Streams consumer group 提供 at-least-once 投递，pending 超时后由其他 Worker reclaim；

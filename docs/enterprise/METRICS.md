@@ -22,7 +22,8 @@
 IM callback
   │ agent_callback_total / agent_callback_duration_ms
   ▼
-Gateway 验签、解析、幂等
+Gateway 验签、解析、幂等、限流
+  │ agent_callback_rate_limited_total
   │ agent_callback_enqueue_total
   ▼
 Redis Streams enqueue/read/claim/ack
@@ -34,6 +35,7 @@ Worker task
   ├─ session lock       agent_session_lock_duration_ms
   ├─ Session/Memory     agent_storage_operation_total / duration_ms
   ├─ Runner             agent_requests_total / agent_runner_latency_ms
+  ├─ Tool               agent_tool_call_total / agent_tool_call_duration_ms
   └─ IM reply           agent_im_delivery_total / duration_ms / parts
 ```
 
@@ -49,6 +51,7 @@ Pod，也共享同一个 `trace_id`。`trace_id`、`message_id`、`session_id` �
 | `agent_callback_total` | Counter | tenant、channel、outcome | Gateway 收到并处理的回调数 |
 | `agent_callback_duration_ms` | Histogram | tenant、channel、outcome | 从 HTTP 路由进入到 ACK 的耗时 |
 | `agent_callback_enqueue_total` | Counter | tenant、channel、outcome | 回调写入任务队列的结果 |
+| `agent_callback_rate_limited_total` | Counter | tenant、channel | 被租户入口限额拒绝的回调数 |
 | `agent_queue_operation_total` | Counter | operation、outcome、error_type | Redis Streams 后端操作数 |
 | `agent_queue_operation_duration_ms` | Histogram | operation、outcome | enqueue/read/claim/ack/DLQ 等耗时 |
 | `agent_worker_task_total` | Counter | tenant、channel、outcome | Worker 每次任务投递尝试 |
@@ -65,6 +68,8 @@ Pod，也共享同一个 `trace_id`。`trace_id`、`message_id`、`session_id` �
 | `agent_session_backend_latency_ms` | Histogram | tenant、backend、outcome | Session get-or-create 整体耗时 |
 | `agent_requests_total` | Counter | tenant、channel、outcome | Agent turn 数，包含 HITL 和前置失败 |
 | `agent_runner_latency_ms` | Histogram | tenant、channel、outcome | SDK Runner 执行耗时 |
+| `agent_tool_call_total` | Counter | tenant、tool_name、outcome | 治理链内 Tool 调用尝试数 |
+| `agent_tool_call_duration_ms` | Histogram | tenant、tool_name、outcome | Tool 调用耗时（含治理拒绝/超时） |
 | `agent_llm_input_tokens_total` | Counter | tenant、model | 模型输入 token 数 |
 | `agent_llm_output_tokens_total` | Counter | tenant、model | 模型输出 token 数 |
 | `agent_llm_cost_total` | Counter | tenant、model | 根据模型价格估算的累计成本 |

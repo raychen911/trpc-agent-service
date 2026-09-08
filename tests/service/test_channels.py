@@ -58,6 +58,13 @@ def test_generate_session_id_is_stable():
                                "u1") == generate_session_id("t1", "wecom", CHAT_PRIVATE, "u1")
 
 
+def test_generate_session_id_encodes_boundaries_and_chat_type_without_collisions():
+    assert generate_session_id("tenant", "a:b", CHAT_PRIVATE,
+                               "c") != generate_session_id("tenant", "a", CHAT_PRIVATE, "b:c")
+    assert generate_session_id("tenant", "wecom", CHAT_PRIVATE, "same",
+                               "same") != generate_session_id("tenant", "wecom", CHAT_GROUP, "sender", "same")
+
+
 # ----------------------------------------------------------------- splitting
 
 
@@ -173,6 +180,23 @@ async def test_wecom_bad_signature_rejected():
     adapter = WecomAdapter(token="t", encoding_aes_key=aes_key)
     query = {"msg_signature": "bad", "timestamp": "1", "nonce": "2"}
     assert await adapter.verify_signature(_wecom_xml(encrypt), {}, query) is False
+
+
+async def test_channel_adapters_close_only_their_owned_http_clients(monkeypatch):
+    monkeypatch.delenv("ALL_PROXY", raising=False)
+    monkeypatch.delenv("all_proxy", raising=False)
+    dingtalk = DingTalkAdapter(webhook_url="https://example.invalid/hook")
+    owned_client = dingtalk._client()
+    await dingtalk.close()
+    assert owned_client.is_closed is True
+
+    import httpx
+
+    external_client = httpx.AsyncClient()
+    wecom = WecomAdapter(token="t", encoding_aes_key="a", http_client=external_client)
+    await wecom.close()
+    assert external_client.is_closed is False
+    await external_client.aclose()
 
 
 # ------------------------------------------------------- WeChat KF / DT / FS

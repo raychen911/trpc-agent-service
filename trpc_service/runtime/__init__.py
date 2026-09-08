@@ -5,6 +5,7 @@ from ._nodes import NodeDirectoryABC
 from ._nodes import NodeInfo
 from ._nodes import RedisNodeDirectory
 from ._nodes import RendezvousRouter
+from ._resources import RuntimeResources
 
 __all__ = [
     "InMemoryNodeDirectory",
@@ -12,4 +13,5 @@ __all__ = [
     "NodeInfo",
     "RedisNodeDirectory",
     "RendezvousRouter",
+    "RuntimeResources",
 ]

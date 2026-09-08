@@ -192,6 +192,35 @@ async def test_outbox_relay_recovers_from_transient_poll_failure(monkeypatch):
     assert sleeps == [0.25, 0.25]
 
 
+async def test_outbox_relay_closes_owned_resources_once():
+    calls = []
+
+    class ClosingStore:
+
+        async def close(self):
+            calls.append("store")
+
+    class ClosingTransport:
+
+        async def close(self):
+            calls.append("transport")
+
+    class Owned:
+
+        def close(self):
+            calls.append("owned")
+
+    relay = OutboxRelay(
+        store=ClosingStore(),
+        transport=ClosingTransport(),
+        owner="relay",
+        owned_resources=[Owned()],
+    )
+    await relay.close()
+    await relay.close()
+    assert calls == ["store", "transport", "owned"]
+
+
 async def test_sql_store_commits_receipt_outbox_attempt_and_replay(tmp_path):
     store = SqlMessageStore(f"sqlite:///{tmp_path / 'messages.db'}")
     task = _task(text="durable")

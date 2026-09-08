@@ -55,6 +55,7 @@ from trpc_service.tool import RedisConfirmationManager
 from trpc_service.web.admin import create_admin_router
 from trpc_service.web.gateway import ChannelRegistry
 from trpc_service.web.gateway import build_idempotency_store
+from trpc_service.web.gateway import build_rate_limiter
 from trpc_service.web.gateway import create_gateway_app
 from trpc_service.workspace import TenantStorageRouter
 from trpc_service.config import DefaultModelPricing
@@ -247,6 +248,7 @@ def build_app(
     secret_resolver = SecretResolver(file_root=settings.secret_file_root)
     redis_url = resolve_secret(settings.redis_url, resolver=secret_resolver) or None
     mysql_url = resolve_secret(settings.mysql_url, resolver=secret_resolver) or None
+    owns_manager = manager is None
     manager = manager or build_tenant_config_manager(
         mysql_url=mysql_url,
         redis_url=redis_url,
@@ -290,7 +292,9 @@ def build_app(
         worker=worker,
         registry=ChannelRegistry(secret_resolver=secret_resolver),
         idempotency_store=build_idempotency_store(redis_url),
+        rate_limiter=build_rate_limiter(redis_url),
         queue=queue,
+        owned_resources=[audit_sink, node_directory, manager if owns_manager else None],
         test_api_key=(ServiceSettings.reveal(settings.test_api_key) if settings.test_api_enabled else None),
     )
     gateway.include_router(

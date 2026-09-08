@@ -103,6 +103,30 @@ class FailOnceAdapter(FakeAdapter):
         return await super().reply_text(inbound, text)
 
 
+async def test_stream_worker_closes_runtime_dependencies_once():
+    calls = []
+
+    class Resource:
+
+        def __init__(self, name):
+            self.name = name
+
+        async def close(self):
+            calls.append(self.name)
+
+    worker = StreamWorker(
+        queue=Resource("queue"),
+        worker=object(),
+        registry=Resource("registry"),
+        result_store=Resource("result"),
+        message_store=Resource("message"),
+        owned_resources=[Resource("owned")],
+    )
+    await worker.close()
+    await worker.close()
+    assert calls == ["queue", "result", "message", "registry", "owned"]
+
+
 def _make_tenant(manager):
     tenant = Tenant(tenant_id="t_a", name="A", model=ModelEndpoint(model_name="m"))
     tenant.channel_configs["fake"] = WeComChannelConfig(

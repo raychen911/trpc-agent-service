@@ -1,4 +1,4 @@
-# PR7 / PR8 / PR9 架构整合说明
+# 架构演进与运维说明
 
 本轮重构吸收三份评审文档中可落地的共同优点，旧环境变量和旧管理接口不保留兼容层。目标是让业务能力留在高内聚模块中，让进程、数据库和渠道只依赖稳定的小接口。
 
@@ -33,7 +33,9 @@
 ## 数据、路由与部署
 
 - MySQL 保存配置版本、草稿、receipt、Outbox、投递尝试和审计；迁移由有 ledger 的独立 Job 执行，运行进程不负责变更 schema。
-- 节点目录使用 TTL 心跳，稳定路由采用 rendezvous hashing，并按 capacity/load 过滤节点；节点消失后无需清理业务映射即可重选。
+- 节点目录使用 TTL 心跳；当前数据面由 Redis Stream consumer group 在健康 Worker 间分配任务，
+  rendezvous hashing 仅作为控制面容量规划/可选亲和调度组件。节点消失后 pending task 可被任意
+  Worker 接管，不依赖需要清理的 session→node 映射。
 - Kustomize 分为 base、production 与 performance。production 默认拒绝网络、非 root、只读根文件系统、最小 capabilities，并提供一个不接公网 Ingress 的 canary Service。
 - Compose 将 Gateway、Worker、Outbox、Migration 拆为独立 role；`fault-stage-runtime.override.yml` 可重复注入 Redis/MySQL 中断。
 

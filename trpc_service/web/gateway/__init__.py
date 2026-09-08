@@ -14,15 +14,21 @@ from ._registry import default_channel_factories
 from ._idempotency import LocalIdempotencyStore
 from ._idempotency import RedisIdempotencyStore
 from ._idempotency import build_idempotency_store
+from ._rate_limit import LocalRateLimiter
+from ._rate_limit import RedisRateLimiter
+from ._rate_limit import build_rate_limiter
 
 __all__ = [
     "ChannelAdapterFactory",
     "ChannelRegistry",
     "LocalIdempotencyStore",
+    "LocalRateLimiter",
     "RedisIdempotencyStore",
+    "RedisRateLimiter",
     "StreamQueue",
     "TaskMessage",
     "build_idempotency_store",
+    "build_rate_limiter",
     "create_gateway_app",
     "default_channel_factories",
 ]

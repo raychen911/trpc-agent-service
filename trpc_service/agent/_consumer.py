@@ -32,6 +32,7 @@ from trpc_service.metrics import get_enterprise_metrics
 from trpc_service.metrics import operation_span
 from ._results import LocalTaskResultStore
 from trpc_service.messaging._models import ClaimStatus
+from trpc_service.runtime import RuntimeResources
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +52,8 @@ class StreamWorker:
                  max_attempts: int = 3,
                  result_store: Any = None,
                  message_store: Any = None,
-                 metrics: EnterpriseMetrics | None = None) -> None:
+                 metrics: EnterpriseMetrics | None = None,
+                 owned_resources: Optional[list[Any]] = None) -> None:
         self._queue = queue
         self._worker = worker
         self._registry = registry
@@ -64,6 +66,7 @@ class StreamWorker:
         self._result_store = result_store or LocalTaskResultStore()
         self._message_store = message_store
         self._metrics = metrics or getattr(worker, "metrics", None) or get_enterprise_metrics()
+        self._resources = RuntimeResources(*(owned_resources or []), registry, message_store, self._result_store, queue)
 
     async def _heartbeat(
         self,
@@ -297,3 +300,7 @@ class StreamWorker:
             if callable(remove_heartbeat):
                 with suppress(Exception):
                     await remove_heartbeat()
+
+    async def close(self) -> None:
+        """Close queue, result, message, channel and process-owned resources."""
+        await self._resources.close()

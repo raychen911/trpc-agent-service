@@ -71,6 +71,8 @@ data:
         audit_policy:
           enabled: true
           retention_days: 90
+        im_access_policy:
+          callback_requests_per_minute: 1200
         budget:
           daily_token_budget: 2000000
           daily_cost_limit: 50.0
@@ -86,6 +88,8 @@ data:
             app_id: ${TRPC_SERVICE_FEISHU_APP_ID_B}
             verification_token: env://TRPC_SERVICE_FEISHU_VERIFICATION_TOKEN_B
             encrypt_key: env://TRPC_SERVICE_FEISHU_ENCRYPT_KEY_B
+        im_access_policy:
+          callback_requests_per_minute: 600
         storage_config:
           session_backend: mysql
           memory_backend: mysql

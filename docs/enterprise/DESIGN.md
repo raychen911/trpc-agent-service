@@ -89,9 +89,14 @@ core 现有文件**。租户隔离复用框架既有的 `app_name → user_id �
 | Storage Adapter | 统一数据访问抽象 | 复用 `SessionServiceABC`/`MemoryServiceABC` + 租户包装 |
 | Admin API / Telemetry | 租户 CRUD/版本回滚、审计/指标查询、OTel | `trpc_service/web/admin/`、`trpc_service/metrics/_metrics.py`、`trpc_service/metrics/_observability.py` |
 
-**路由流程**：IM 回调到达 Gateway → 从 URL path 解析 `tenant_id` → 验签/幂等 →
+**路由流程**：IM 回调到达 Gateway → 从 URL path 解析 `tenant_id` → 验签/幂等/租户限流 →
 `generate_session_id(tenant, channel, chat_type, user, chat)` 得到 session → 任意 Worker
 从共享后端加载上下文 → 执行 → 写回 + 推送回复。
+
+生产任务分配由 Redis Stream consumer group 完成：健康 Worker 竞争消费，不把 session 固定到
+某台机器。`RedisNodeDirectory` 的 TTL 心跳用于 Gateway readiness；`RendezvousRouter` 是控制面
+进行容量规划/可选亲和调度的基础组件，当前不在消息正确性的关键路径上。会话顺序由共享
+session lock 与 fencing token 保证，因此节点故障后 pending task 可由任意 Worker 接管。
 
 ```mermaid
 sequenceDiagram
@@ -151,7 +156,9 @@ Gateway 与 Worker 解耦，并用 consumer group、pending reclaim、最大重�
   append-only，SQL 推荐在同一事务内 CAS `version` 并对冲突重试。
 - **Event/State/Summary 顺序**：event 先写（不可变）→ state 覆盖写（可变）→ summary 由
   异步 Summarizer 生成后覆盖写。
-- **Memory 跨节点可见性**：写入后经 Redis Pub/Sub 失效通知，各节点本地缓存主动失效。
+- **Memory 跨节点可见性**：当前 Adapter 不持有进程内 Memory 缓存，写入共享 Redis/MySQL 后，
+  其他 Worker 直接从主后端读取即可可见；若后续增加 L1 缓存，必须按 tenant + memory id 通过
+  Pub/Sub/CDC 主动失效，并保留 TTL 兜底。
 - **后端迁移**：迁移对象限定为 Session/Memory，方向限定为 Redis→MySQL。生产流程为
   建目标 schema → 记录 watermark → 按租户全量复制 → 双写并追平增量 → checksum/shadow read
   校验 → 单租户切换读路由 → 保留回滚窗口。Audit 始终以 MySQL 为主存储，不参与迁移；
@@ -160,7 +167,11 @@ Gateway 与 Worker 解耦，并用 consumer group、pending reclaim、最大重�
   复扫源端并校验 checksum，源端发生未追平写入时拒绝切换。生产零停机部署还需在复制窗口接入
   `DualWriteBackend` 和 durable outbox。
 - **IM 幂等**：Gateway 以 `tenant:channel:msg_id` 为键 `SETNX`（TTL 300s），已存在则
-  返回 200 不重复处理（`web/gateway/_idempotency.py`）。
+  返回 200 不重复处理（`web/gateway/_idempotency.py`）。平台未提供消息 ID 时，Gateway
+  使用原始 callback body 的 SHA-256 生成稳定 ID，避免所有无 ID 消息冲突。
+- **入口限流**：`im_access_policy.callback_requests_per_minute` 控制每个租户/通道的固定窗口
+  限额；多 Gateway 使用 Redis Lua 原子计数，单节点演示使用本地实现。超限返回 `429` 和
+  `Retry-After`；共享限流后端故障时 fail-closed 返回 `503`，且释放幂等占位以允许平台重试。
 - **配置同步**：配置写入、版本快照和 `config_outbox` 在同一 MySQL 事务提交；成功后更新
   Redis 缓存并发布版本事件。Redis 暂时不可用不会撤销 MySQL 事务，outbox 保持 pending，
   恢复后重放。节点若漏掉 Pub/Sub，也会在缓存过期/L1 miss 时回源 MySQL。
@@ -194,7 +205,7 @@ class ChannelAdapter(ABC):
 |---|---|---|---|
 | 验签 | token + SHA1/HMAC，需要时 AES 解密 | app secret / verification token / encrypt key | AppSecret 派生 Ed25519 密钥，校验 timestamp + raw body |
 | 消息转换 | XML 或平台 JSON → `InboundMessage` | 平台 event JSON → `InboundMessage` | C2C/群/频道/频道私信 event → `InboundMessage` |
-| session_id | 单聊 `sha256(tenant:channel:user)`；群聊 `sha256(tenant:channel:chat)` | 同左 | 同左 |
+| session_id | 单聊 `sha256(JSON[tenant,channel,private,user])`；群聊 `sha256(JSON[tenant,channel,group,chat])` | 同左 | 同左 |
 | 回复 | 文本分段，图片/文件保留 attachment | webhook/SDK 发送文本或卡片，限流退避 | App AccessToken + 对应会话 OpenAPI，限流退避 |
 | 本地验证 | pytest 构造企业微信/微信客服 fixture | pytest 构造钉钉/飞书 fixture | pytest 构造 QQ fixture |
 
@@ -283,8 +294,22 @@ decision, latency_ms, error_type, cost, trace_id, detail`。
 **配置回滚**：`TenantConfigManager.rollback(tenant_id, to_version)` 保留版本历史，热加载
 生效。
 
-**容量评估参考**：每 Worker 并发 session ≈ 内存/上下文大小；Redis QPS ≈ 每请求 1 读 +
-1-3 写；SQL QPS ≈ 审计 1 写 + 配置读（缓存）；IM 回调峰值 ≈ 用户数 × 对话频率。
+**容量评估参考**：先用与生产一致的模型、工具和上下文长度压测，取得 `S`（单 Worker 稳态
+消费率，turn/s）、`M`（单活跃 Runner 峰值内存）、`L95`（turn P95 秒）、`Qp`（回调峰值
+QPS）和安全系数 `H`（建议 1.3–1.5）：
+
+```text
+单 Worker 并发上限 C = min(可用内存 / M, 模型连接池并发, 工具连接池并发)
+单 Worker 稳态消费率 S ≈ C / L95
+Worker 副本数 = ceil(Qp / S × H)，并至少保留 2 个故障域
+Redis 峰值 QPS ≈ Qp × (队列 2~4 + 锁 3~6 + Session/Memory 实测操作数)
+SQL 峰值 QPS ≈ Qp × (receipt/outbox 4~7 + 审计 1 + SQL Session/Memory 实测操作数)
+```
+
+示例：压测得 `C=40`、`L95=8s`，则 `S≈5 turn/s`；峰值 `Qp=50`、`H=1.4` 时至少
+`ceil(50/5×1.4)=14` 个 Worker。还要分别验证模型 TPM/RPM 配额、Redis CPU/P99、SQL
+连接池与锁等待、队列 lag/pending age；任一先达到 70% 即作为扩容瓶颈。`max_concurrent_sessions`
+是容量目标而非正确性锁，入口硬限额由 `callback_requests_per_minute` 执行。
 
 ## 8. SDK 复用与平台新增边界
 

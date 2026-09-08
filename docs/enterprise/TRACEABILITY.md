@@ -27,6 +27,8 @@
 | Summary/Artifact/Knowledge/Audit | MySQL 元数据表；Qdrant 向量；S3 兼容对象存储；Audit `log/_sql_sink.py` | `test_data_model.py`、`test_data_backends.py`、`test_audit.py::test_sql_audit_sink_persists_and_queries` |
 | 多节点并发一致性 | Session lock + 配置 `config_version` CAS/outbox | `test_adversarial.py`、`test_tenant_persistence.py::test_two_managers_reject_stale_concurrent_update` |
 | IM 幂等 | `web/gateway/_idempotency.py` | `test_gateway.py::test_gateway_dedups_redelivered_message`、`test_adversarial.py::test_idempotency_store_dedups_concurrent_duplicates` |
+| 无消息 ID 回调幂等 | `web/gateway/_app.py`（body SHA-256 fallback） | `test_gateway_rate_limit.py::test_idless_callbacks_get_stable_body_fingerprint_without_cross_message_collision` |
+| 租户级入口限流 | `web/gateway/_rate_limit.py` + `tenant/_models.py` | `test_gateway_rate_limit.py` |
 | 最小数据模型 | `data/schema.mysql.sql` + `DATA_MODEL.md` + `log/_sql_sink.py::AuditLogRecord` | `test_data_model.py`、`test_audit.py`、`test_tenant_persistence.py` |
 | Session/Memory Redis→MySQL 真实迁移 | `workspace/_backend_migration.py` | `test_backend_migration.py` + Docker 单向实测 |
 | 异构数据同步/幂等 | `storage_outbox`、版本/CAS、内容 checksum、确定性向量 point id | `SYNC_AND_IDEMPOTENCY.md`、`test_data_backends.py`、`test_data_model.py` |
@@ -51,7 +53,7 @@
 | 危险工具二次确认 | `tool/_hitl.py` + `agent/_worker.py`（确认回显→放行） | `test_worker.py::test_worker_hitl_confirmation_flow`、`test_budget_hitl_stream.py` |
 | 敏感信息脱敏 | `tool/_redactor.py` + `ToolOutputRedactionFilter` | `test_governance.py::test_redaction_filter_masks_sensitive_output` |
 | 预算限制 | `tool/_budget.py`（`BudgetTracker`/`ModelBudgetFilter`/原子 `reserve`） | `test_budget_hitl_stream.py`、`test_adversarial.py::test_budget_reserve_is_thread_safe` |
-| 监控指标 | `metrics/_metrics.py` + Gateway/Queue/Worker/Storage/IM 埋点 + Collector/Prometheus | `test_observability.py`、`test_gateway.py`、`test_queue.py`、`test_worker.py`、`test_tenant_storage.py` |
+| 监控指标 | `metrics/_metrics.py` + Gateway/Queue/Worker/Tool/Storage/IM 埋点 + Collector/Prometheus | `test_observability.py`、`test_gateway_rate_limit.py`、`test_governance.py::test_tool_metrics_filter_records_sync_and_stream_outcomes`、`test_queue.py`、`test_worker.py`、`test_tenant_storage.py` |
 | OTel 全链路 | `metrics/_observability.py` 的 Trace/Meter Provider、跨队列 carrier、业务 span | `test_observability.py::test_trace_context_survives_queue_carrier`、`test_queue.py` |
 | 审计日志字段 | `log/_models.py::AuditLogEntry` | `test_audit.py::test_audit_entry_fields` |
 | 密钥管理 + 脱敏 | `SecretStr` + `log/_masker.py::SecretMasker/RedactingLogFilter` | `test_audit.py::test_secret_masker_*`、`test_tenants.py` |
@@ -77,9 +79,9 @@
 | 5 | 设计/数据/同步/后端/接入/监控/追溯文档 | `DESIGN.md`、`DATA_MODEL.md`、`SYNC_AND_IDEMPOTENCY.md`、`BACKEND_ADAPTERS.md`、`ONBOARDING.md`、`METRICS.md`、`TRACEABILITY.md` |
 | 6 | 项目申请书 | 已提供 |
 
-## 验收基线（2026-09-07）
+## 验收基线（2026-09-08）
 
-- `pytest tests/service`：241 passed；
+- `pytest tests/service`：326 passed；
 - `--cov=trpc_service --cov-fail-under=95`：95.78%；
 - `diff-cover coverage.xml --fail-under=85`：95%；
 - Redis pending reclaim/DLQ、跨节点锁、结果缓存、fallback model、Admin API、迁移双写、OTel Trace/Metrics 和 Prometheus 部署契约已纳入自动测试；

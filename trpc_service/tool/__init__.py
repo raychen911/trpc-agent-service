@@ -17,6 +17,7 @@ from ._filters import ToolAllowlistFilter
 from ._filters import ToolOutputRedactionFilter
 from ._filters import ToolCallLimitFilter
 from ._filters import ToolExecutionTimeoutFilter
+from ._filters import ToolMetricsFilter
 from ._filters import GovernedToolSet
 from ._filters import build_governance
 from ._filters import build_governance_filters
@@ -47,6 +48,7 @@ __all__ = [
     "ToolOutputRedactionFilter",
     "ToolCallLimitFilter",
     "ToolExecutionTimeoutFilter",
+    "ToolMetricsFilter",
     "GovernedToolSet",
     "build_governance",
     "build_governance_filters",

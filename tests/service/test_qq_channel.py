@@ -70,6 +70,15 @@ def test_qq_validation_challenge_signature():
         sign_validation_response("", "plain-token", "1700000000")
 
 
+async def test_qq_adapter_closes_owned_lazy_http_client(monkeypatch):
+    monkeypatch.delenv("ALL_PROXY", raising=False)
+    monkeypatch.delenv("all_proxy", raising=False)
+    adapter = QQAdapter(app_id="app", app_secret=APP_SECRET)
+    client = adapter._client()
+    await adapter.close()
+    assert client.is_closed is True
+
+
 async def test_qq_adapter_challenge_response_validation():
     adapter = QQAdapter(app_secret=APP_SECRET)
     challenge = await adapter.challenge_response({"op": 13, "d": {"plain_token": "plain", "event_ts": "123"}})
