@@ -1,0 +1,73 @@
+# ===================================================================
+# 云原生构建配置文件
+# ===================================================================
+
+# -----------------------------------------------------------------------------
+# Docker 镜像（开发环境镜像，仅服务云开发环境，不参与生产部署）
+# 推送时改动涉及 .ide/Dockerfile 或依赖清单才构建并推送
+# -----------------------------------------------------------------------------
+"**":
+  push:
+    - git:
+        enable: true
+        submodules:
+          enable: false
+      ifModify:
+        - .ide/Dockerfile
+        - pyproject.toml
+        - uv.lock
+      imports:
+        - https://cnb.cool/OrionSeeker/SecretsHub/-/blob/main/docker.yml
+      services:
+        - docker
+      stages:
+        - name: docker build and push
+          script: |
+            echo "检测到开发环境镜像相关改动，触发构建并推送"
+            docker login -u cnb -p "${DOCKER_TOKEN}" docker.cnb.cool
+            docker build -f .ide/Dockerfile -t docker.cnb.cool/orionseeker/trpc/trpc-agent-service:latest .
+            docker push docker.cnb.cool/orionseeker/trpc/trpc-agent-service:latest
+
+# -----------------------------------------------------------------------------
+# 云原生开发环境配置
+# -----------------------------------------------------------------------------
+$:
+  vscode:
+    - name: tRPC-Agent-Service
+      git:
+        enable: true
+        submodules:
+          enable: false
+      docker:
+        image: docker.cnb.cool/orionseeker/trpc/trpc-agent-service:latest
+      services:
+        - vscode
+        - docker
+      imports:
+        - https://cnb.cool/OrionSeeker/SecretsHub/-/blob/main/docker.yml
+      stages:
+        - name: workspace init
+          script: |
+            # 密钥由 imports 注入为环境变量，逐项写入 .env 供终端进程读取
+            # （.env 已被 .gitignore 排除，不会进版本库）
+            # 优先级: 逐变量判断——.env 已有该 key → 保留手动配置不被覆盖，
+            #   便于临时换成自己/他人的 key 而不被回冲；缺失的变量补写。
+            # 变量清单: DEEPSEEK + 企微(WECOM_*，含智能机器人长连接 WECOM_BOT_*) + 飞书(FEISHU_*)
+            for key in DEEPSEEK_API_KEY \
+                        WECOM_CORP_ID WECOM_AGENT_ID WECOM_SECRET WECOM_TOKEN WECOM_AES_KEY \
+                        WECOM_BOT_ID WECOM_BOT_SECRET \
+                        FEISHU_APP_ID FEISHU_APP_SECRET FEISHU_VERIFICATION_TOKEN \
+                        FEISHU_ENCRYPT_KEY FEISHU_DEMO_USER_OPEN_ID; do
+              eval "val=\${$key:-}"
+              if [ -z "$val" ]; then
+                continue   # 密钥仓库未配置该变量，跳过
+              fi
+              if [ -f .env ] && grep -Eq "^${key}=.+" .env; then
+                echo "ℹ️ $key 已存在，保留手动配置"
+              else
+                echo "${key}=${val}" >> .env
+                echo "✅ 已从密钥仓库写入 $key"
+              fi
+            done
+            [ -f .env ] || echo "⚠️ 未检测到任何密钥；可 cp .env.example .env 手动填写"
+            echo "🚀 云原生开发环境已就绪"

@@ -1,0 +1,42 @@
+# ===================================================================
+# teneuris.yaml - K8s 部署配置（env=prod，触发生产安全 fail-closed 校验）
+# ===================================================================
+# 说明: 经 ConfigMap 挂载到 /config；DSN 与密钥不出现在本文件——
+#   全部经环境变量注入（loader 支持 yaml 内 {env: NAME} 引用与
+#   TENEURIS_* 环境变量覆盖，值来自 Secret，见 secrets.example.yaml）。
+# ===================================================================
+
+env: prod
+log_level: INFO
+data_dir: /app/data
+
+gateway:
+  host: 0.0.0.0
+  port: 8000
+
+admin:
+  host: 0.0.0.0
+  port: 8002
+  api_key: {env: TENEURIS_ADMIN_API_KEY}
+
+storage:
+  redis:
+    # 集群内 Redis Service（base/redis.yaml）；生产可改托管实例
+    dsn: redis://redis:6379/0
+    pool_size: 16
+  sql:
+    # 占位值会被 TENEURIS_STORAGE_SQL_DSN 覆盖（Secret 注入托管 MySQL/PG）
+    dsn: mysql+aiomysql://placeholder:placeholder@mysql.internal:3306/teneuris
+    echo: false
+  vector:
+    dsn: null
+    collection_prefix: tenant_
+  s3:
+    endpoint: null
+    bucket: teneuris
+
+telemetry:
+  prometheus_enabled: true
+
+pii:
+  enabled: true

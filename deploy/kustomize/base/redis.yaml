@@ -1,0 +1,62 @@
+# ===================================================================
+# redis.yaml - 共享 Redis（Session / Memory / 幂等 / 分布式锁 / 广播）
+# ===================================================================
+# 说明: 多节点无状态部署的共享状态层（PRD 2.2）；示例用集群内单实例 +
+#   emptyDir（重启丢热数据，AOF 需挂 PVC）。生产建议托管 Redis
+#   （Redis Cluster / 云 Redis），此时删除本资源并把 Secret 中
+#   TENEURIS_STORAGE_REDIS_DSN 指向托管实例即可，应用零改动。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: teneuris-redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: teneuris-redis
+  template:
+    metadata:
+      labels:
+        app: teneuris-redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          args: ["redis-server", "--appendonly", "yes", "--dir", "/data"]
+          ports:
+            - containerPort: 6379
+              name: redis
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          livenessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+spec:
+  selector:
+    app: teneuris-redis
+  ports:
+    - port: 6379
+      targetPort: 6379

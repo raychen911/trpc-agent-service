@@ -1,0 +1,79 @@
+# ===================================================================
+# Teneuris - 多租户 AI Agent 平台
+# ===================================================================
+# 说明: Python 打包配置（hatchling），核心依赖 trpc-agent-py（tRPC-Agent-Python 框架）
+# 规范: 平台层新增依赖与框架依赖分层管理，见 requirements.txt 注释
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "trpc_service/version.py"
+
+[project]
+name = "trpc-agent-service"
+dynamic = ["version"]
+description = "Teneuris - 基于 tRPC-Agent-Python 的多租户节点化 AI Agent 部署平台"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Apache-2.0" }
+keywords = ["trpc", "agent", "multi-tenant", "ai", "im", "fastapi"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+]
+
+# 依赖分两层:
+#   1. trpc-agent-py           : tRPC-Agent-Python 框架（Agent 编排 / Session / Memory / Filter / Telemetry）
+#   2. 平台层依赖             : 多租户、IM 通道、存储适配、指标所需的补充库
+dependencies = [
+    # ---- 框架 ----
+    # 版本锁定到实测基线（trpc_agent_sdk 1.1.20 全链路联调通过），升级须重跑回归
+    "trpc-agent-py==1.1.20",
+    # ---- 平台层: 配置 / 环境 ----
+    "pydantic>=2.11.3",
+    "python-dotenv>=1.0.0",
+    "PyYAML>=6.0",
+    # ---- 平台层: 存储适配 ----
+    "redis>=5.0.0",
+    "aiosqlite>=0.22.0",
+    "aiomysql>=0.2.0",
+    "SQLAlchemy>=2.0.0",
+    # ---- 平台层: 安全（企微回调 AES-256-CBC 加解密）----
+    "cryptography>=42.0.0",
+    # ---- 平台层: 服务 / IM ----
+    "fastapi>=0.116.0",
+    "uvicorn>=0.35.0",
+    "httpx>=0.27.0",
+    # 企微智能机器人·长连接官方 SDK（asyncio 原生，import 名 aibot）
+    "wecom-aibot-python-sdk>=1.0.2",
+    # 飞书官方 SDK（lark-oapi FeishuChannel 长连接通道 feishu_sdk）
+    "lark-oapi>=1.7.3,<1.8.0",
+    # ---- 平台层: 指标 / 可观测 ----
+    "prometheus-client>=0.20.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["trpc_service"]
+
+[tool.uv]
+# 构建不安装本包（源码以仓库形态运行），仅按 uv.lock 精确安装依赖
+package = false
+
+[dependency-groups]
+# 开发工具链（Dockerfile / build.sh 经 uv sync --frozen 一并安装）
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=5.0",
+    "flake8>=7.0",
+    "yapf>=0.40",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

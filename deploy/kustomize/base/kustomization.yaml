@@ -1,0 +1,21 @@
+# ===================================================================
+# kustomization.yaml - base 清单装配
+# ===================================================================
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+configMapGenerator:
+  - name: teneuris-config
+    files:
+      - teneuris.yaml
+
+resources:
+  - redis.yaml
+  - gateway.yaml
+  - admin.yaml
+  - hpa.yaml
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: teneuris
+      app.kubernetes.io/managed-by: kustomize

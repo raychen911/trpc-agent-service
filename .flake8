@@ -1,0 +1,6 @@
+[flake8]
+max-line-length = 120
+extend-ignore = E203,W503,E125
+exclude = __pycache__,.git,.venv,venv,build,dist,*.egg-info,.pytest_cache
+# 注: 前端模板已拆分至 trpc_service/web/templates/*.html（不再内嵌 .py），
+# 无需对 admin.py 豁免 E501；其余 Python 规则全量生效。

@@ -1,0 +1,62 @@
+# ===================================================================
+# admin.yaml - Admin API Deployment + Service（单副本管理面）
+# ===================================================================
+# 说明: 租户管理 / 配置热更新 / 审计查询；更新经 Redis pub/sub 广播
+#   失效各 Gateway 副本本地缓存（PRD 5.2），故 Admin 单副本即可。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: teneuris-admin
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: teneuris-admin
+  template:
+    metadata:
+      labels:
+        app: teneuris-admin
+    spec:
+      containers:
+        - name: admin
+          image: trpc-agent-service:latest
+          command: ["python", "-m", "trpc_service._cli", "admin", "--config", "/config/teneuris.yaml"]
+          ports:
+            - containerPort: 8002
+              name: http
+          envFrom:
+            - secretRef:
+                name: teneuris-secrets
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8002
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: config
+          configMap:
+            name: teneuris-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: admin
+spec:
+  selector:
+    app: teneuris-admin
+  ports:
+    - port: 8002
+      targetPort: 8002
+      name: http

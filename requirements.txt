@@ -1,0 +1,37 @@
+# ===================================================================
+# Teneuris - 依赖清单
+# 注意: 依赖以 uv.lock 为准（精确锁定）；本清单保留语义版本区间作可读索引
+# ===================================================================
+# 说明: pip install -r requirements.txt 一次性安装全部依赖
+# 分层: [框架] trpc-agent-py 自带全部 Agent 编排依赖
+#        [平台] 多租户 / IM / 存储 / 指标所需补充依赖
+# 环境: Python >= 3.12（实测基线），与 pyproject.toml [project].dependencies 保持一致
+
+# ---- 框架 ----
+trpc-agent-py
+
+# ---- 平台层: 配置 / 环境 ----
+pydantic>=2.11.3
+python-dotenv>=1.0.0
+PyYAML>=6.0
+
+# ---- 平台层: 存储适配 ----
+redis>=5.0.0
+aiosqlite>=0.22.0
+aiomysql>=0.2.0
+SQLAlchemy>=2.0.0
+
+# ---- 平台层: 安全（企微回调 AES-256-CBC 加解密）----
+cryptography>=42.0.0
+
+# ---- 平台层: 服务 / IM ----
+fastapi>=0.116.0
+uvicorn>=0.35.0
+httpx>=0.27.0
+# 企微智能机器人·长连接官方 SDK（asyncio 原生，import 名 aibot）
+wecom-aibot-python-sdk>=1.0.2
+# 飞书官方 SDK（lark-oapi FeishuChannel 长连接通道 feishu_sdk）
+lark-oapi>=1.7.3,<1.8.0
+
+# ---- 平台层: 指标 / 可观测 ----
+prometheus-client>=0.20.0

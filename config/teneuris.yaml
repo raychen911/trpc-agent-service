@@ -1,0 +1,76 @@
+# ===================================================================
+# config/teneuris.yaml - Teneuris 平台示例配置（开发环境）
+# ===================================================================
+# 说明: 开发/测试阶段开箱即用配置。
+#   - CLI 默认即生产口径（--storage redis --runner framework，见 start.sh）；
+#     本文件提供 DSN / 端口 / 脱敏等基础项，密钥经环境变量注入（PRD 4.5）
+#   - Worker 内嵌于 Gateway（Runtime 编排），无独立 worker 服务；
+#     多节点 = 多副本 Gateway + 共享 Redis/SQL（PRD 1.3）
+# 加载: python -m trpc_service._cli gateway --config config/teneuris.yaml
+# 规范: 与 trpc_service/config/settings.py 的 PlatformSettings 结构一致
+# ===================================================================
+
+# 环境: dev / test / prod
+# prod 会触发生产安全校验（enforce_production_safety）：Admin 密钥必填、
+# 禁 DEBUG 日志、脱敏与监控强制开启、SQL 禁 sqlite、Redis 须显式配置
+env: dev
+
+# 日志级别: DEBUG / INFO / WARNING / ERROR
+log_level: INFO
+
+# 本地数据目录（SQLite / 日志）
+data_dir: data
+
+# ---------------------------------------------------------------------------
+# Agent Gateway（协议接入 + Filter 治理 + Runtime 内嵌 Worker）
+# ---------------------------------------------------------------------------
+gateway:
+  host: 0.0.0.0
+  port: 8000
+  workers: 1
+
+# ---------------------------------------------------------------------------
+# Admin API（租户管理 / 审计查询 / 配置下发）
+# ---------------------------------------------------------------------------
+admin:
+  host: 127.0.0.1
+  port: 8002
+  # 访问密钥（可选）。示例用环境变量注入: export TENEURIS_ADMIN_API_KEY=xxx
+  # api_key: {env: TENEURIS_ADMIN_API_KEY}
+
+# ---------------------------------------------------------------------------
+# 存储后端（PRD 2.x，开发默认 InMemory；多节点请启用 Redis）
+# ---------------------------------------------------------------------------
+storage:
+  redis:
+    # 多节点部署: 改为真实 Redis 地址，如 redis://:password@redis-host:6379/0
+    # 本地开发: 先启动 redis-server（Docker 镜像已内置），再启用 session/memory=redis 后端
+    dsn: redis://127.0.0.1:6379/0
+    pool_size: 16
+  sql:
+    # SQLite（本地开发）; 生产可改 mysql+aiomysql://user:pass@host/db
+    dsn: sqlite+aiosqlite:///data/teneuris.db
+    echo: false
+  vector:
+    # 向量库（Knowledge / Memory 检索），开发默认禁用
+    dsn: null
+    collection_prefix: tenant_
+  s3:
+    # 对象存储（Artifact），开发默认禁用
+    endpoint: null
+    bucket: teneuris
+
+# ---------------------------------------------------------------------------
+# 可观测性（PRD 4.2/4.3）
+# ---------------------------------------------------------------------------
+telemetry:
+  prometheus_enabled: true
+
+# ---------------------------------------------------------------------------
+# PII 脱敏规则（PRD 4.5）
+# ---------------------------------------------------------------------------
+pii:
+  enabled: true
+  # 默认规则已内置（手机号/身份证/银行卡/邮箱/API Key），可按需覆盖:
+  # patterns:
+  #   phone: '1[3-9]\d{9}'
