@@ -6,7 +6,7 @@
 
 `trpc-agent-service` 是一个基于 tRPC-Agent-Python 思路实现的多租户、节点化 Agent 部署平台。项目包含租户配置与隔离、无状态 Gateway / Worker、IM Channel Adapter、多后端 Storage Adapter、治理审计、可观测性和部署配置。
 
-## Reviewer 推荐复现顺序
+## 审阅者推荐复现顺序
 
 1. 使用 `uv.lock` 创建 Python 3.12 开发环境。
 2. 运行完整测试、编译检查和 `flake8`。
@@ -14,7 +14,7 @@
 4. 使用 Docker Compose 复现 Redis、PostgreSQL、远程 Worker、补偿 Worker 和出站 Worker。
 5. 只有具备外部凭据时，才运行真实模型、PostgreSQL RLS 或真实 IM 联调。
 
-题目要求到代码、测试和证据的映射见 [ACCEPTANCE.md](./ACCEPTANCE.md)；复现命令直接使用仓库根目录的 `scripts/`、`tests/` 和 `data/` 证据文件。
+题目要求到代码、测试和证据的映射见 [ACCEPTANCE.md](./ACCEPTANCE.md)；复现命令直接使用仓库根目录的 `scripts/` 和 `tests/`，运行结果按需生成到被 Git 忽略的 `data/` 目录。
 
 ## 文档索引
 
@@ -56,7 +56,7 @@ uv run python scripts/quality_gate.py
 ### 运行完整测试
 
 ```bash
-python -m pytest -q
+uv run python -m pytest -q
 ```
 
 跳过项是显式要求真实外部服务或凭据的测试，不代表本地核心测试失败。`scripts/release_gate.py` 内部使用 unittest，pytest 还会收集函数式测试，因此两者的测试数量统计可能不同。
@@ -178,6 +178,37 @@ docker compose --env-file .env -f deployment/docker-compose.yml down -v
 
 Compose 容器内的 DSN 主机名必须使用 `sql` 和 `redis`，不能使用 `localhost`。无真实模型凭据的本地 Compose 演示可显式设置 `TRPC_AGENT_RUNTIME_MODE=local`；生产默认保持 `trpc` 并配置租户模型凭据。
 
+## 外部依赖测试
+
+以下检查默认不在质量门禁中运行，必须使用专用、可丢弃的外部环境，并且不会使用仓库中的真实密钥：
+
+### PostgreSQL RLS
+
+准备一个仅用于测试的 PostgreSQL 数据库和具有创建测试角色权限的连接，然后设置：
+
+```bash
+POSTGRES_RLS_TEST_DSN="postgresql://admin:password@127.0.0.1:5432/trpc_agent_test"
+POSTGRES_RLS_TEST_ALLOW_DESTRUCTIVE=1
+uv run python -m pytest -q tests/test_postgres_rls.py
+```
+
+该测试会创建并清理测试角色、策略和表，禁止指向生产数据库。完整生产验收脚本
+`scripts/production_acceptance.py` 也会在设置相同环境变量时包含该检查。
+
+### 真实模型
+
+仅在已配置供应商凭据、额度和网络访问时启用：
+
+```bash
+RUN_REAL_MODEL_TESTS=1 uv run python -m pytest -q tests/test_real_model_integration.py
+```
+
+模型 API key 只能通过环境变量或 Secret Manager 注入，不能写入命令示例、`.env`、日志或 Git。
+
+### 故障注入与真实 IM
+
+故障注入需要可控的 Toxiproxy/Redis/PostgreSQL 环境；真实企业微信、飞书和 Telegram 还需要账号、Webhook 或长连接网络。相关变量和验收脚本见 `scripts/fault_injection_gate.py`、`scripts/online_im_gate.py`、`scripts/production_acceptance.py` 及 [IM_INTEGRATION.md](./IM_INTEGRATION.md)。
+
 ## 真实 IM 联调
 
 真实企业微信、飞书或 Telegram 联调需要公网 HTTPS 地址或长连接网络、平台账号、Webhook、Token、Secret 和应用权限。具体绑定、验签、媒体消息和验收步骤见 [IM_INTEGRATION.md](./IM_INTEGRATION.md)。
@@ -185,11 +216,11 @@ Compose 容器内的 DSN 主机名必须使用 `sql` 和 `redis`，不能使用 
 联调 Redis、PostgreSQL、对象存储、远端向量库或外部 Memory 前，可以运行不打印密钥的健康检查：
 
 ```bash
-python scripts/validate_integrations.py
+uv run python scripts/validate_integrations.py
 ```
 
 Kubernetes 生产模板的 External Secrets、TLS、镜像摘要、外部 Redis/PostgreSQL、向量库和对象存储前置条件，以及本地 `dev-local` 复现方式，见 [deployment/kubernetes/README.md](../deployment/kubernetes/README.md)。生产模板在未准备这些依赖时会被 Kubernetes 拒绝或保持未就绪，这是预期的前置检查结果；不要把生产模板直接当作无依赖的本地 Compose 替代品。
 
 ## 验收对照
 
-题目要求与本地实现的逐项对照见 [ACCEPTANCE.md](./ACCEPTANCE.md)。本地实测可按其中命令复现，结果保存在仓库 `data/` 目录；架构、时序、数据模型、数据同步、IM 接入、治理监控、故障恢复和风险清单均可从上述文档中追溯。
+题目要求与本地实现的逐项对照见 [ACCEPTANCE.md](./ACCEPTANCE.md)。本地实测可按其中命令复现；运行时报告按需写入被 Git 忽略的 `data/` 目录，不作为仓库预置交付物。架构、时序、数据模型、数据同步、IM 接入、治理监控、故障恢复和风险清单均可从上述文档中追溯。

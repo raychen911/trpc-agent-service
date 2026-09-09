@@ -295,6 +295,16 @@ def _sync_demo_defaults(repository: TenantRepository, current: TenantConfig) -> 
     if os.getenv("ENABLE_LEGACY_WECOM", "0").lower() not in {"1", "true", "yes", "on"}:
         retired.add("wecom")
     retained_bindings = [binding for binding in current.channel_bindings if binding.channel.lower() not in retired]
+    configured_ai_bot = os.getenv("WECOM_AI_BOT_ACCOUNT_ID", "").strip()
+    if configured_ai_bot:
+        filtered_bindings = [
+            binding
+            for binding in retained_bindings
+            if binding.channel.lower() != "wecom_ai_bot"
+            or binding.account_id == configured_ai_bot
+        ]
+        if len(filtered_bindings) != len(retained_bindings):
+            retained_bindings = filtered_bindings
     retired_removed = len(retained_bindings) != len(current.channel_bindings)
     sync_storage = os.getenv("SYNC_DEMO_DEFAULT_STORAGE", "0") == "1"
     storage_changed = sync_storage and (current.storage_profile.to_dict() != default.storage_profile.to_dict())

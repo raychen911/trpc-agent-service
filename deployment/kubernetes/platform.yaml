@@ -148,7 +148,7 @@ spec:
       serviceAccountName: trpc-agent
       containers:
         - name: schema-migration
-          image: ghcr.io/xyxhhhhh/trpc-agent-service:v0.1.0
+          image: trpc-agent-service:release
           command: ["/bin/sh", "-ec"]
           args:
             - |
@@ -194,7 +194,7 @@ spec:
       serviceAccountName: trpc-agent
       containers:
         - name: gateway
-          image: ghcr.io/xyxhhhhh/trpc-agent-service:v0.1.0
+          image: trpc-agent-service:release
           imagePullPolicy: IfNotPresent
           command: ["uvicorn", "trpc_service.web.app:app", "--host", "0.0.0.0", "--port", "8000"]
           ports:
@@ -275,7 +275,7 @@ spec:
       serviceAccountName: trpc-agent
       containers:
         - name: worker
-          image: ghcr.io/xyxhhhhh/trpc-agent-service:v0.1.0
+          image: trpc-agent-service:release
           imagePullPolicy: IfNotPresent
           command: ["python", "-m", "trpc_service._cli", "worker"]
           env:
@@ -331,7 +331,7 @@ spec:
       serviceAccountName: trpc-agent
       containers:
         - name: compensation-worker
-          image: ghcr.io/xyxhhhhh/trpc-agent-service:v0.1.0
+          image: trpc-agent-service:release
           imagePullPolicy: IfNotPresent
           command: ["python", "-m", "trpc_service._cli", "compensate", "--limit", "100", "--interval", "5"]
           env:
@@ -376,7 +376,7 @@ spec:
       serviceAccountName: trpc-agent
       containers:
         - name: session-ready-worker
-          image: ghcr.io/xyxhhhhh/trpc-agent-service:v0.1.0
+          image: trpc-agent-service:release
           imagePullPolicy: IfNotPresent
           command: ["python", "-m", "trpc_service._cli", "session-ready-worker"]
           env:
@@ -423,7 +423,7 @@ spec:
       serviceAccountName: trpc-agent
       containers:
         - name: mailbox-maintenance
-          image: ghcr.io/xyxhhhhh/trpc-agent-service:v0.1.0
+          image: trpc-agent-service:release
           imagePullPolicy: IfNotPresent
           command: ["python", "-m", "trpc_service._cli", "mailbox-maintenance", "--limit", "100", "--interval", "5"]
           env:
@@ -468,7 +468,7 @@ spec:
       serviceAccountName: trpc-agent
       containers:
         - name: outbound-worker
-          image: ghcr.io/xyxhhhhh/trpc-agent-service:v0.1.0
+          image: trpc-agent-service:release
           imagePullPolicy: IfNotPresent
           command: ["python", "-m", "trpc_service._cli", "outbound"]
           env:
@@ -513,7 +513,7 @@ spec:
       serviceAccountName: trpc-agent
       containers:
         - name: durable-outbox-worker
-          image: ghcr.io/xyxhhhhh/trpc-agent-service:v0.1.0
+          image: trpc-agent-service:release
           imagePullPolicy: IfNotPresent
           command: ["python", "-m", "trpc_service._cli", "durable-outbox", "--limit", "100", "--interval", "5"]
           env:

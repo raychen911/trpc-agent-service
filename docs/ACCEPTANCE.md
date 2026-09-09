@@ -10,7 +10,7 @@
 
 **实现**:
 - 代码: `trpc_service/tenant/models.py`
-  - `TenantConfig`: 包含 `tenant_id`、`config_version`、`agent_apps`、`model_config`、`tool_policy`、`channel_bindings`、`storage_profile`、`audit_policy`、`quota_policy`、`gray_release_policy`
+  - `TenantConfig`: 包含 `tenant_id`、`config_version`、`apps`、`channel_bindings`、`storage_profile`、`audit_policy`、`quota_policy`、`gray_release_policy`；模型和工具策略按 `AgentApp` 配置
 - 测试: `tests/test_platform.py::PlatformTests::test_session_is_tenant_and_conversation_scoped`
 - 证据: `docs/DATA_MODEL.md:3-80`、`docs/ARCHITECTURE.md:45-48`
 
@@ -33,7 +33,7 @@
 - 测试: `tests/test_platform.py::PlatformTests::test_concurrent_session_updates_preserve_tenant_scope`
 - 证据: `docs/ARCHITECTURE.md:51-53`
 
-### 1.4 Sticky session
+### 1.4 会话粘性（Sticky session）
 
 **要求**: 说明是否需要 sticky session;如果不需要,说明如何依赖共享 Session / Memory 后端实现无状态 Worker。
 
@@ -202,8 +202,7 @@
 - 测试: `tests/test_performance_gate.py`
 - 复现证据: 执行 `scripts/performance_gate.py` 和 `scripts/load_test_web_ui.py` 后，由脚本在本地生成吞吐、延迟和错误率 JSON；不依赖仓库内预置的日期化结果。
 
-本地 Compose fallback 链路已完成 100 请求、10 并发和基线回归实测；真实模型性能仍需在
-固定模型、输入 token、资源拓扑和限流条件下单独验收。
+本地 fallback 工作负载默认使用 100 请求、10 并发，并支持传入上次报告进行回归比较；每次验收应在当前环境重新生成报告。真实模型性能仍需在固定模型、输入 token、资源拓扑和限流条件下单独验收。
 
 ## 故障恢复与运维
 
@@ -269,11 +268,11 @@
 
 ### 6.7 风险清单
 
-**实现**: `docs/RISKS.md` (10 个生产风险及缓解措施)
+**实现**: `docs/RISKS.md` (15 项生产风险及缓解措施)
 
 ### 6.8 GitHub 代码实现
 
-**实现**: `F:\trpc-agent-service`、`https://github.com/xyxhhhhh/trpc-agent-service` (已基于 tRPC-Agent-Python 实现平台层)
+**实现**: 本仓库（已基于 tRPC-Agent-Python 实现平台层）。将仓库推送到目标 GitHub 地址后，审阅者可按 README 和本文件复现。
 
 ## tRPC-Agent-Python 复用边界
 

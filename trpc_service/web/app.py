@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import threading
 import time
@@ -64,6 +65,9 @@ except ImportError:  # pragma: no cover
     HTMLResponse = PlainTextResponse = None
 
 
+logger = logging.getLogger(__name__)
+
+
 def create_runtime() -> tuple[AgentGateway, AdminService]:
     repository = persistent_demo_repository(os.getenv("TENANT_DB_PATH", "data/tenant_config.sqlite3"))
     tenants = TenantService(repository)
@@ -108,6 +112,12 @@ def create_app():
         ai_bot_adapter = adapters.get("wecom_ai_bot")
         if ai_bot_adapter is not None:
             ai_bot_adapter.connector = wecom_ai_bot_connector
+    logger.info(
+        "WeCom AI Bot startup config: enabled=%s, account_id_length=%d, connector=%s",
+        os.getenv("WECOM_AI_BOT_ENABLED", "0").strip().lower() in {"1", "true", "yes"},
+        len(os.getenv("WECOM_AI_BOT_ACCOUNT_ID", "").strip()),
+        wecom_ai_bot_connector is not None,
+    )
 
     def get_channel_adapter(channel: str):
         try:
@@ -196,6 +206,13 @@ def create_app():
             thread.start()
         if wecom_ai_bot_connector is not None:
             active_tenants = getattr(admin.tenants.repository, "all_active", list)()
+            ai_bindings = [
+                binding
+                for tenant in active_tenants
+                for binding in tenant.channel_bindings
+                if binding.enabled and binding.channel == "wecom_ai_bot"
+            ]
+            logger.info("WeCom AI Bot active bindings: count=%d", len(ai_bindings))
 
             async def ai_bot_sink(inbound, binding) -> None:
                 payload = {

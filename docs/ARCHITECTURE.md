@@ -59,7 +59,7 @@ flowchart TB
 
 ## 组件协作
 
-`Channel Adapter` 负责企业微信、飞书、Telegram 和 Web UI 的验签、解密、解析、媒体下载、用户映射和出站投递。企业微信集成优先用 `wechatpy`，Telegram 优先用 `python-telegram-bot`，飞书优先用 `lark-oapi`（官方 SDK），在 SDK 不可用时降级到 HTTP API。
+`Channel Adapter` 负责企业微信、飞书、Telegram 和 Web UI 的验签、解密、解析、媒体下载、用户映射和出站投递。企业微信智能机器人 `wecom_ai_bot` 使用可选的 `wecom-aibot-sdk-python` 长连接；传统企业微信和微信生态兼容适配器使用 `wechatpy`。Telegram 优先使用 `python-telegram-bot`，飞书优先使用 `lark-oapi`（官方 SDK）；这两个 Adapter 在 SDK 不可用时可回退到 HTTP API。
 
 `Agent Gateway` 接收 `InboundMessage`，按 `channel + account_id` 查询 `ChannelBinding` 得到 `tenant_id` 与 `agent_app_id`，生成 `session_id`、`idempotency_key` 和 `trace_id`，预留配额后写入 Redis 队列。`Agent Worker` 加载租户配置、Session、Memory 和 Summary，执行租户 Filter、tRPC-Agent-Python Runner、模型调用和 Tool/MCP/Knowledge 调用，并写回结果。
 

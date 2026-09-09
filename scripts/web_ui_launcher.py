@@ -9,6 +9,25 @@ from pathlib import Path
 from urllib.request import urlopen
 
 
+def load_env_file(env_path: Path) -> dict[str, str]:
+    """Load environment variables from .env file."""
+    env_vars = {}
+    if not env_path.exists():
+        return env_vars
+    with env_path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" in line:
+                key, _, value = line.partition("=")
+                key = key.strip()
+                value = value.strip()
+                if key:
+                    env_vars[key] = value
+    return env_vars
+
+
 def is_running(pid: int) -> bool:
     if os.name == "nt":
         completed = subprocess.run(
@@ -73,7 +92,13 @@ def main() -> int:
     data_dir.mkdir(exist_ok=True)
     stdout_path = data_dir / "web-ui.out.log"
     stderr_path = data_dir / "web-ui.err.log"
+
+    # Load .env file
+    env_file = root / ".env"
+    env_vars = load_env_file(env_file)
+
     env = os.environ.copy()
+    env.update(env_vars)  # Apply .env variables first
     env.update(
         {
             # Keep the local smoke-test path dependency-free by default.
@@ -89,9 +114,13 @@ def main() -> int:
     stdout = stdout_path.open("ab")
     stderr = stderr_path.open("ab")
     creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+
+    # Use the same Python executable that's running this script (from .venv)
+    python_exe = sys.executable
+
     process = subprocess.Popen(
         [
-            sys.executable,
+            python_exe,
             "-m",
             "uvicorn",
             "trpc_service.web.app:app",

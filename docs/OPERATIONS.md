@@ -39,7 +39,7 @@ GET /admin/v1/tenants/{tenant_id}/audit?limit=100&decision=allow
 
 ## 发布与故障处理
 
-1. 发布前执行 `python scripts/observability_gate.py`、质量门禁和 Kubernetes
+1. 发布前执行 `uv run python scripts/observability_gate.py`、质量门禁和 Kubernetes
    静态门禁。
 2. 先确认 `/livez` 正常，再确认 `/readyz` 为 200；就绪失败时保留 Pod 但从
    Service 流量中摘除，不重启仍存活的进程。
@@ -65,7 +65,7 @@ Telemetry 地址段。
 安全与供应链门禁:
 
 ```bash
-python scripts/security_gate.py
+uv run python scripts/security_gate.py
 ```
 
 该门禁检查运行源码和部署配置中的硬编码凭据、锁定依赖、镜像非 root 用户以及
@@ -73,5 +73,5 @@ Kubernetes 安全上下文。灾备演练使用 `scripts/disaster_recovery_gate.
 `DISASTER_RECOVERY_SOURCE_DSN`、`DISASTER_RECOVERY_TARGET_DSN` 和
 `DISASTER_RECOVERY_ALLOW_DESTRUCTIVE=1`。未配置一次性数据库或备份工具时返回 `not_run`。
 
-统一报告 `python scripts/production_acceptance.py` 会分别记录安全门禁、灾备演练和
+统一报告 `uv run python scripts/production_acceptance.py` 会分别记录安全门禁、灾备演练和
 其他真实外部依赖的 `pass`、`fail`、`not_run` 状态。

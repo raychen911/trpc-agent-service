@@ -1,171 +1,141 @@
 # tRPC-Agent-Service
 
-基于 tRPC-Agent-Python 理念实现的生产级多租户 Agent 平台，支持水平扩展、多后端存储、IM 通道集成和全面的治理能力。
+面向生产场景设计并实现的多租户 Agent 平台参考实现。项目基于
+[tRPC-Agent-Python](https://github.com/tRPC-Agent/tRPC-Agent-Python)，覆盖节点化部署、
+多后端存储、IM 通道接入、租户治理、可观测性和故障恢复。
 
 ## 项目概述
 
-本平台帮助企业在多个租户、部门和 IM 通道上部署和管理 Agent 应用，提供统一的配置、审计和可观测性。每个租户可以配置自己的 Agent 应用、模型提供商、工具权限、IM 绑定和存储后端，同时平台确保隔离、可靠性和水平扩展能力。
+平台允许多个租户分别配置 Agent 应用、模型、工具权限、IM 绑定、存储后端、
+审计策略和配额。Gateway 与 Worker 采用无状态设计，通过共享 Session、Memory、
+Inbox/Outbox 和幂等后端支持水平扩展。
 
-**核心能力：**
-- **多租户隔离**：租户级配置、数据、工具、密钥和审计日志隔离
-- **水平扩展**：无状态 Worker 池，共享 Session/Memory/Inbox/Outbox 后端
-- **多后端支持**：InMemory、Redis、PostgreSQL、SQLite、向量库、对象存储
-- **IM 集成**：企业微信（智能机器人 API）、飞书、Telegram、Web UI
-- **治理能力**：工具白名单/黑名单、预算控制、审批流程、密钥脱敏
-- **可观测性**：OpenTelemetry 分布式追踪、Prometheus 指标、结构化审计日志
-- **可靠性**：幂等处理、补偿机制、基于 lease 的并发控制、优雅降级
+核心能力：
 
-## 系统架构
+- **多租户隔离**：配置、数据、工具、密钥、日志、审计和成本按租户隔离。
+- **节点化部署**：无状态 Gateway/Worker，通过共享队列与存储跨节点路由会话。
+- **多后端适配**：支持 InMemory、SQLite、Redis、PostgreSQL、向量库和对象存储。
+- **IM 接入**：支持企业微信智能机器人、飞书、Telegram 和本地 Web UI。
+- **治理与安全**：工具白名单/黑名单、预算限制、危险工具审批、RBAC 和敏感信息脱敏。
+- **可靠性**：幂等、Session lease/fencing、补偿任务、重试、死信和灰度回滚。
+- **可观测性**：OpenTelemetry Trace、Prometheus 指标和结构化审计日志。
 
-平台由以下组件组成：
+## 审阅者快速验收
 
-- **Agent Gateway**：从 IM 通道路由入站消息到正确的租户和会话，入队工作项，投递出站响应
-- **Agent Worker**：执行 SDK Runner、模型调用、Tool/MCP 调用，写入 Session/Memory/Audit 到共享后端
-- **Channel Adapter**：处理 IM 特定协议（签名验证、媒体下载、消息格式化），支持企业微信、飞书、Telegram、Web UI
-- **Storage Adapter**：为 Session、Memory、Summary、Artifact、Knowledge、Audit、Idempotency 提供统一抽象，支持多后端
-- **Admin API**：管理租户、Agent 应用、通道绑定、配置版本、发布/回滚、灰度发布
-- **Telemetry**：集成 OpenTelemetry 分布式追踪和 Prometheus 指标
-
-详见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) 查看系统架构图和组件细节。
-
-## 快速开始
-
-### 环境要求
-
-- Python 3.12 或更高版本
-- Docker 和 Docker Compose（仅用于 Compose/Kubernetes 复现）
-- Redis 和 PostgreSQL（仅在共享后端或 Compose 复现时需要）
-
-### 安装
-
-克隆仓库后使用锁文件创建 Python 3.12 开发环境：
+以下路径不需要模型密钥或真实 IM 账号：
 
 ```bash
 git clone https://github.com/xyxhhhhh/trpc-agent-service.git
 cd trpc-agent-service
-uv sync --locked --extra dev
+uv sync --locked --extra dev --python 3.12
+uv run python scripts/quality_gate.py
+uv run python scripts/release_gate.py
+uv run python scripts/web_ui_launcher.py --runtime-mode local --port 18001
 ```
 
-Windows PowerShell：
+浏览器访问 `http://127.0.0.1:18001/ui`。Windows 也可以运行
+`.\start-web-ui.ps1 --runtime-mode local --port 18001`，停止服务使用
+`.\stop-web-ui.ps1`。Linux/macOS 可使用 `./start.sh` 和 `./stop.sh`。
 
-```powershell
+题目要求到代码、测试和文档的逐项映射见[验收映射表](docs/ACCEPTANCE.md)。
+
+### 当前验收状态
+
+| 验收项 | 状态 | 说明 |
+| --- | --- | --- |
+| 默认质量门禁 | 已本地验证 | `compileall`、pytest、flake8、Ruff 已通过；外部依赖测试按条件跳过。 |
+| 发布门禁 | 已本地验证 | unittest、关键恢复测试、安全、可观测性和 Kubernetes 静态门禁已通过。 |
+| 本地 Web UI | 已本地验证 | `/health` 和 `/ui/api/chat` smoke test 已通过。 |
+| Docker Compose | 配置已验证 | Compose 配置可渲染；完整运行需要启动 Docker daemon。 |
+| PostgreSQL RLS | 需要外部服务 | 需要明确指定可丢弃的 PostgreSQL 数据库后执行 opt-in 测试。 |
+| 真实模型与 IM | 需要外部凭据 | 需要模型配额、真实平台账号以及公网 HTTPS 或长连接网络。 |
+| 生产 Kubernetes | 提供部署模板 | 静态门禁和 Kustomize 渲染通过；真实发布前必须替换镜像、Secret、域名和外部服务。 |
+
+跳过外部依赖测试不等于对应生产能力已经验收。实现边界见
+[实现说明](docs/IMPLEMENTATION.md)，真实 IM 前置条件见
+[IM 联调手册](docs/IM_INTEGRATION.md)。
+
+## 系统架构
+
+```mermaid
+flowchart LR
+    IM[企业微信 / 飞书 / Telegram] --> CA[Channel Adapter]
+    CA --> GW[Agent Gateway]
+    ADMIN[Admin API] --> CFG[Tenant Repository]
+    GW --> CFG
+    GW --> Q[(Redis Queue)]
+    Q --> W[Agent Worker Pool]
+    W --> F[Filter / Policy]
+    F --> R[tRPC-Agent Runner]
+    R --> T[Tool / MCP / Knowledge]
+    W --> S[Storage Adapter]
+    S --> REDIS[(Redis)]
+    S --> SQL[(PostgreSQL / SQLite)]
+    S --> VEC[(Vector Store)]
+    S --> OBJ[(Object Store)]
+    GW --> OUT[IM Outbound]
+    CA -. trace_id .-> OTEL[OpenTelemetry]
+    GW -. trace_id .-> OTEL
+    W -. trace_id .-> OTEL
+```
+
+- **Agent Gateway**：解析租户绑定、生成会话与幂等键、执行配额检查并分发任务。
+- **Agent Worker**：运行 tRPC-Agent Runner、模型与工具，并写回共享状态。
+- **Channel Adapter**：处理平台验签、解密、消息转换、媒体和出站限制。
+- **Storage Adapter**：统一 Session、Memory、Summary、Artifact、Knowledge、Audit 和 Idempotency。
+- **Admin API**：管理租户配置版本、发布、回滚和灰度。
+- **Telemetry**：使用 `trace_id` 串联回调、路由、模型、工具、存储和回复。
+
+完整架构与时序见[架构设计](docs/ARCHITECTURE.md)和[核心时序](docs/SEQUENCE.md)。
+
+## 环境与安装
+
+- Python 3.12 或更高版本。
+- 推荐安装 `uv`，依赖由 `pyproject.toml` 声明、`uv.lock` 锁定。
+- Docker 和 Docker Compose 仅在 Compose/Kubernetes 复现时需要。
+- Redis 和 PostgreSQL 仅在共享后端或 Compose 复现时需要。
+
+```bash
 uv sync --locked --extra dev --python 3.12
 ```
 
-没有安装 `uv` 时仍可使用兼容入口：`python -m pip install -r requirements-dev.txt`。
-`pyproject.toml` 是依赖声明的唯一来源，`uv.lock` 固定完整依赖图。
-
-### 运行测试
-
-执行完整测试套件。当前仓库共收集 639 个测试，默认结果为 `637 passed、2 skipped`。
-默认不会自动启用以下两个 opt-in 集成测试：
-
-- `tests/test_postgres_rls.py::PostgresRLSIntegrationTests::test_app_role_isolation_and_admin_visibility`
-  会创建和删除数据库角色、RLS 策略及测试数据，必须明确指定可丢弃的 PostgreSQL 数据库，
-  避免误操作开发或生产数据。
-- `tests/test_real_model_integration.py::RealModelIntegrationTests::test_responses_api_with_configured_model`
-  会向真实模型服务发起网络请求并消耗配额，还会受到服务可用性、延迟和限流影响；默认测试应保持
-  无外部凭据、可离线重复执行。
-
-启用相应环境变量后，可以单独运行这两个测试：
+未安装 `uv` 时可以使用兼容入口：
 
 ```bash
-POSTGRES_RLS_TEST_DSN="postgresql://user:password@localhost:5432/disposable_db" \
-POSTGRES_RLS_TEST_ALLOW_DESTRUCTIVE=1 \
-uv run pytest -q tests/test_postgres_rls.py
-
-RUN_REAL_MODEL_TESTS=1 \
-CPA_BASE_URL="https://provider.example/v1" \
-CPA_MODEL="provider-model-id" \
-OPENAI_API_KEY="<new-key>" \
-uv run pytest -q tests/test_real_model_integration.py
+python -m pip install -r requirements-dev.txt
 ```
 
-本次本地 opt-in 验证结果为 PostgreSQL RLS `8 passed`、真实模型 `1 passed`；两项均启用时，
-完整套件对应 `639 passed、0 skipped`。API key 只能通过环境变量或 Secret Manager 注入，
-不得写入仓库、配置样例、日志或测试输出。
+## 测试与质量门禁
 
-默认质量检查命令仍为：
-
-```bash
-uv run python scripts/quality_gate.py
-```
-
-默认质量检查使用仓库 `pyproject.toml` 中的实用型 mypy 规则，检查未标注函数体、未使用
-的忽略项/冗余类型转换和无效配置。原始实战题不要求 strict mypy；如需额外执行完整
-严格检查，可运行 `uv run mypy --config-file mypy-strict.ini trpc_service`。strict
-配置作为持续改进工具保留，不作为本次实战功能验收的硬门禁。
-
-默认环境下，项目 release gate 使用 unittest 作为其中一项检查，因此它会报告 191 个测试
-（其中 2 个跳过）；启用两个 opt-in 集成测试后，该口径也会相应纳入这两项测试。
-pytest 还会收集以函数形式定义的测试。两种命令的
-通过结果一致，统计数量不同是测试发现器口径不同造成的。
-
-也可以分别运行测试、编译和代码风格检查：
-
-```bash
-python -m compileall -q trpc_service tests
-python -m flake8 trpc_service tests
-```
-
-安装完成后可以直接使用服务和迁移命令：
-
-```bash
-uv run trpc-agent --help
-uv run trpc-agent-migrate --help
-```
-
-### Reviewer 最短复现路径
-
-不配置模型密钥即可复现核心平台链路：
+推荐直接执行仓库门禁：
 
 ```bash
 uv run python scripts/quality_gate.py
 uv run python scripts/release_gate.py
 ```
 
-然后启动本地 Web UI：
+`quality_gate.py` 运行 `compileall`、pytest、flake8 和 Ruff。`release_gate.py`
+额外覆盖 unittest、Session/恢复测试、Kubernetes 静态检查、安全和可观测性。
+unittest 与 pytest 的发现规则不同，因此统计数量可能不同，以命令实际输出为准。
+
+mypy 是额外检查，不属于默认质量门禁：
 
 ```bash
-python scripts/web_ui_launcher.py --runtime-mode local --port 18001
+uv run mypy --config-file mypy-strict.ini trpc_service
 ```
 
-浏览器访问 `http://127.0.0.1:18001/ui`。题目要求到代码、测试和部署证据的映射见
-[docs/ACCEPTANCE.md](docs/ACCEPTANCE.md)；当前实现边界和外部依赖见
-[docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md) 与 [docs/IM_INTEGRATION.md](docs/IM_INTEGRATION.md)。
+PostgreSQL RLS、真实模型和故障注入测试需要外部服务或凭据，默认保持 opt-in。
+具体启用方式见[文档索引与复现指南](docs/README.md#外部依赖测试)。API key 只能
+通过环境变量或 Secret Manager 注入，不得写入仓库、配置样例、日志或测试输出。
 
-### 启动 Web UI（本地开发）
+## Docker Compose 复现
 
-Web UI 提供浏览器聊天界面，用于本地测试，无需配置外部 IM 平台：
+Compose 包含 Gateway、多 Worker、Redis、PostgreSQL、补偿和出站处理。先从示例生成
+根目录 `.env`；该文件已被 Git 忽略。无真实模型凭据时，将其中
+`TRPC_AGENT_RUNTIME_MODE` 设置为 `local`。
 
-**Windows:**
-```powershell
-.\start-web-ui.ps1
-```
+Windows PowerShell：
 
-**Linux/macOS:**
-```bash
-chmod +x start.sh
-./start.sh
-```
-
-访问地址：`http://127.0.0.1:18001/ui`
-
-停止服务：
-```powershell
-.\stop-web-ui.ps1  # Windows
-```
-```bash
-./stop.sh  # Linux/macOS
-```
-
-### Docker Compose 部署
-
-用于多节点部署，包含 Redis 和 PostgreSQL：
-
-1. 从示例生成本地 `.env` 文件：
-
-**Windows PowerShell:**
 ```powershell
 Copy-Item .env.example .env
 $password = [guid]::NewGuid().ToString("N")
@@ -176,31 +146,13 @@ $password = [guid]::NewGuid().ToString("N")
   Set-Content .env -Encoding ascii
 ```
 
-**Linux/macOS:**
-```bash
-cp .env.example .env
-password="$(openssl rand -hex 24)"
-sed -i.bak \
-  -e "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=${password}|" \
-  -e "s|^POSTGRES_DSN=.*|POSTGRES_DSN=postgresql://trpc_agent:${password}@sql:5432/trpc_agent|" \
-  -e "s|^TENANT_DB_DSN=.*|TENANT_DB_DSN=postgresql://trpc_agent:${password}@sql:5432/trpc_agent|" \
-  .env
-rm -f .env.bak
-```
-
-2. 启动平台（2 个 Worker 副本）：
+Linux/macOS 的等价生成命令见[完整 Docker 复现指南](docs/README.md#docker-复现)。启动：
 
 ```bash
 docker compose --env-file .env -f deployment/docker-compose.yml up --build --scale worker=2
 ```
 
-Compose 会先运行 Alembic 升级和 Schema 检查，再启动 Gateway 与 Worker。应用容器保持
-`POSTGRES_AUTO_CREATE_SCHEMA=0`，不会在请求处理期间执行 DDL。
-
-> `--env-file .env` 是必需的：Compose 默认从 compose 文件所在目录（`deployment/`）读取 `.env`，
-> 而上一步生成的 `.env` 在仓库根目录，省略该参数会报 `required variable POSTGRES_DSN is missing a value`。
-
-3. 验证部署：
+验证：
 
 ```bash
 curl http://127.0.0.1:8000/health
@@ -209,195 +161,145 @@ curl http://127.0.0.1:8000/readyz
 curl http://127.0.0.1:8000/ui
 ```
 
-详细部署说明、IM 集成指南和故障排查见 [docs/README.md](docs/README.md)。
+`--env-file .env` 不能省略，因为 `.env` 位于仓库根目录，而 Compose 文件位于
+`deployment/`。
 
-## 文档索引
+## Kubernetes 生产模板
 
-### 核心设计文档
+`deployment/kubernetes/platform.yaml` 是生产导向模板，不是可原样启动的本地 Demo。
+仓库内的 Kustomize 配置仍包含示例镜像仓库和版本占位符；直接部署可能导致
+`ImagePullBackOff`，缺少 External Secrets、TLS 或外部数据服务时也会失败或保持 Pending。
 
-| 文档 | 说明 |
-|------|------|
-| [docs/README.md](docs/README.md) | **文档入口**：阅读顺序、本地复现、Docker 部署、IM 联调指南 |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | **架构设计**：系统架构图、租户模型、路由机制、隔离策略、部署拓扑 |
-| [docs/SEQUENCE.md](docs/SEQUENCE.md) | **核心时序**：企业微信消息 → Agent 执行 → Tool 调用 → IM 回复完整链路 |
-| [docs/DATA_MODEL.md](docs/DATA_MODEL.md) | **数据模型**：租户配置、表结构、统一存储抽象（Session、Memory、Summary、Audit） |
-| [docs/MIGRATION.md](docs/MIGRATION.md) | **数据同步**：并发控制、幂等处理、补偿机制、Redis/SQL/向量库迁移策略 |
-| [docs/IM_INTEGRATION.md](docs/IM_INTEGRATION.md) | **IM 集成**：企业微信智能机器人、飞书、Telegram、Web UI 接入与真实联调 |
-| [docs/CAPACITY.md](docs/CAPACITY.md) | **容量规划**：估算方法、监控指标、最小部署与生产部署建议 |
-| [docs/RISKS.md](docs/RISKS.md) | **风险清单**：15 项生产风险及缓解措施 |
-
-### 实现与验收
-
-| 文档 | 说明 |
-|------|------|
-| [docs/ACCEPTANCE.md](docs/ACCEPTANCE.md) | **验收映射表**：题目要求逐项映射到代码、测试用例和证据文件 |
-| [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md) | **实现说明**：实现范围、运行模式、IM SDK 接入、模型配置 |
-| [deployment/kubernetes/README.md](deployment/kubernetes/README.md) | **Kubernetes 部署**：生产模板前置条件和本地 dev-local 复现 |
-
-**推荐阅读顺序**：从 [docs/README.md](docs/README.md) 开始，然后按 ARCHITECTURE → SEQUENCE → DATA_MODEL → MIGRATION → IM_INTEGRATION 的顺序阅读核心设计，最后查看 ACCEPTANCE 和 IMPLEMENTATION 了解实现细节。
-
-## 项目结构
-
-```
-├── trpc_service/           # 平台源代码
-│   ├── tenant/             # 租户配置、版本控制、灰度发布
-│   ├── gateway/            # Gateway 路由、Worker 池、运行队列
-│   ├── channels/           # IM 适配器（企业微信、飞书、Telegram、Web UI）
-│   ├── storage/            # 多后端适配器（Redis、SQL、向量库、对象存储）
-│   ├── policy/             # 工具治理、限流、配额执行
-│   ├── security/           # 密钥引用、脱敏、RBAC
-│   ├── telemetry/          # OpenTelemetry 追踪和 Prometheus 指标
-│   ├── web/                # Admin API 和 Web UI
-│   └── log/                # 结构化日志与密钥脱敏
-├── tests/                  # 单元和集成测试（639 个已收集测试用例）
-├── deployment/             # Docker Compose 和 Kubernetes 清单
-├── docs/                   # 架构、数据模型、集成指南（见上方索引）
-├── scripts/                # 工具脚本（Web UI 启动器、验证、基准测试）
-└── data/                   # 发布制品、SBOM、验收证据
-```
-
-## IM 通道集成
-
-平台支持以下 IM 通道：
-
-- **wecom_ai_bot**（默认注册，真实连接需显式启用）：企业微信智能机器人 API，使用 BotID/BotSecret 长连接（无需公网 webhook）
-- **feishu**：飞书/Lark，支持签名验证和媒体附件
-- **telegram**：Telegram Bot API，使用 python-telegram-bot SDK
-- **web**：浏览器 Web UI，用于本地测试
-
-传统 **wecom**（基于 webhook 的企业微信回调）默认禁用，仅在设置 `ENABLE_LEGACY_WECOM=1` 时注册。
-`wechat_official_account` 和 `wechat_customer_service` 已从默认运行时退役，仅保留兼容性测试代码；当前可部署通道为 `wecom_ai_bot`、`feishu`、`telegram` 和 `web`。
-
-详见 [docs/IM_INTEGRATION.md](docs/IM_INTEGRATION.md) 了解 webhook 配置、签名验证和真实 IM 测试。
-
-**SDK 使用说明**：
-- 企业微信智能机器人使用可选的 `wecom-aibot-sdk-python`；传统企业微信和微信生态兼容适配器优先使用 `wechatpy` / `wechatpy-cryptography`
-- Telegram 优先使用 `python-telegram-bot`
-- 飞书优先使用 `lark-oapi`（飞书官方 SDK），在 SDK 不可用或凭据不完整时降级到 HTTP API
-
-## 测试
-
-测试套件包含：
-
-- **多租户**：租户隔离、配置版本控制、灰度发布
-- **路由**：通道绑定、会话路由、并发更新
-- **存储**：Redis、SQLite、PostgreSQL 后端，基于 lease 的并发控制
-- **可靠性**：幂等处理、补偿机制、Worker 崩溃恢复、Toxiproxy 故障注入
-- **IM 通道**：企业微信、飞书、Telegram 消息解析和签名验证
-- **Kubernetes**：生产清单静态安全检查
-
-运行测试：
-```bash
-python -m pytest -q
-```
-
-运行覆盖率测试：
-```bash
-./coverage.sh
-```
-
-## 部署
-
-### 最小部署（本地/演示）
-
-- 单个 Gateway + Worker 进程
-- InMemory 或 SQLite 存储
-- Web UI 用于测试
+审阅者可以安全执行静态渲染：
 
 ```bash
-python -m trpc_service demo
+kubectl kustomize deployment/kubernetes
+uv run python scripts/kubernetes_runtime_gate.py --static
 ```
 
-### 生产部署
+真实部署前必须替换镜像仓库和不可变 tag/digest，并配置 SecretStore、TLS、域名、
+Redis、PostgreSQL、向量库、对象存储及遥测后端。准备完成后才执行：
 
-- Gateway（2+ 副本），使用 Redis 运行队列
-- Worker 池（4+ 副本），共享 PostgreSQL 和 Redis
-- PostgreSQL 配置 RLS 实现租户隔离
-- OpenTelemetry collector 和 Prometheus
-- 外部向量库和对象存储
-
-使用 Kubernetes 部署：
 ```bash
 kubectl apply -k deployment/kubernetes
 ```
 
-详见 [docs/CAPACITY.md](docs/CAPACITY.md) 了解容量规划和扩展建议。
+本地 Kubernetes 验证请使用 `deployment/kubernetes/dev-local.yaml`。完整前置条件和
+命令见[Kubernetes 部署说明](deployment/kubernetes/README.md)。
 
-## 配置
+## 租户配置示例
 
-租户通过 Admin API 或 YAML 配置。最小租户配置示例：
+以下示例与当前数据模型和仓库接口一致，可以直接运行：
 
 ```python
+from trpc_service.tenant.models import (
+    AgentApp,
+    ChannelBinding,
+    ModelConfig,
+    StorageProfile,
+    TenantConfig,
+)
+from trpc_service.tenant.repository import InMemoryTenantRepository
+
 tenant_config = TenantConfig(
     tenant_id="demo-tenant",
-    agent_apps=[
+    apps=[
         AgentApp(
             agent_app_id="assistant",
-            agent_prompt="你是一个有帮助的助手。",
+            agent_name="assistant",
+            prompt="你是一个有帮助的助手。",
             model_config=ModelConfig(
-                provider="anthropic",
-                model="claude-opus-5",
-                api_key_ref="secret://demo-tenant/anthropic/api_key"
-            )
+                provider="openai-compatible",
+                model="provider-model-id",
+                api_key_ref="secret://demo-tenant/model/api-key",
+            ),
         )
     ],
     channel_bindings=[
         ChannelBinding(
+            tenant_id="demo-tenant",
+            binding_id="web:demo-account",
             channel="web",
             account_id="demo-account",
-            agent_app_id="assistant"
+            agent_app_id="assistant",
         )
     ],
     storage_profile=StorageProfile(
-        session_backend="redis",
-        memory_backend="sql"
-    )
+        session_backend="memory",
+        memory_backend="memory",
+    ),
 )
+
+repository = InMemoryTenantRepository()
+published = repository.create(tenant_config)
+assert repository.get("demo-tenant").config_version == published.config_version
 ```
 
-发布配置：
-```python
-repo.publish(tenant_config)
+配置版本更新后，可使用
+`repository.save_and_publish(config, expected_version=current.config_version)` 原子保存并
+发布新版本。完整字段和持久化模型见[数据模型设计](docs/DATA_MODEL.md)。
+
+## IM 通道
+
+| 通道 | 状态 | 接入方式 |
+| --- | --- | --- |
+| `wecom_ai_bot` | 默认注册，真实连接需显式启用 | 企业微信智能机器人 BotID/BotSecret 长连接。 |
+| `feishu` | 可部署 | 飞书回调/SDK，支持验签和媒体。 |
+| `telegram` | 可部署 | Telegram Bot API/Webhook。 |
+| `web` | 本地验证 | 浏览器 Web UI，不替代真实 IM 验收。 |
+
+传统 `wecom` 回调仅在 `ENABLE_LEGACY_WECOM=1` 时注册；
+`wechat_official_account` 和 `wechat_customer_service` 仅保留兼容性测试代码。
+真实账号配置、媒体和验收清单见[IM 联调手册](docs/IM_INTEGRATION.md)。
+
+## 安全与可观测性
+
+- 密钥只保存 `secret://` 或 `env://` 引用，日志、Trace 和错误统一脱敏。
+- Redis Key、SQL 主键、向量集合、对象路径和权限检查均包含租户作用域。
+- Admin API 支持 API Key/OIDC、角色和租户授权。
+- OpenTelemetry 使用 `trace_id` 串联 IM、Gateway、Worker、模型、工具、存储和回复。
+- Prometheus 暴露请求、模型、工具、IM、Token、成本和存储延迟指标。
+
+生产环境必须设置 `PUBLIC_SURFACE_AUTH_REQUIRED=1`；真实灾备、托管数据服务和外部
+供应链证据需要在目标环境中单独验收。
+
+## 文档索引
+
+| 文档 | 内容 |
+| --- | --- |
+| [docs/README.md](docs/README.md) | 文档入口、完整复现命令和外部依赖测试。 |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架构图、租户隔离、路由、治理和部署拓扑。 |
+| [docs/SEQUENCE.md](docs/SEQUENCE.md) | 企业微信消息到 Agent 回复的完整时序。 |
+| [docs/DATA_MODEL.md](docs/DATA_MODEL.md) | 租户配置、核心表结构和存储抽象。 |
+| [docs/MIGRATION.md](docs/MIGRATION.md) | 并发、幂等、补偿和后端迁移。 |
+| [docs/IM_INTEGRATION.md](docs/IM_INTEGRATION.md) | 企业微信、飞书和 Telegram 真实联调。 |
+| [docs/CAPACITY.md](docs/CAPACITY.md) | 容量估算和部署建议。 |
+| [docs/RISKS.md](docs/RISKS.md) | 15 项生产风险及缓解措施。 |
+| [docs/ACCEPTANCE.md](docs/ACCEPTANCE.md) | 题目要求到代码、测试和文档的逐项映射。 |
+| [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md) | 当前实现范围、运行模式和外部依赖边界。 |
+| [docs/OPERATIONS.md](docs/OPERATIONS.md) | 探针、指标、告警、审计和故障处理。 |
+| [deployment/kubernetes/README.md](deployment/kubernetes/README.md) | Kubernetes 生产模板及本地验证前置条件。 |
+
+## 项目结构
+
+```text
+├── trpc_service/           # 平台源代码
+│   ├── tenant/             # 租户配置、版本控制、灰度发布
+│   ├── gateway/            # 路由、Worker 池和运行队列
+│   ├── channels/           # 企业微信、飞书、Telegram、Web UI
+│   ├── storage/            # Redis、SQL、向量库和对象存储适配器
+│   ├── policy/             # 工具治理、限流和配额
+│   ├── security/           # 密钥引用、脱敏和 RBAC
+│   ├── telemetry/          # OpenTelemetry 和 Prometheus
+│   └── web/                # Admin API 和 Web UI
+├── tests/                  # 单元、集成、故障和安全测试
+├── deployment/             # Docker Compose 与 Kubernetes 清单
+├── docs/                   # 架构、数据模型、集成和验收文档
+├── scripts/                # 质量、发布、迁移和运行脚本
+└── data/                   # 本地运行数据目录，运行产物不提交 Git
 ```
-
-完整租户 schema 见 [docs/DATA_MODEL.md](docs/DATA_MODEL.md)。
-
-## 安全
-
-- **密钥管理**：所有密钥使用 `secret://` 或 `env://` 引用，绝不明文
-- **日志脱敏**：Authorization 头、Token、手机号、邮箱自动脱敏
-- **租户隔离**：Redis key 前缀、SQL 复合主键、PostgreSQL RLS、向量库 collection 作用域
-- **工具治理**：每租户白名单/黑名单、危险工具审批流程
-- **RBAC**：Admin API key 角色用于租户管理
-- **公共入口保护**：生产设置 `PUBLIC_SURFACE_AUTH_REQUIRED=1`，`/metrics`、`/ui`
-  和 `/ui/api/chat` 需要管理凭据；本地 loopback 演示可保持为 `0`
-
-隔离机制见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)，安全风险见 [docs/RISKS.md](docs/RISKS.md)。
-
-## 可观测性
-
-- **追踪**：OpenTelemetry span 通过 `trace_id` 串联 Gateway → Worker → 模型 → 工具 → 存储 → IM 回复
-- **指标**：Prometheus 指标包括请求量、模型延迟、工具耗时、存储 QPS、IM 投递成功率
-- **审计日志**：结构化日志包含 `tenant_id`、`session_id`、`tool_name`、`decision`、`latency`、`cost`、`trace_id`
-
-指标端点：
-```bash
-curl http://127.0.0.1:8000/metrics
-```
-
-## 第六阶段安全与灾备验收
-
-安全、供应链和 PostgreSQL 备份恢复演练的执行入口见
-`scripts/production_acceptance.py`、`scripts/disaster_recovery_gate.py` 和
-`scripts/security_gate.py`。外部数据库、Kubernetes、Toxiproxy 和真实 IM 未配置时，
-对应门禁会明确失败或跳过，不会伪装成本地生产验收通过。
 
 ## 致谢
 
-本项目基于 [tRPC-Agent-Python](https://github.com/tRPC-Agent/tRPC-Agent-Python) 设计理念，并集成以下 SDK：
-
-- `wechatpy` / `wechatpy-cryptography` 用于企业微信
-- `lark-oapi` 用于飞书
-- `python-telegram-bot` 用于 Telegram
-- `anthropic` / `openai` / `google-generativeai` 用于模型提供商
-- `qdrant-client` / `chromadb` 用于向量存储
+本项目复用 tRPC-Agent-Python 的 Runner、模型、Tool/MCP、Filter、Session 接口和
+Telemetry 能力，并在其上实现租户、路由、IM、多后端、治理和运维平台层。

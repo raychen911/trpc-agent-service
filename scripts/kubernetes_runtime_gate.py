@@ -172,7 +172,7 @@ def validate_manifest(
 
     image_overrides = (kustomization or {}).get("images", []) if isinstance(kustomization, dict) else []
     override_ok = any(
-        item.get("name") == "ghcr.io/xyxhhhhh/trpc-agent-service"
+        item.get("name") == "trpc-agent-service"
         and item.get("newName")
         and item.get("newTag")
         and str(item.get("newTag")).lower() != "latest"

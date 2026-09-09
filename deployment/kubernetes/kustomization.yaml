@@ -7,6 +7,6 @@ resources:
   - platform.yaml
 
 images:
-  - name: ghcr.io/xyxhhhhh/trpc-agent-service
+  - name: trpc-agent-service
     newName: registry.example.com/platform/trpc-agent-service
     newTag: "replace-with-release"

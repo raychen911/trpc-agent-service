@@ -72,13 +72,13 @@ idempotency_key = hash(tenant_id + channel + account_id + external_message_id)
 
 `trpc_service.migrate` 命令提供导出、导入、导入后校验和切换计划能力。迁移期间必须保留旧配置版本，回滚时只切换 active version 指针。迁移窗口可设置 `MIGRATION_DUAL_WRITE_BACKEND=sql`，由 `TenantStorageManager` 为租户建立主后端与目标后端的同步写入、主读和目标回退；双写任一侧失败会让本次请求失败并由消息幂等键重试，避免“主成功、目标静默丢失”。迁移完成后删除该环境变量，发布新的租户配置版本切换权威后端。
 
-迁移 CLI 的结构化快照命令当前支持 `memory`、`redis`、`sql` 和 `postgres` 后端；不要把 `qdrant`、`s3`、`oss` 或 `minio` 直接作为 `--backend` 参数，否则 CLI 会按设计返回无效选项错误。远端向量库和对象存储通过租户 `StorageProfile` 配置，由对应 Adapter 执行写入、读取和重建：向量库迁移采用“权威文本导出后重新 embedding/upsert，再抽样 top-k 校验”，对象存储迁移采用“按租户前缀复制对象并校验元数据/校验和”。这两类真实供应商迁移需要目标服务、凭据和供应商侧权限，当前仓库提供适配器和策略，不宣称已在外部 Qdrant/S3/OSS/MinIO 上完成实测。
+迁移 CLI 的结构化快照命令 `export`、`import`、`verify` 当前支持 `redis`、`sql` 和 `postgres` 后端；`migration-run` 额外支持 `memory` 作为迁移源或目标。不要把 `qdrant`、`s3`、`oss` 或 `minio` 直接作为 `--backend` 参数，否则 CLI 会按设计返回无效选项错误。远端向量库和对象存储通过租户 `StorageProfile` 配置，由对应 Adapter 执行写入、读取和重建：向量库迁移采用“权威文本导出后重新 embedding/upsert，再抽样 top-k 校验”，对象存储迁移采用“按租户前缀复制对象并校验元数据/校验和”。这两类真实供应商迁移需要目标服务、凭据和供应商侧权限，当前仓库提供适配器和策略，不宣称已在外部 Qdrant/S3/OSS/MinIO 上完成实测。
 
 ```bash
-python -m trpc_service.migrate export --tenant tenant_demo --backend redis --redis-url redis://localhost:6379/0 --output tenant_demo.json
-python -m trpc_service.migrate import --backend sql --sql-dsn sqlite:///data/target.sqlite3 --input tenant_demo.json
-python -m trpc_service.migrate verify --backend sql --sql-dsn sqlite:///data/target.sqlite3 --input tenant_demo.json
-python -m trpc_service.migrate cutover-plan --input tenant_demo.json
+uv run python -m trpc_service.migrate export --tenant tenant_demo --backend redis --redis-url redis://localhost:6379/0 --output tenant_demo.json
+uv run python -m trpc_service.migrate import --backend sql --sql-dsn sqlite:///data/target.sqlite3 --input tenant_demo.json
+uv run python -m trpc_service.migrate verify --backend sql --sql-dsn sqlite:///data/target.sqlite3 --input tenant_demo.json
+uv run python -m trpc_service.migrate cutover-plan --input tenant_demo.json
 ```
 
 导出包版本为 `version=2`，覆盖 session state、message/event、summary、memory、audit log、idempotency、compensation、knowledge chunk 和 artifact 内容。`verify` 会按各类对象数量比较源导出包与目标后端现状，`cutover-plan` 输出冻结、导出、导入、校验、补偿队列 drain、配置切换、灰度发布和回滚窗口保留步骤。
@@ -109,20 +109,18 @@ Knowledge 迁移同样以租户和 collection 为单位进行：
 
 Redis 适合低延迟和原子计数，但持久性和查询能力弱于 SQL。PostgreSQL 提供事务强一致，适合配置、事件和审计，但写入延迟和连接数需要规划。向量库和对象存储通常是最终一致或供应商定义一致性，适合派生数据和大对象，不应作为 Session state 的唯一权威来源。外部 Memory 服务可以降低本地运维复杂度，但会引入网络延迟、供应商限流和跨境合规风险。
 
-## PostgreSQL RLS migration
+## PostgreSQL RLS 迁移
 
 PostgreSQL Schema 版本由 Alembic 管理，和本文件描述的租户数据后端切换相互独立。
 升级、检查、已有数据库接管和降级保护见
 仓库中的 Alembic 脚本和 `scripts/database_migration_gate.py` 负责升级、检查、已有数据库接管和降级保护。
 
-RLS is a production hardening option, not a requirement for the local demo.
-Run the normal PostgreSQL schema migration with a dedicated schema-owner
-connection first, then run the `rls` migration to create least-privilege
-runtime and control-plane roles and install tenant policies. After the
-cutover, set `POSTGRES_AUTO_CREATE_SCHEMA=0`; application processes must use
-the runtime DSNs and must never use the schema-owner DSN.
+RLS 是生产加固选项，不是本地演示的必需项。首先使用独立的 Schema owner
+连接执行常规 PostgreSQL Schema 迁移，然后运行 `rls` 迁移，创建最小权限的运行时
+角色和控制面角色，并安装租户策略。切换完成后设置
+`POSTGRES_AUTO_CREATE_SCHEMA=0`；应用进程必须使用运行时 DSN，绝不能使用 Schema
+owner DSN。
 
-The RLS policy is a second boundary. Existing explicit `tenant_id` predicates,
-Redis tenant prefixes, object-store paths, vector collection scopes, and
-authorization checks remain required. See
+RLS 策略是第二层隔离边界。现有的显式 `tenant_id` 条件、Redis 租户前缀、对象存储
+路径、向量集合范围和鉴权检查仍然必须保留。角色、策略和验证见
 PostgreSQL RLS 的角色、策略和验证由 `tests/test_postgres_rls.py` 覆盖，部署时按数据库迁移脚本执行。

@@ -13,6 +13,7 @@ import binascii
 import hashlib
 import inspect
 import ipaddress
+import logging
 import re
 import time
 from collections.abc import Awaitable, Callable, Mapping
@@ -34,6 +35,9 @@ from trpc_service.channels.sdk import run_async
 from trpc_service.channels.simple import SimpleJsonChannelAdapter
 from trpc_service.security.secrets import SecretManager, redact_secret_text
 from trpc_service.tenant.models import ChannelBinding
+
+
+logger = logging.getLogger(__name__)
 
 
 class WeComAIBotClient(Protocol):
@@ -240,7 +244,12 @@ class WeComAIBotConnector:
         bot_secret_ref = str(binding.config.get("bot_secret_ref") or binding.secret_ref or "")
         if not bot_secret_ref:
             raise RuntimeError("WeCom AI Bot secret reference is not configured")
-        secret = self.secrets.resolve(bot_secret_ref)
+        try:
+            secret = self.secrets.resolve(bot_secret_ref)
+        except Exception:
+            logger.exception("WeCom AI Bot secret resolution failed for binding %s", binding.binding_id)
+            raise
+        logger.info("WeCom AI Bot connector starting for binding %s", binding.binding_id)
         delay = self.reconnect_delay_seconds
         local_stop = asyncio.Event()
         self._stop_events[binding.binding_id] = local_stop
@@ -286,6 +295,7 @@ class WeComAIBotConnector:
                 except asyncio.CancelledError:
                     raise
                 except Exception:
+                    logger.exception("WeCom AI Bot connection failed for binding %s", binding.binding_id)
                     if stop_event.is_set() or local_stop.is_set():
                         break
                     await asyncio.sleep(delay)

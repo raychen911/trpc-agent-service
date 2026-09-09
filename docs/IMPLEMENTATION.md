@@ -19,16 +19,16 @@
 ## 本地验证
 
 ```bash
-python -m unittest discover -s tests -v
-python -m trpc_service demo
+uv run python -m unittest discover -s tests -v
+TRPC_AGENT_RUNTIME_MODE=local uv run python -m trpc_service demo
 ```
 
 运行环境要求 Python 3.12+。当前仓库的实现使用 `StrEnum` 和较新的标准库能力，Python 3.8 虚拟环境不兼容。
 
-安装 `requirements.txt` 后启动 HTTP 服务：
+完成根目录 README 的依赖安装后，可启动 HTTP 服务：
 
 ```bash
-uvicorn trpc_service.web.app:app --host 127.0.0.1 --port 8000
+uv run python -m uvicorn trpc_service.web.app:app --host 127.0.0.1 --port 8000
 ```
 
 主要接口：
@@ -57,13 +57,13 @@ webhook、token、secret 和账号权限；本地 webhook 使用 JSON 事件模�
 后台补偿任务可以通过三种方式运行：HTTP 服务默认启用 `COMPENSATION_WORKER=1` 的内置线程；生产推荐在 Compose/Kubernetes 中使用独立 `compensation-worker`；也可以手动执行一次：
 
 ```bash
-python -m trpc_service._cli compensate --once --limit 100
+uv run python -m trpc_service._cli compensate --once --limit 100
 ```
 
 联调 Redis、PostgreSQL、对象存储、远端向量库或外部 Memory 前，可运行不打印密钥的健康检查：
 
 ```bash
-python scripts/validate_integrations.py
+uv run python scripts/validate_integrations.py
 ```
 
 ## IM SDK 接入
@@ -122,7 +122,7 @@ webhook URL。
 - 所有外部媒体发送都复用大小限制、账号限流、指数退避重试和死信记录；平台
   不支持的原生媒体类型不会伪装成成功的文本消息。
 
-灰度发布通过 `TenantConfig.gray_release` 和 Admin API 落地，支持按稳定 hash 百分比路由，也支持指定 session 覆盖。迁移工具通过 `trpc-agent-migrate` 提供 `export`、`import`、`verify` 和 `cutover-plan`，结构化快照 CLI 的后端参数是 `memory/redis/sql/postgres`，迁移包覆盖 session、event、state、summary、memory、audit、idempotency、knowledge 和 artifact；远端向量库与 S3 兼容对象存储需按 `docs/MIGRATION.md` 的重建/复制策略在目标环境执行，不可直接把 `qdrant` 或 `s3` 作为 CLI `--backend`。PostgreSQL Schema 由 Alembic `db upgrade` 和 `db check` 独立管理。可观测性通过 `/metrics` 暴露 Prometheus 指标，并可通过 `OTEL_EXPORTER_OTLP_ENDPOINT` 接入 OpenTelemetry Collector。
+灰度发布通过 `TenantConfig.gray_release` 和 Admin API 落地，支持按稳定 hash 百分比路由，也支持指定 session 覆盖。迁移工具通过 `trpc-agent-migrate` 提供 `export`、`import`、`verify` 和 `cutover-plan`；结构化快照 CLI 的后端参数是 `redis/sql/postgres`，而 `migration-run` 额外支持 `memory`，迁移包覆盖 session、event、state、summary、memory、audit、idempotency、knowledge 和 artifact；远端向量库与 S3 兼容对象存储需按 `docs/MIGRATION.md` 的重建/复制策略在目标环境执行，不可直接把 `qdrant` 或 `s3` 作为 CLI `--backend`。PostgreSQL Schema 由 Alembic `db upgrade` 和 `db check` 独立管理。可观测性通过 `/metrics` 暴露 Prometheus 指标，并可通过 `OTEL_EXPORTER_OTLP_ENDPOINT` 接入 OpenTelemetry Collector。
 危险工具二次确认通过租户 `tool_policy.approval_rules`、持久化 `tool_approval_requested` 事件和签名 approval token 串联，未确认前 Worker 只返回 `approval_required`，不会执行真实工具。IM 撤回、withdraw、recall、delete 等事件会归一化为 `message_revoked`，只写 Session/Audit，不触发模型、工具或出站回复。
 
 ## tRPC-Agent-Python 能力复用边界
@@ -152,7 +152,8 @@ Worker Queue、`channels/` IM Adapter、`storage/` 多后端与迁移、`policy/
 $env:OPENAI_API_KEY = "你的新API_KEY"
 $env:CPA_BASE_URL = "https://your-provider.example/v1"
 $env:CPA_MODEL = "服务商实际支持的模型名"
-python -m trpc_service demo
+$env:TRPC_AGENT_RUNTIME_MODE = "trpc"
+uv run python -m trpc_service demo
 ```
 
 本地启动脚本默认使用显式 `local` 演示运行时，不需要模型凭据即可验证
