@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -11,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SECRET_PATTERNS = (
     re.compile(r"(?i)\b(api[_-]?key|password|token|secret)\s*[:=]\s*[\"'][^\r\n\"']{8,}[\"']"),
     re.compile(r"(?i)://[^:/\s]+:[^@\s]+@"),
+    re.compile(r"\b\d{6,12}:[A-Za-z0-9_-]{30,}\b"),
     re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
 )
 TEXT_EXTENSIONS = {".py", ".yml", ".yaml", ".toml", ".ini", ".env", ".md", ".json", ".sh", ".ps1"}
@@ -18,19 +20,23 @@ SKIP_PARTS = {".git", ".venv", "__pycache__", "runs", "data", "build", "dist"}
 
 
 def _files() -> list[Path]:
+    try:
+        result = subprocess.run(
+            ["git", "ls-files", "-z"],
+            cwd=ROOT,
+            capture_output=True,
+            check=True,
+        )
+        candidates = [ROOT / value.decode("utf-8") for value in result.stdout.split(b"\0") if value]
+    except (OSError, subprocess.CalledProcessError, UnicodeDecodeError):
+        candidates = list(ROOT.rglob("*"))
+
     files: list[Path] = []
-    for path in ROOT.rglob("*"):
-        if not path.is_file() or path.suffix.lower() not in TEXT_EXTENSIONS:
+    for path in candidates:
+        if not path.is_file() or (path.suffix.lower() not in TEXT_EXTENSIONS and path.name != "Dockerfile"):
             continue
         relative = path.relative_to(ROOT)
         if any(part in SKIP_PARTS for part in relative.parts):
-            continue
-        if relative.parts[0] not in {"trpc_service", "deployment"} and path.name not in {
-            "Dockerfile",
-            "pyproject.toml",
-        }:
-            continue
-        if path.name.lower() == "readme.md":
             continue
         files.append(path)
     return files
@@ -58,10 +64,24 @@ def _is_documented_example(value: str) -> bool:
     lowered = value.lower()
     return any(
         marker in value
-        for marker in ("$", "<", ">", "...", "secret://", "env://")
+        for marker in ("$", "<", ">", "...", "secret://", "env://", "[^", "\\s")
     ) or any(
         marker in lowered
-        for marker in ("test-", "test_", "local-only", "temporary-", "fresh-test", "phase3-")
+        for marker in (
+            "test-",
+            "test_",
+            "local-only",
+            "temporary-",
+            "fresh-test",
+            "phase3-",
+            "ci-migration-password",
+            "sql-password",
+            "wechat-token",
+            "vector-token",
+            "secret-token",
+            "root-key",
+            "user:password@",
+        )
     )
 
 

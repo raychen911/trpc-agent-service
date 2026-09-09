@@ -446,10 +446,12 @@ $env:VALIDATE_SECRETS = "1"
 
 ### 9.8 真实联调记录（2026-09-08）
 
-以下是实际联调过程中的完整对话记录，证明所有核心功能均已验证通过。
+以下是已完成联调的脱敏记录，用于说明验收项目和记录格式；账号标识、密钥和模型
+服务信息均不应提交到仓库。Reviewer 可在自己的企业微信环境中按相同步骤复验；
+当前无外部凭据的本地门禁会将该项标记为 `not_run`，不代表历史联调失败。
 
 #### 测试环境
-- **BotID:** `aibq1rlCbxKPsEPi4g0IyE4jME5SrwCCPlY`
+- **BotID:** `<your-wecom-ai-bot-id>`
 - **模型:** `claude-sonnet-4-20250514`
 - **测试时间:** 2026-09-08 13:02-13:12
 - **测试人员:** 夏雨轩
@@ -627,7 +629,7 @@ def fibonacci(n: int) -> List[int]:
 ```
 
 **[13:12:09] 机器人回复:**
-```markdown
+````markdown
 1. Python 的 3 个特点
 
 - 语法简洁：代码可读性强，适合快速开发。
@@ -655,7 +657,7 @@ func main() {
     fmt.Println("Hello, World!")
 }
 ```
-```
+````
 ✅ **验证通过：** Markdown 格式在企业微信中正确渲染
 
 ---
@@ -689,12 +691,13 @@ func main() {
 
 ### 9.9 Telegram 真实联调记录（2026-09-08）
 
-以下是 Telegram Bot 实际联调过程中的完整配置和测试记录。
+以下是已完成 Telegram Bot 联调的脱敏记录，用于说明配置和测试步骤。请使用自己
+的 Bot、Token 和公网 HTTPS 地址复验，仓库不提供可复用的真实凭据。
 
 #### 测试环境
 
-- **Bot 用户名:** `@xyxtrpcbot`
-- **Bot Token:** `8847448258:AAFZ_O-geHMBy8Hm3mlZdVM8x0j5cOiJj7c`
+- **Bot 用户名:** `<your-telegram-bot-username>`
+- **Bot Token:** `<your-telegram-bot-token>`（文档已脱敏，请使用自己的 BotFather Token）
 - **Account ID:** `telegram_bot_1`
 - **关联 Agent App:** `app_support`
 - **模型:** `claude-sonnet-4-20250514`
@@ -709,8 +712,8 @@ func main() {
 
 ```bash
 # Telegram Bot Configuration
-SECRET_TENANT_DEMO_TELEGRAM_TOKEN=8847448258:AAFZ_O-geHMBy8Hm3mlZdVM8x0j5cOiJj7c
-SECRET_TENANT_DEMO_TELEGRAM_WEBHOOK_SECRET=a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456
+SECRET_TENANT_DEMO_TELEGRAM_TOKEN=<your-telegram-bot-token>
+SECRET_TENANT_DEMO_TELEGRAM_WEBHOOK_SECRET=<your-webhook-secret>
 ```
 
 ✅ **完成时间:** 2026-09-08 19:27
@@ -719,9 +722,9 @@ SECRET_TENANT_DEMO_TELEGRAM_WEBHOOK_SECRET=a1b2c3d4e5f6789012345678901234567890a
 
 使用 Admin API 创建并发布 Telegram 通道绑定：
 
-```bash
-python add_telegram_channel.py
-```
+请执行本节前面“创建 Telegram 通道绑定”中的 PowerShell 命令（调用
+`POST /admin/v1/tenants/tenant_demo/channels`，再调用 publish 接口）。仓库不包含
+`add_telegram_channel.py`，不需要额外脚本。
 
 **输出结果：**
 ```
@@ -772,7 +775,7 @@ npx localtunnel --port 18001
 获得公网地址后，在浏览器中访问以下 URL 设置 webhook：
 
 ```
-https://api.telegram.org/bot8847448258:AAFZ_O-geHMBy8Hm3mlZdVM8x0j5cOiJj7c/setWebhook?url=https://<tunnel-url>/webhooks/telegram/telegram_bot_1&secret_token=a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456
+https://api.telegram.org/bot<your-telegram-bot-token>/setWebhook?url=https://<tunnel-url>/webhooks/telegram/telegram_bot_1&secret_token=<your-webhook-secret>
 ```
 
 **注意：** 由于网络环境限制，通过浏览器完成 webhook 设置（浏览器已配置代理）。
@@ -1011,7 +1014,7 @@ console.log(isPalindrome2("race a car")); // false
 
 #### 测试结论
 
-**Telegram 集成联调成功完成！**
+**Telegram 联调记录已完成（凭据已脱敏）；Reviewer 可使用自己的账号复验。**
 
 核心功能验证：
 - ✅ 通道配置正确
@@ -1028,11 +1031,10 @@ console.log(isPalindrome2("race a car")); // false
 
 **Reviewer 验收要点：**
 
-1. 检查 `.env` 文件中的 Telegram 配置
-2. 验证通道绑定已发布（`published_version >= 2`）
-3. 查看项目根目录的 `add_telegram_channel.py` 脚本
-4. 确认服务日志无明文 token 泄漏
-5. 在 Telegram 中搜索 `@xyxtrpcbot` 发送消息测试（需要重新设置 webhook）
+1. 检查 `.env` 文件中的 Telegram 配置（只使用自己的 token，不提交到 Git）
+2. 通过 Admin API 查询租户配置，确认 Telegram 绑定已发布
+3. 确认服务日志无明文 token 泄漏
+4. 在自己的 Telegram Bot 中发送消息测试（需要重新设置 webhook）
 
 ---
 

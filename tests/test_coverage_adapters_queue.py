@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import builtins
 import hashlib
 import json
 import sqlite3
@@ -320,7 +321,16 @@ def test_wecom_ai_bot_adapter_connector_and_media(monkeypatch):
     assert seen[0].text == "hi" and client.disconnected
     result = WeComAIBotAdapter(connector=connector).send(message("wecom_ai_bot"), binding)
     assert not result.ok
-    with pytest.raises(RuntimeError): sdk_client_factory("b", "s")
+    real_import = builtins.__import__
+
+    def missing_wecom_sdk(name, *args, **kwargs):
+        if name == "wecom_aibot_sdk":
+            raise ImportError("simulated missing optional SDK")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", missing_wecom_sdk)
+    with pytest.raises(RuntimeError):
+        sdk_client_factory("b", "s")
     with pytest.raises(ValueError): WeComAIBotAdapter().download_media(Attachment("image"))
     connector._clients[binding.binding_id] = client
     assert asyncio.run(connector.send(message("wecom_ai_bot"), binding))["msgid"] == "m"
