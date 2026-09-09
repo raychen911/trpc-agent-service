@@ -1,0 +1,38 @@
+:root { color-scheme: light; --bg:#f5f7fb; --panel:#ffffff; --line:#d9e0eb; --text:#172033; --muted:#68758a; --blue:#2563eb; --green:#16845b; --red:#c53b52; }
+* { box-sizing:border-box; }
+body { margin:0; background:radial-gradient(circle at 20% 0,#e8f0ff 0,transparent 38%),var(--bg); color:var(--text); font:15px/1.55 system-ui,"Microsoft YaHei",sans-serif; }
+main { width:min(1180px,calc(100% - 32px)); margin:0 auto; padding:34px 0 64px; }
+header { display:flex; justify-content:space-between; align-items:end; margin-bottom:22px; }
+h1 { margin:4px 0 0; font-size:clamp(28px,4vw,44px); letter-spacing:-1px; }
+h2 { margin:0 0 18px; font-size:19px; } h3 { margin:24px 0 10px; font-size:15px; color:var(--muted); }
+.eyebrow { color:var(--blue); font-weight:700; letter-spacing:.12em; text-transform:uppercase; font-size:12px; }
+.status { color:var(--muted); border:1px solid var(--line); padding:8px 12px; border-radius:99px; }
+.status i { display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--green); margin-right:7px; box-shadow:0 0 12px var(--green); }
+.layout,.protocol-grid { display:grid; grid-template-columns:1fr 1fr; gap:18px; }
+.protocol-grid { margin-top:18px; }
+.panel { background:var(--panel); border:1px solid var(--line); border-radius:16px; padding:22px; box-shadow:0 12px 34px #24385a14; }
+label { display:grid; gap:7px; margin:13px 0; color:var(--muted); font-size:13px; }
+input,select,textarea,button { font:inherit; }
+input,select,textarea { width:100%; color:var(--text); background:#fff; border:1px solid var(--line); border-radius:9px; padding:10px 12px; outline:none; }
+input:focus,select:focus,textarea:focus { border-color:var(--blue); box-shadow:0 0 0 3px #62a8ff20; }
+.grid-two { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+.check { display:flex; align-items:center; gap:9px; }.check input { width:auto; }
+.fault-row { display:grid; grid-template-columns:1fr auto; gap:9px; margin:16px 0 10px; }
+button { border:0; border-radius:9px; padding:11px 15px; background:var(--blue); color:#fff; font-weight:750; cursor:pointer; }
+button.secondary { background:#e8edf5; color:var(--text); } button:disabled { opacity:.55; cursor:wait; }
+.hint { color:var(--muted); font-size:12px; margin-bottom:0; }
+.result-head { display:flex; justify-content:space-between; align-items:start; }
+.result-head>div { display:flex; align-items:center; gap:10px; }
+.attachment-toolbar { display:flex; justify-content:space-between; align-items:center; gap:12px; color:var(--muted); font-size:13px; }
+.attachment-list { list-style:none; margin:0; padding:0; display:grid; gap:7px; }
+.attachment-list li { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:8px 10px; border:1px solid var(--line); border-radius:9px; background:#f8fafc; }
+.remove-attachment { width:auto; padding:6px 10px; background:#fde8ec; color:var(--red); }
+.pill { padding:5px 10px; border-radius:99px; font-size:12px; background:#edf1f7; color:var(--muted); }
+.pill.done { background:#e4f6ee; color:var(--green); }.pill.error { background:#fde8ec;color:var(--red); }.pill.running { color:#9a6700; background:#fff4ce; }
+.reply { min-height:110px; background:#f8fafc; border:1px solid #edf1f7; border-radius:11px; padding:15px; white-space:pre-wrap; overflow-wrap:anywhere; }
+.facts { display:grid; grid-template-columns:1fr 1fr; gap:9px; }
+.facts div { background:#f8fafc; border:1px solid #edf1f7; padding:10px; border-radius:9px; overflow:hidden; }.facts dt { color:var(--muted); font-size:11px; }.facts dd { margin:2px 0 0; overflow-wrap:anywhere; white-space:pre-wrap; }
+.stages { list-style:none; margin:0; padding:0; display:grid; gap:7px; }
+.stages li { display:flex; justify-content:space-between; padding:9px 11px; background:#f8fafc; border:1px solid #edf1f7; border-radius:8px; }.stages b { color:var(--muted); font-size:12px; }
+details summary { cursor:pointer; font-weight:700; } pre { max-height:420px; overflow:auto; color:#26344d; background:#f3f6fa; border:1px solid var(--line); border-radius:10px; padding:14px; font:12px/1.55 ui-monospace,Consolas,monospace; }
+@media (max-width:820px) { header{align-items:start;gap:12px;flex-direction:column}.layout,.protocol-grid,.grid-two{grid-template-columns:1fr}.facts{grid-template-columns:1fr}.panel{padding:17px} }

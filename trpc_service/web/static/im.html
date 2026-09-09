@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>IM 接入本地验证台</title>
+  <link rel="stylesheet" href="/im-static/im.css">
+</head>
+<body>
+  <main>
+    <header>
+      <div><span class="eyebrow">tRPC Agent Service</span><h1>IM 接入本地验证台</h1></div>
+      <div class="status"><i></i> 本地协议模拟 · 不连接真实 IM</div>
+    </header>
+
+    <section class="layout">
+      <form id="composer" class="panel controls">
+        <h2>模拟一条真实平台消息</h2>
+        <label>通道<select id="channel"></select></label>
+        <label>模型模式<select id="model-mode"></select></label>
+        <div class="grid-two">
+          <label>外部用户 ID<input id="user-id" value="10001" maxlength="128"></label>
+          <label>会话或群 ID<input id="conversation-id" value="20001" maxlength="128"></label>
+        </div>
+        <label>会话类型<select id="chat-type"><option value="single">私聊</option><option value="group">群聊</option></select></label>
+        <label>消息<textarea id="text" rows="5">你好，请用一句话说明这条消息经过了哪些服务阶段。</textarea></label>
+        <label>测试附件（可多选）<input id="attachment" type="file" multiple></label>
+        <div class="attachment-toolbar">
+          <span id="attachment-summary">未选择附件</span>
+          <button type="button" id="clear-attachments" class="secondary">取消全部附件</button>
+        </div>
+        <ul id="attachment-list" class="attachment-list"></ul>
+        <label class="check"><input id="duplicate" type="checkbox">发送相同消息两次，验证幂等</label>
+        <div class="fault-row">
+          <select id="fault">
+            <option value="none">不注入故障</option>
+            <option value="rate_limit">模拟限流</option>
+            <option value="delivery_timeout">模拟发送结果未知</option>
+            <option value="human_handoff">模拟人工接管（微信客服）</option>
+            <option value="disconnect">模拟断线（企业微信）</option>
+          </select>
+          <button type="button" id="set-fault" class="secondary">设置下一次故障</button>
+        </div>
+        <button id="send" type="submit">发送并执行完整链路</button>
+        <p class="hint">Fake Model 默认不联网、不产生费用。Configured 模式只调用已配置模型，回复仍发到 Fake Client。</p>
+      </form>
+
+      <section class="panel result">
+        <div class="result-head">
+          <h2>执行结果</h2>
+          <div>
+            <button type="button" id="stop-poll" class="secondary">停止状态查询</button>
+            <span id="result-state" class="pill idle">等待发送</span>
+          </div>
+        </div>
+        <div class="reply" id="reply">回复会显示在这里。</div>
+        <dl class="facts">
+          <div><dt>request_id</dt><dd id="request-id">—</dd></div>
+          <div><dt>配置版本</dt><dd id="config-version">—</dd></div>
+          <div><dt>Outbox</dt><dd id="outbox-state">—</dd></div>
+          <div><dt>错误码</dt><dd id="error-code">—</dd></div>
+          <div><dt>重复复用</dt><dd id="duplicate-reused">—</dd></div>
+        </dl>
+        <h3>执行过程</h3>
+        <ol id="stages" class="stages"></ol>
+      </section>
+    </section>
+
+    <section class="protocol-grid">
+      <details class="panel" open><summary>平台原始消息（已脱敏）</summary><pre id="raw">尚未生成</pre></details>
+      <details class="panel" open><summary>NormalizedInboundMessage</summary><pre id="normalized">尚未生成</pre></details>
+    </section>
+  </main>
+  <script src="/im-static/im.js"></script>
+</body>
+</html>

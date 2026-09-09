@@ -1,0 +1,39 @@
+# Explicit real-service example; this is not used by demo all.
+# Fill .env before serve. Development state is process-local and is lost on exit.
+tenants:
+  - tenant_id: demo
+    name: WeChat Customer Service Demo
+    api_token_ref: env://TRPC_TENANT_DEMO_TOKEN
+    apps:
+      assistant:
+        app_id: assistant
+        agent_name: assistant
+        instruction: 请简洁回答客户问题；需要人工处理时明确说明，不编造业务处理结果。
+        model:
+          provider: ${TRPC_AGENT_MODEL_PROVIDER:-openai-compatible}
+          model_name: ${TRPC_AGENT_MODEL_NAME:-deepseek-chat}
+          base_url: ${TRPC_AGENT_BASE_URL:-https://api.deepseek.com}
+          api_key_ref: env://TRPC_AGENT_API_KEY
+        tools:
+          allowed: []
+        runtime:
+          summary_enabled: true
+          summary_event_threshold: 30
+          summary_keep_recent: 10
+          group_session_mode: per_user
+    storage:
+      session: ${TRPC_SESSION_BACKEND:-memory}
+      memory: ${TRPC_MEMORY_BACKEND:-memory}
+      redis_url: ${TRPC_SERVICE_REDIS_URL:-redis://127.0.0.1:6379/15}
+      sql_url: ${TRPC_SERVICE_POSTGRES_URL:-postgresql://trpc_agent:change-me@127.0.0.1/trpc_agent_service}
+    channels:
+      - binding_id: demo-wecom-kf
+        app_id: assistant
+        channel: wecom_kf
+        corp_id: ${WECOM_KF_CORP_ID:-YOUR_CORP_ID}
+        open_kfid: ${WECOM_KF_OPEN_KFID:-YOUR_OPEN_KFID}
+        external_account_id: ${WECOM_KF_OPEN_KFID:-YOUR_OPEN_KFID}
+        secret_ref: env://WECOM_KF_SECRET
+        webhook_secret_ref: env://WECOM_KF_CALLBACK_TOKEN
+        encoding_aes_key_ref: env://WECOM_KF_ENCODING_AES_KEY
+        enabled: true

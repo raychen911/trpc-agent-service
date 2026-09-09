@@ -1,0 +1,72 @@
+tenants:
+  - tenant_id: demo
+    name: Local IM Demo
+    version: 1
+    apps:
+      assistant-offline:
+        app_id: assistant-offline
+        name: Offline Assistant
+        agent_name: offline_assistant
+        instruction: Reply clearly and briefly.
+        model:
+          model_name: offline-echo
+        runtime:
+          summary_enabled: false
+      assistant-configured:
+        app_id: assistant-configured
+        name: Configured Assistant
+        agent_name: configured_assistant
+        instruction: Reply clearly and briefly.
+        model:
+          provider: ${TRPC_AGENT_MODEL_PROVIDER:-openai-compatible}
+          model_name: ${TRPC_AGENT_MODEL_NAME:-gpt-4o-mini}
+          base_url: ${TRPC_AGENT_BASE_URL:-https://api.openai.com/v1}
+          api_key_ref: env://TRPC_AGENT_API_KEY
+        runtime:
+          summary_enabled: false
+    channels:
+      - binding_id: demo-wecom-offline
+        channel: wecom
+        app_id: assistant-offline
+        external_account_id: demo-aibot
+        options: {simulator_mode: fake}
+      - binding_id: demo-wecom-configured
+        channel: wecom
+        app_id: assistant-configured
+        external_account_id: demo-aibot
+        options: {simulator_mode: configured}
+      - binding_id: demo-wecom-kf-offline
+        channel: wecom_kf
+        app_id: assistant-offline
+        corp_id: demo-corp
+        open_kfid: wk-demo-account
+        external_account_id: wk-demo-account
+        options: {simulator_mode: fake}
+      - binding_id: demo-wecom-kf-configured
+        channel: wecom_kf
+        app_id: assistant-configured
+        corp_id: demo-corp
+        open_kfid: wk-demo-account
+        external_account_id: wk-demo-account
+        options: {simulator_mode: configured}
+      - binding_id: demo-telegram-offline
+        channel: telegram
+        app_id: assistant-offline
+        external_account_id: demo-bot
+        options: {simulator_mode: fake}
+      - binding_id: demo-telegram-configured
+        channel: telegram
+        app_id: assistant-configured
+        external_account_id: demo-bot
+        options: {simulator_mode: configured}
+    storage:
+      session: memory
+      memory: memory
+    audit:
+      enabled: true
+      pii_masking: standard
+    budget:
+      daily_requests: 10000
+      daily_input_tokens: 1000000
+      daily_output_tokens: 500000
+      daily_cost_usd: 100

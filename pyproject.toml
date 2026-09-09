@@ -1,0 +1,58 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "trpc-agent-service"
+version = "0.1.0"
+description = "Multi-tenant, node-ready service built on tRPC-Agent-Python"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "Apache-2.0"}
+dependencies = [
+    "trpc-agent-py==1.1.19",
+    "fastapi>=0.95.0",
+    "httpx>=0.25.0",
+    "pydantic>=2.11.3",
+    "python-dotenv>=1.0.0",
+    "PyYAML>=6.0",
+    "redis>=6.2.0",
+    "typer>=0.12.0",
+    "uvicorn>=0.20.0",
+    "cryptography>=43.0.0",
+    "defusedxml>=0.7.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-asyncio", "pytest-cov", "httpx", "flake8", "yapf", "build"]
+postgres = ["asyncpg>=0.29.0", "psycopg2-binary>=2.9.0"]
+wecom = ["wecom-aibot-python-sdk>=1.0.1,<1.1.0"]
+telemetry = [
+    "opentelemetry-sdk>=1.27.0,<2.0.0",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.27.0,<2.0.0",
+]
+
+[project.scripts]
+trpc_service = "trpc_service._cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["trpc_service"]
+
+[tool.pytest.ini_options]
+addopts = "-ra -q"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "unit: isolated test without external services",
+    "component: several local service modules wired together",
+    "integration: requires Redis, PostgreSQL or another real dependency",
+    "e2e: complete inbound-to-delivery service flow",
+    "fault: explicit failure injection and recovery assertion",
+    "live: may call a paid model or a real IM account",
+]
+
+[tool.yapf]
+based_on_style = "pep8"
+column_limit = 120
+indent_width = 4
+split_before_logical_operator = true

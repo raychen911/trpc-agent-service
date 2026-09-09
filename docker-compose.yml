@@ -1,0 +1,96 @@
+x-service: &service
+  build: .
+  environment: &service-env
+    TRPC_SERVICE_ENV: production
+    TRPC_SERVICE_CONFIG: /app/examples/config/tenants.yaml
+    TRPC_SERVICE_REDIS_URL: redis://redis:6379/0
+    TRPC_SESSION_BACKEND: redis
+    TRPC_MEMORY_BACKEND: redis
+    TRPC_SERVICE_ADMIN_TOKEN: ${TRPC_SERVICE_ADMIN_TOKEN:-}
+    TRPC_TENANT_DEMO_TOKEN: ${TRPC_TENANT_DEMO_TOKEN:-}
+    TRPC_SERVICE_POSTGRES_URL: postgresql://trpc_agent:local-only-change-me@postgres:5432/trpc_agent_service
+    TRPC_AGENT_MODEL_PROVIDER: ${TRPC_AGENT_MODEL_PROVIDER:-openai-compatible}
+    TRPC_AGENT_MODEL_NAME: ${TRPC_AGENT_MODEL_NAME:-gpt-4o-mini}
+    TRPC_AGENT_BASE_URL: ${TRPC_AGENT_BASE_URL:-https://api.openai.com/v1}
+    TRPC_AGENT_API_KEY: ${TRPC_AGENT_API_KEY:-}
+    TRPC_SERVICE_OTLP_ENDPOINT: ${TRPC_SERVICE_OTLP_ENDPOINT:-}
+  volumes:
+    - ./examples/config/tenants.yaml:/app/examples/config/tenants.yaml:ro
+    - artifact-data:/app/data/artifacts
+  depends_on:
+    migration:
+      condition: service_completed_successfully
+    redis:
+      condition: service_healthy
+
+services:
+  gateway:
+    <<: *service
+    profiles: ["gateway", "all"]
+    ports: ["8080:8080"]
+    environment:
+      <<: *service-env
+      TRPC_SERVICE_ROLES: gateway,admin
+
+  worker:
+    <<: *service
+    profiles: ["worker", "all"]
+    environment:
+      <<: *service-env
+      TRPC_SERVICE_ROLES: worker
+
+  delivery:
+    <<: *service
+    profiles: ["delivery", "all"]
+    environment:
+      <<: *service-env
+      TRPC_SERVICE_ROLES: delivery
+
+  wecom:
+    <<: *service
+    profiles: ["wecom"]
+    environment:
+      <<: *service-env
+      TRPC_SERVICE_ROLES: wecom
+
+  migration:
+    image: postgres:16-alpine
+    command: ["sh", "-c", "for f in /migrations/*.sql; do psql -v ON_ERROR_STOP=1 -f \"$$f\"; done"]
+    environment:
+      PGHOST: postgres
+      PGDATABASE: trpc_agent_service
+      PGUSER: trpc_agent
+      PGPASSWORD: local-only-change-me
+    volumes:
+      - ./migrations:/migrations:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: ["redis-data:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: trpc_agent_service
+      POSTGRES_USER: trpc_agent
+      POSTGRES_PASSWORD: local-only-change-me
+    volumes: ["postgres-data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trpc_agent -d trpc_agent_service"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  redis-data:
+  postgres-data:
+  artifact-data:

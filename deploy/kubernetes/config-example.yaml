@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: trpc-agent-service-config}
+data:
+  tenants.yaml: |
+    tenants:
+      - tenant_id: demo
+        version: 1
+        api_token_ref: env://TRPC_TENANT_DEMO_TOKEN
+        apps:
+          assistant:
+            app_id: assistant
+            model:
+              provider: ${TRPC_AGENT_MODEL_PROVIDER:-openai-compatible}
+              model_name: ${TRPC_AGENT_MODEL_NAME:-gpt-4o-mini}
+              base_url: ${TRPC_AGENT_BASE_URL:-https://api.openai.com/v1}
+              api_key_ref: env://TRPC_AGENT_API_KEY
+            tools:
+              allowed: [current_utc_time, knowledge_search]
+        storage:
+          session: redis
+          memory: redis
+          redis_url: ${TRPC_SERVICE_REDIS_URL:-redis://redis:6379/0}
+---
+# TEMPLATE ONLY. Replace locally or supply an external Secret controller.
+# Never commit a populated copy. No Redis/PostgreSQL server is created here.
+apiVersion: v1
+kind: Secret
+metadata: {name: trpc-agent-service-secrets}
+type: Opaque
+stringData:
+  TRPC_AGENT_API_KEY: REPLACE_ME
+  model-api-key: REPLACE_ME
+  TRPC_SERVICE_POSTGRES_URL: postgresql://trpc_agent:REPLACE_ME@postgres:5432/trpc_agent_service
+  TRPC_SERVICE_ADMIN_TOKEN: REPLACE_ME
+  TRPC_TENANT_DEMO_TOKEN: REPLACE_ME
