@@ -1,0 +1,43 @@
+tenants:
+  - tenant_id: demo
+    name: Demo Tenant
+    version: 1
+    api_token_ref: env://TRPC_TENANT_DEMO_TOKEN
+    apps:
+      assistant:
+        app_id: assistant
+        name: Demo Assistant
+        agent_name: assistant
+        description: A development assistant.
+        instruction: You are a concise and helpful assistant.
+        model:
+          provider: ${TRPC_AGENT_MODEL_PROVIDER:-openai-compatible}
+          model_name: ${TRPC_AGENT_MODEL_NAME:-gpt-4o-mini}
+          base_url: ${TRPC_AGENT_BASE_URL:-https://api.openai.com/v1}
+          api_key_ref: env://TRPC_AGENT_API_KEY
+        tools:
+          allowed:
+            - current_utc_time
+        runtime:
+          max_concurrent_runs: 20
+          max_run_seconds: 180
+          enable_post_turn_processing: true
+          defer_post_turn_processing: false
+          summary_enabled: true
+          summary_event_threshold: 30
+          summary_keep_recent: 10
+          group_session_mode: per_user
+    storage:
+      session: ${TRPC_SESSION_BACKEND:-memory}
+      memory: ${TRPC_MEMORY_BACKEND:-memory}
+      redis_url: ${TRPC_SERVICE_REDIS_URL:-redis://127.0.0.1:6379/15}
+      sql_url: ${TRPC_SERVICE_POSTGRES_URL:-postgresql://trpc_agent:trpc_agent@127.0.0.1:5432/trpc_agent}
+    audit:
+      enabled: true
+      pii_masking: standard
+      retention_days: 180
+    budget:
+      daily_requests: 10000
+      daily_input_tokens: 1000000
+      daily_output_tokens: 500000
+      daily_cost_usd: 100
