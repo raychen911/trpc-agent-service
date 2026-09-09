@@ -56,7 +56,7 @@ flowchart TB
 
 开发环境由一个进程合并角色，同步 Chat 方便学习；异步 Chat 和 Webhook 走 Queue→Worker→Outbox。生产通过 `build_production_container()` 强制使用 Redis/PostgreSQL，并按角色拆分 Deployment。
 
-每个 SDK `app_name` 使用 `tenant:{tenant_id}:app:{app_id}`。外部用户 ID 和会话主题先哈希再组成内部 ID，因此相同外部 ID 在不同租户、通道和应用中不会碰撞。Worker 每次从共享 Session 后端重载状态，不保留请求级状态，也不依赖 sticky session。
+每个 SDK `app_name` 使用 `tenant:{tenant_id}:app:{app_id}`。外部用户 ID 和会话主题先哈希再组成内部 ID，因此相同外部 ID 在不同租户、通道和应用中会生成不同的内部标识。Worker 每次从共享 Session 后端重载状态，请求可以分发到任意节点。
 
 ## 3. 目录
 
@@ -83,7 +83,7 @@ deploy/          # Kubernetes 示例
 tests/           # unit/component/integration/e2e/fault/live 分层测试
 ```
 
-`skill/` 提供 SDK Skill 类型和执行工具的稳定导出入口；`workspace/` 复用 SDK 的本地和容器运行时，并禁止生产环境启用本地执行模式。`version.py` 只保存包版本 `__version__`，保持单一版本来源。`data/` 初始只包含说明文件，PID、日志和测试附件会在运行后生成，且不会提交到 Git。
+`skill/` 提供 SDK Skill 类型和执行工具的稳定导出入口；`workspace/` 复用 SDK 的本地和容器运行时，生产环境使用容器执行模式。`version.py` 只保存包版本 `__version__`，作为统一版本来源。`data/` 初始包含说明文件，PID、日志和测试附件会在运行后生成，并由 Git 忽略。
 
 代码格式由 YAPF 统一处理，以 PEP 8 为基础，使用 4 空格缩进、120 字符行宽，并在多行表达式中把逻辑运算符放在新行前。`format.sh` 负责格式化，`lint_flake8.sh` 负责检查；两者使用同一组源码目录。
 
@@ -95,7 +95,7 @@ CLI 的主要入口和结果如下：
 | `python -m trpc_service._cli check-config ...` | 校验租户配置，成功输出配置数量 |
 | `python -m trpc_service._cli serve ...` | 启动 FastAPI 服务，提供 Chat、SSE、Admin 和探针接口 |
 | `python -m trpc_service._cli im-demo ...` | 启动三类 IM 的本地可视化页面 `/im` |
-| `python -m trpc_service._cli demo all` | 依次运行 16 个不联网 Demo，并输出 `[PASS]` |
+| `python -m trpc_service._cli demo all` | 依次运行 16 个本地 Demo，并输出 `[PASS]` |
 
 ## 4. 本地安装与运行
 
@@ -108,7 +108,7 @@ notepad .env
 python -m trpc_service._cli check-config examples/config/tenants.yaml --env-file .env
 ```
 
-`.env` 专门保存当前测试模型的信息，并且已被 `.gitignore` 排除。更换模型只需修改下面四项，不需要改 Python 或租户 YAML：
+`.env` 保存测试模型信息，并由 `.gitignore` 排除。更换模型时修改下面四项即可，Python 代码和租户 YAML 保持不变：
 
 ```dotenv
 TRPC_AGENT_MODEL_PROVIDER=openai-compatible
@@ -133,7 +133,7 @@ python -m trpc_service._cli serve ^
 python examples/chat_client.py
 ```
 
-不设置模型密钥时，配置校验、健康检查、OpenAPI 和全部测试仍可运行；真正发起 Chat 时才会惰性创建租户 Runtime 并解析密钥。
+模型密钥采用惰性解析。配置校验、健康检查、OpenAPI 和自动测试可以直接运行；发起真实 Chat 时，服务创建租户 Runtime 并解析对应密钥。
 
 本地验证三类 IM 时运行：
 
@@ -141,7 +141,7 @@ python examples/chat_client.py
 python -m trpc_service._cli im-demo --config examples\config\im-demo.yaml --env-file .env
 ```
 
-然后打开 `http://127.0.0.1:8080/im`。页面会生成真实形状的企业微信、微信客服或 Telegram 消息，再经过 Adapter、队列、Runner、Session/Memory、Outbox 和 Fake Delivery。默认 Fake Model 不联网。详细边界见 [IM 接入与本地可视化验证](docs/im.md)。
+然后打开 `http://127.0.0.1:8080/im`。页面会生成符合企业微信、微信客服或 Telegram 协议结构的消息，再经过 Adapter、队列、Runner、Session/Memory、Outbox 和 Fake Delivery。默认 Fake Model 在本地运行。详细边界见 [IM 接入与本地可视化验证](docs/im.md)。
 
 如果评审环境提供真实 IM 凭据，将其填写到 `.env` 后使用统一入口：
 
@@ -149,12 +149,12 @@ python -m trpc_service._cli im-demo --config examples\config\im-demo.yaml --env-
 python -m trpc_service._cli demo im-live --env-file .env --channels all --confirm --json
 ```
 
-只有一种账号时，把 `all` 改为 `wecom`、`wecom-kf` 或 `telegram`。企业微信检查真实长连接认证；微信客服和 Telegram 会向 `.env` 指定的测试用户发送消息，因此命令必须显式携带 `--confirm`。配置字段、输出说明和完整收发边界见 [IM 接入与本地可视化验证](docs/im.md)。
+只验证一种账号时，把 `all` 改为 `wecom`、`wecom-kf` 或 `telegram`。企业微信检查真实长连接认证；微信客服和 Telegram 会向 `.env` 指定的测试用户发送消息，命令通过 `--confirm` 确认本次真实发送。配置字段、输出说明和完整收发流程见 [IM 接入与本地可视化验证](docs/im.md)。
 
 ## 5. 常用命令
 
 ```bat
-REM 离线 Demo 和测试（不调用模型）
+REM 本地 Demo 和测试（使用 OfflineModel）
 python -m trpc_service._cli demo all
 python -m pytest -m "not integration and not live" -vv
 
@@ -199,16 +199,16 @@ X-Idempotency-Key: client-message-001
 
 完整契约和错误语义见 [HTTP 与内部协议](docs/api.md)。
 
-## 7. 关键工程约束
+## 7. 关键工程设计
 
-1. 不允许把 `tenant_id` 直接信任为 IM payload 字段；IM 必须先通过 `binding_id` 查找已发布绑定。
-2. 同一 Session 的整个 Runner 周期必须在 `SessionExecutionGuard` 内执行。SDK 后端持久化不等于完整并发控制。
-3. Redis 锁 value 是唯一令牌，续租和释放都必须校验所有权；等待超时返回可重试错误。
-4. `AgentRequest.config_version` 在入队时固定，Worker 不应静默切换到处理中发布的新版本。
-5. IM 的 `update_id/msgid` 在入队前占位；Redis Streams 和 Outbox 都是至少一次语义。
-6. 平台强制同步必要后处理：Agent final Event→Summary完成或无需生成→Memory完成→结果提交。不以Runner正常返回推断后处理成功；跨节点读己之写由共享后端集成测试验证。
-7. 日志、指标和 trace 不记录原始 prompt、模型密钥、IM token、数据库密码或高基数外部用户 ID。
-8. InMemory 实现只保证单进程语义，不能用于多副本生产部署。
+1. IM 通过 `binding_id` 查找已发布绑定，并从绑定关系取得可信 `tenant_id`。
+2. 同一 Session 的 Runner 周期由 `SessionExecutionGuard` 保护，实现跨节点串行执行。
+3. Redis 锁使用唯一令牌，续租和释放时校验所有权；等待超时返回可重试错误。
+4. `AgentRequest.config_version` 在入队时固定，Worker 按该版本构建 Runtime。
+5. IM 的 `update_id/msgid` 在入队前占位，Redis Streams 和 Outbox 采用至少一次语义。
+6. 必要后处理按 `Agent final Event → Summary → Memory → 结果提交` 同步执行，阶段记录用于判断完成位置。
+7. 日志、指标和 Trace 使用字段白名单与统一脱敏，覆盖 Prompt、模型密钥、IM Token、数据库密码和外部用户标识。
+8. InMemory 用于单进程开发与测试，多副本部署使用共享 Redis 或 PostgreSQL。
 
 ## 8. 交付文档入口
 
@@ -216,8 +216,7 @@ X-Idempotency-Key: client-message-001
 - 租户 YAML、存储和 Secret：[配置说明](docs/configuration.md)
 - HTTP/SSE 与内部协议：[接口说明](docs/api.md)
 - 测试、调试和扩展 Adapter：[开发指南](docs/development.md)
-- 正式架构设计：[架构设计文档](文档/架构设计文档.md)
-- 题目要求与验证证据：[交付清单](文档/交付清单.md)
-- 题目逐项核对与提交范围：[交付清单](文档/交付清单.md)
+- 正式架构设计：[架构设计文档](架构设计文档.md)
+- 测试范围与预期结果：[测试说明](docs/testing.md)
 
-当前实现覆盖题目要求的主链路与全部设计交付物。企业微信、微信客服和 Telegram 的协议、本地完整链路及统一 Live 验证入口已经提供；真实账号验证由验收环境注入 Bot 凭据后执行。
+实现覆盖题目要求的主链路与设计交付物。企业微信、微信客服和 Telegram 已提供协议适配、本地完整链路和统一 Live 验证入口；真实账号验证由验收环境注入 Bot 凭据后执行。

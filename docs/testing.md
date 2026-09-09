@@ -6,7 +6,7 @@
 cd /d F:\wfy\Git\trpc-agent-service
 ```
 
-离线测试不读取真实模型密钥，不连接微信、Redis 或 PostgreSQL，也不会产生费用。
+本地测试使用 OfflineModel 和内存实现，适合快速验证业务逻辑，运行过程不产生模型调用费用。
 
 ## 1. Windows 临时目录权限
 
@@ -24,7 +24,7 @@ set "TEMP=%USERPROFILE%\trpc-pytest-temp"
 set "TMP=%USERPROFILE%\trpc-pytest-temp"
 ```
 
-设置后，pytest 会把临时文件写到 `%USERPROFILE%\trpc-pytest-temp`。命令中的 `-p no:cacheprovider` 会关闭 `.pytest_cache`。这些环境变量只在当前 Anaconda Prompt 中有效，关闭窗口后自动失效；临时目录不会自动删除。
+设置后，pytest 会把临时文件写到 `%USERPROFILE%\trpc-pytest-temp`。命令中的 `-p no:cacheprovider` 会关闭 `.pytest_cache`。这些环境变量在当前 Anaconda Prompt 中生效；临时目录会保留，后续测试可以继续使用。
 
 ## 2. 一次运行全部离线测试
 
@@ -40,13 +40,13 @@ python -m pytest -m "not integration and not live" -p no:cacheprovider -vv
 145 passed, 22 deselected
 ```
 
-`22 deselected` 表示命令主动排除了 18 项数据库集成测试和 4 项 Live 条件检查，不是测试失败。
+`22 deselected` 表示本次命令只选择了本地测试，数据库集成测试和 Live 条件检查留给后续对应命令运行。
 
 如果结果是 `97 passed, 5 errors`，而且错误都指向 `tmp_path` 或 `pytest-of-用户名`，说明问题仍是临时目录权限。重新执行第 1 节的命令。
 
 ## 3. 按模块运行 pytest
 
-下面的命令都不连接真实外部服务。
+下面的命令使用本地组件完成验证。
 
 | 运行命令 | 测试模块 | 预期结果 |
 |---|---|---|
@@ -95,7 +95,7 @@ python -m trpc_service._cli demo all
 | `python -m trpc_service._cli demo channels --json` | IM 统一消息协议 | 输出 `NormalizedInboundMessage` |
 | `python -m trpc_service._cli demo artifacts --json` | 文件和 Knowledge 隔离 | 本租户可读，跨租户结果为 0 |
 | `python -m trpc_service._cli demo governance --json` | 审批和脱敏 | 审批状态为 `used`，Secret 显示为 `***` |
-| `python -m trpc_service._cli demo telemetry --json` | 指标和标签限制 | 输出请求指标，高基数标签被拒绝 |
+| `python -m trpc_service._cli demo telemetry --json` | 指标和标签限制 | 输出请求指标，并验证标签采用低基数字段 |
 | `python -m trpc_service._cli demo migration --json` | 迁移状态和 checkpoint | 最终为 `completed`，源和目标 hash 相同 |
 | `python -m trpc_service._cli demo e2e --json` | 入站到 Fake 投递 | `state=succeeded`、`model_calls=1`、`delivered=1` |
 | `python -m trpc_service._cli demo customer-service --json` | 微信客服重复通知到回复 | 两次通知只回复一次，cursor 为 `cursor-1` |
@@ -104,7 +104,7 @@ python -m trpc_service._cli demo all
 | `python -m trpc_service._cli demo session-lock --json` | 20 个任务竞争锁 | 最大并发为 1，代次为 1～20 |
 | `python -m trpc_service._cli demo idempotency-recovery --json` | 入队失败后的修复 | 只创建一个请求，修复一个任务 |
 
-Demo 通过表示离线业务链路正常，不代表真实数据库、模型或 IM 账号已经接通。
+Demo 通过表示本地业务链路正常。真实数据库、模型和 IM 账号分别使用后续 Integration 与 Live 命令验证。
 
 ## 4.1 本地可视化验证三类 IM
 
@@ -120,7 +120,7 @@ python -m trpc_service._cli im-demo --config examples\config\im-demo.yaml --env-
 python -m pytest tests\test_channels.py tests\test_customer_service.py tests\test_v3_channels_migration.py tests\test_im_visual_demo.py -p no:cacheprovider -vv
 ```
 
-这组测试不连接真实 IM，也不调用真实模型。它验证三类官方形状的消息字段、认证、附件下载入库、幂等、Queue、Runner、Outbox、Fake Delivery，以及限流、发送超时和人工接管。正确结果是全部 `PASSED`。它不能代替账号权限和公网收发联调。
+这组测试使用模拟客户端和 OfflineModel，验证三类官方形状的消息字段、认证、附件下载入库、幂等、Queue、Runner、Outbox、Fake Delivery，以及限流、发送超时和人工接管。正确结果是全部 `PASSED`。账号权限和公网收发由 Live 命令继续验证。
 
 ## 4.2 统一验证真实 IM 账号
 
@@ -142,7 +142,7 @@ python -m trpc_service._cli demo im-live --env-file .env --channels all --confir
 | `wecom-kf` | 获取真实 access token，检查客服状态并向测试客户发送消息 | `status=passed`、`delivered=true` |
 | `telegram` | 调用真实 Bot API 向测试 Chat 发送消息 | `status=passed`、`delivered=true` |
 
-命令会真实联网，微信客服和 Telegram 会真实发送测试消息，因此必须确认 `.env` 中的接收人属于测试环境。全部通道通过时退出码为 0；任一通道缺少凭据或请求失败时退出码为 1，同时 JSON 会保留其他通道的检查结果。该命令不在默认自动测试中运行，不会因执行 `pytest` 或 `demo all` 意外发消息。
+命令会真实联网，微信客服和 Telegram 会发送测试消息，因此 `.env` 中填写验收环境的接收人。全部通道通过时退出码为 0；任一通道缺少凭据或请求失败时退出码为 1，同时 JSON 会保留其他通道的检查结果。该入口由 `--confirm` 显式触发，`pytest` 和 `demo all` 使用本地模拟客户端。
 
 ## 5. 测试真实 Redis 和 PostgreSQL
 
@@ -173,7 +173,7 @@ python -m pytest -m integration -p no:cacheprovider -vv
 | `tests/test_native_fencing_integration.py` | 旧代次拒写、双进程 Session/Memory、崩溃恢复和 PostgreSQL 原子事务 | `7 passed` |
 | `tests/test_real_storage_migration.py` | Redis 与 PostgreSQL 双向迁移、双写和回滚 | `5 passed`（另有 8 项离线测试） |
 
-全部通过时应得到 `18 passed`。其中迁移测试验证 Redis→PostgreSQL、PostgreSQL→Redis、迁移期间双写、20 个回填期新增 Session、旧目标隔离及双向观察期回滚。这些测试不调用真实模型或 IM；没有 Docker 或没有设置测试 URL 时会显示 `skipped`。
+全部通过时会得到 `18 passed`。其中迁移测试验证 Redis→PostgreSQL、PostgreSQL→Redis、迁移期间双写、20 个回填期新增 Session、旧目标隔离及双向观察期回滚。这些测试使用真实 Redis/PostgreSQL 和本地模型；Docker 服务或测试 URL 缺失时显示 `skipped`。
 
 只测试迁移模块：
 
@@ -191,7 +191,7 @@ python -m pytest -m live -p no:cacheprovider -vv
 
 4 项 Live 用例分别检查模型、企业微信、微信客服和 Telegram 的环境变量。没有填写凭据时显示 `skipped`，凭据齐全时通过检查。
 
-这里的 `passed` 只表示凭据齐全，不表示真实模型或 IM 已经连接。微信客服的实际联调方法见 [customer-service.md](customer-service.md)。
+这里的 `passed` 表示凭据字段检查通过。真实模型或 IM 的连接与收发结果由对应 Live 命令输出，微信客服联调方法见 [customer-service.md](customer-service.md)。
 
 ## 7. 覆盖率和静态检查
 
@@ -210,7 +210,7 @@ python -m compileall -q trpc_service tests
 | `PASSED` | 测试通过 |
 | `FAILED` | 断言不符合预期，检查业务代码 |
 | `ERROR` | 测试没正常开始，通常是环境、依赖或权限问题 |
-| `SKIPPED` | 缺少数据库或凭据，测试未运行 |
-| `DESELECTED` | 被 `-m` 排除，测试未运行 |
+| `SKIPPED` | 当前环境缺少该测试需要的数据库或凭据 |
+| `DESELECTED` | 当前 `-m` 条件没有选择该测试 |
 
-报告问题时，请提供运行命令、最后的汇总行和第一个完整错误。不要发送 `.env`、数据库密码或真实客户消息。
+报告问题时，提供运行命令、最后的汇总行和第一个完整错误；敏感配置使用脱敏后的字段名和错误类型。

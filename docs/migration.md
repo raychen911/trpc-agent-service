@@ -11,9 +11,9 @@
 - Redis 使用 `SCAN`、PostgreSQL 使用稳定游标分批读取，并保存 checkpoint、逐资源 hash、dirty 记录和执行租约；
 - 支持 Redis → PostgreSQL 和 PostgreSQL → Redis；
 - 请求固定 `storage_route_version`，切换时短暂停止该租户的新请求。
-- 每次阶段或批次推进记录平台 Trace、低基数 Metric 和 PostgreSQL Audit，不记录消息正文或数据库凭据。
+- 每次阶段或批次推进都会记录平台 Trace、低基数 Metric 和 PostgreSQL Audit，观测字段采用资源摘要和脱敏信息。
 
-实现锁定 `trpc-agent-py 1.1.19` 的存储格式，没有修改 SDK。迁移完成后源数据不会自动删除。
+实现适配 `trpc-agent-py 1.1.19` 的存储格式，全部迁移逻辑位于服务仓库。迁移完成后源数据进入保留期，用于观察和回滚。
 
 ## 迁移流程
 
@@ -44,13 +44,13 @@ completed
 
 ## 一致性边界
 
-Redis 与 PostgreSQL 之间没有跨库事务。主库写成功而镜像写失败时，请求不能标为成功，失败资源会写入 `migration_dirty_key`。再次验证时，从当前主库重建完整快照并幂等覆盖目标库，不重新调用模型。
+Redis 与 PostgreSQL 通过阶段记录协调跨库一致性。主库写成功而镜像写失败时，请求进入可恢复状态，失败资源写入 `migration_dirty_key`。再次验证时，服务从当前主库重建完整快照并幂等覆盖目标库，同时复用已经保存的模型结果。
 
 Session 以完整 Event JSON 的规范化 hash 对账。时间统一到 PostgreSQL 可表示的微秒精度；空的 `long_running_tool_ids` 使用同一表示。Memory 的 SQL 表只保存 SDK 支持的投影，因此按 Event ID 集合及检索效果核对，完整 Event 仍以 Session 为真值。
 
-只有 `mismatch_count=0` 且 `dirty_count=0` 才能切换。观察期内可以安全回滚；进入 `target_only` 后若要回退，需要创建一项反向迁移，不能直接指向可能落后的旧数据。
+迁移在 `mismatch_count=0` 且 `dirty_count=0` 时切换。观察期内可以按原路由回滚；进入 `target_only` 后，通过新建反向迁移把增量数据同步回原后端。
 
-PostgreSQL → Redis 时，SQL Reader 使用只读 ORM 查询，不调用会刷新 TTL 的 SDK 查询方法。Redis 目标中仅存在于目标端的旧 Session/Memory 会先写入 `migration_target_backup`，再按租户和 App 范围删除；不会使用 `FLUSHDB` 或跨租户清理。
+PostgreSQL → Redis 时，SQL Reader 使用只读 ORM 查询，保持源记录的 TTL 语义。Redis 目标中仅存在于目标端的旧 Session/Memory 会先写入 `migration_target_backup`，再按租户和 App 范围清理。清理操作限定具体 Key 范围，确保其他租户数据保持原样。
 
 ## 管理接口
 
@@ -79,12 +79,12 @@ python -m trpc_service._cli demo migration-live --confirm --json
 python -m trpc_service._cli demo migration-reverse-live --confirm --json
 ```
 
-该命令会改动测试 PostgreSQL 的配置和迁移表，必须使用专用测试库。未提供两个测试 URL 或没有 `--confirm` 时会拒绝执行。
+该命令会写入测试 PostgreSQL 的配置和迁移表，因此使用专用测试库。命令会检查两个测试 URL 和 `--confirm`，条件齐全后开始执行。
 
 验收场景包括：
 
 - 回填期间新增 20 个 Session；
-- 重复执行批次不产生重复数据；
+- 重复执行批次通过资源 Hash 和 Event ID 复用已有数据；
 - Coordinator 重建后从 checkpoint 继续；
 - 目标端存在差异时阻止切换；
 - 旧目标数据隔离备份；
@@ -92,4 +92,4 @@ python -m trpc_service._cli demo migration-reverse-live --confirm --json
 
 真实 Redis/PostgreSQL 用例会核对 Session、State、Event、Summary 与 Memory 的数量和 Hash。生产压测使用相同指标观察 batch latency、dirty 和 mismatch。
 
-本页实现范围是 Redis 与 PostgreSQL 之间的 Session/Memory 双向迁移。Knowledge 向量索引采用独立 Provider 和版本化重建策略，不与 Session/Memory 的快照格式混用。
+本页实现范围是 Redis 与 PostgreSQL 之间的 Session/Memory 双向迁移。Knowledge 向量索引采用独立 Provider 和版本化重建策略，与 Session/Memory 快照分别管理。
