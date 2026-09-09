@@ -1,0 +1,116 @@
+{
+  "private_text": {
+    "update_id": 1001,
+    "message": {
+      "message_id": 11,
+      "date": 1787932800,
+      "from": {
+        "id": 101,
+        "is_bot": false,
+        "first_name": "Alice"
+      },
+      "chat": {
+        "id": 101,
+        "type": "private",
+        "first_name": "Alice"
+      },
+      "text": "hello agent"
+    }
+  },
+  "group_topic_photo": {
+    "update_id": 1002,
+    "message": {
+      "message_id": 12,
+      "message_thread_id": 77,
+      "date": 1787932801,
+      "from": {
+        "id": 202,
+        "is_bot": false,
+        "first_name": "Bob"
+      },
+      "chat": {
+        "id": -1001234567890,
+        "type": "supergroup",
+        "title": "Engineering"
+      },
+      "caption": "please inspect",
+      "photo": [
+        {
+          "file_id": "photo-small-secret-id",
+          "file_unique_id": "photo-unique",
+          "width": 90,
+          "height": 90,
+          "file_size": 1000
+        },
+        {
+          "file_id": "photo-large-secret-id",
+          "file_unique_id": "photo-unique",
+          "width": 1280,
+          "height": 720,
+          "file_size": 90000
+        }
+      ],
+      "reply_to_message": {
+        "message_id": 9,
+        "date": 1787932700,
+        "chat": {
+          "id": -1001234567890,
+          "type": "supergroup"
+        }
+      }
+    }
+  },
+  "callback_query": {
+    "update_id": 1003,
+    "callback_query": {
+      "id": "callback-001",
+      "from": {
+        "id": 303,
+        "is_bot": false,
+        "first_name": "Carol"
+      },
+      "message": {
+        "message_id": 13,
+        "date": 1787932802,
+        "chat": {
+          "id": -900,
+          "type": "group",
+          "title": "Operations"
+        },
+        "text": "Approve?"
+      },
+      "data": "approve:ticket-7"
+    }
+  },
+  "my_chat_member": {
+    "update_id": 1004,
+    "my_chat_member": {
+      "chat": {
+        "id": -900,
+        "type": "group"
+      },
+      "from": {
+        "id": 303,
+        "is_bot": false,
+        "first_name": "Carol"
+      },
+      "date": 1787932803,
+      "old_chat_member": {
+        "status": "member",
+        "user": {
+          "id": 999,
+          "is_bot": true,
+          "first_name": "Agent"
+        }
+      },
+      "new_chat_member": {
+        "status": "left",
+        "user": {
+          "id": 999,
+          "is_bot": true,
+          "first_name": "Agent"
+        }
+      }
+    }
+  }
+}

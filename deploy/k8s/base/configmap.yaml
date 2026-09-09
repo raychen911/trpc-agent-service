@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trpc-agent-config
+  namespace: trpc-agent
+data:
+  TRPC_SERVICE_ENV: production
+  TRPC_SERVICE_LOG_LEVEL: INFO
+  TRPC_SERVICE_PUBLIC_BASE_URL: https://agent.example.com
+  TRPC_SERVICE_OTEL_ENABLED: "true"
+  TRPC_SERVICE_OTEL_ENDPOINT: http://otel-collector.observability.svc:4317
+  TRPC_SERVICE_MODEL_PROVIDER: openai
+  TRPC_SERVICE_MODEL_NAME: gpt-4.1-mini
+  TRPC_SERVICE_EVENT_STORE_BACKEND: sql
+  TRPC_SERVICE_SECRET_ENV_ALLOWLIST: '["WECOM_TOKEN","WECOM_AES_KEY","TELEGRAM_BOT_TOKEN","TELEGRAM_WEBHOOK_SECRET"]'
+

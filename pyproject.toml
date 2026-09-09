@@ -1,0 +1,125 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "trpc-agent-service"
+version = "0.1.0"
+description = "Production-minded multi-tenant, node-scalable Agent platform on tRPC-Agent-Python."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+authors = [{ name = "曹清妍" }]
+dependencies = [
+  "aiogram==3.31.0",
+  "aiosqlite>=0.20,<1",
+  "alembic>=1.14,<2",
+  "asyncpg>=0.30,<1",
+  "cryptography==50.0.1",
+  "fastapi>=0.115,<1",
+  "httpx==0.28.1",
+  "opentelemetry-api>=1.29,<2",
+  "opentelemetry-exporter-otlp-proto-grpc>=1.29,<2",
+  "opentelemetry-instrumentation-fastapi>=0.50b0,<1",
+  "opentelemetry-sdk>=1.29,<2",
+  "prometheus-client>=0.21,<1",
+  "pydantic>=2.10,<3",
+  "pydantic-settings>=2.7,<3",
+  "python-json-logger>=3.2,<5",
+  "redis>=5.2,<8",
+  "sqlalchemy[asyncio]>=2.0.36,<3",
+  "trpc-agent-py==1.1.19",
+  "uvicorn[standard]>=0.34,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "hypothesis==6.165.10",
+  "mypy>=1.14,<2",
+  "pytest==9.1.1",
+  "pytest-asyncio==1.4.0",
+  "pytest-cov>=6,<8",
+  "respx==0.23.1",
+  "ruff>=0.9,<1",
+]
+
+[project.scripts]
+trpc-agent-service = "trpc_service._cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["trpc_service"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"alembic.ini" = "trpc_service/_alembic.ini"
+"migrations" = "trpc_service/_migrations"
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-config --strict-markers"
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+  "integration: tests that exercise multiple platform components",
+  "postgres: tests that require PostgreSQL",
+  "release_gate: destructive or high-volume pre-release evidence tests",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["trpc_service"]
+
+[tool.coverage.report]
+fail_under = 85
+show_missing = true
+skip_covered = true
+exclude_also = [
+  "if TYPE_CHECKING:",
+  "if __name__ == .__main__.:",
+  "raise NotImplementedError",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["data"]
+
+[tool.ruff.lint]
+select = [
+  "A",
+  "ASYNC",
+  "B",
+  "C4",
+  "E",
+  "F",
+  "FAST",
+  "I",
+  "N",
+  "PERF",
+  "PIE",
+  "RUF",
+  "S",
+  "SIM",
+  "UP",
+]
+ignore = ["S101"]
+
+[tool.ruff.lint.per-file-ignores]
+"migrations/versions/*.py" = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+check_untyped_defs = true
+disallow_any_generics = true
+disallow_incomplete_defs = true
+disallow_untyped_defs = true
+no_implicit_optional = true
+plugins = ["pydantic.mypy"]
+warn_redundant_casts = true
+warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = ["trpc_agent_sdk.*"]
+ignore_missing_imports = true
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true

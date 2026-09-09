@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <meta name="theme-color" content="#0b1118">
+    <title>Agent Control Plane</title>
+    <meta
+      name="description"
+      content="tRPC-Agent 多租户节点化部署平台的安全运维控制台"
+    >
+    <link rel="icon" href="/console/assets/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/console/assets/console.css">
+  </head>
+  <body>
+    <a class="skip-link" href="#workspace">跳到主要内容</a>
+
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="主导航">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">T</span>
+          <div>
+            <strong>Agent Control</strong>
+            <span>多租户控制平面</span>
+          </div>
+        </div>
+
+        <nav class="nav-stack">
+          <button
+            class="nav-item is-active"
+            type="button"
+            data-view="overview"
+            aria-current="page"
+          >
+            <span class="nav-index">01</span>
+            <span>运行总览</span>
+          </button>
+          <button class="nav-item" type="button" data-view="tenants">
+            <span class="nav-index">02</span>
+            <span>租户与版本</span>
+          </button>
+          <button class="nav-item" type="button" data-view="configuration">
+            <span class="nav-index">03</span>
+            <span>配置发布</span>
+          </button>
+          <button class="nav-item" type="button" data-view="audit">
+            <span class="nav-index">04</span>
+            <span>审计追踪</span>
+          </button>
+          <button class="nav-item" type="button" data-view="evidence">
+            <span class="nav-index">05</span>
+            <span>验收证据</span>
+          </button>
+        </nav>
+
+        <div class="sidebar-foot">
+          <div class="security-note">
+            <span class="status-dot" aria-hidden="true"></span>
+            <div>
+              <strong>本地安全会话</strong>
+              <span>密钥仅保存在当前标签页</span>
+            </div>
+          </div>
+          <button id="sign-out" class="text-button" type="button">锁定控制台</button>
+        </div>
+      </aside>
+
+      <main id="workspace" class="workspace">
+        <header class="topbar">
+          <div class="breadcrumb">
+            <span>TRPC-AGENT-SERVICE</span>
+            <span aria-hidden="true">/</span>
+            <strong id="breadcrumb-current">运行总览</strong>
+          </div>
+          <div class="topbar-actions">
+            <span id="connection-state" class="connection-state is-offline">
+              <span class="status-dot" aria-hidden="true"></span>
+              未连接
+            </span>
+            <button id="refresh" class="button button-secondary" type="button">
+              刷新数据
+            </button>
+          </div>
+        </header>
+
+        <section class="view is-active" data-view-panel="overview" aria-labelledby="overview-title">
+          <div class="page-heading">
+            <div>
+              <p class="eyebrow">OPERATIONS / LIVE SNAPSHOT</p>
+              <h1 id="overview-title">Agent 平台运行总览</h1>
+              <p class="page-summary">
+                在一个视图中检查租户、消息队列、会话状态和故障信号。
+              </p>
+            </div>
+            <div class="snapshot-meta">
+              <span id="environment-badge" class="badge">—</span>
+              <span id="snapshot-time">尚未刷新</span>
+            </div>
+          </div>
+
+          <div id="metric-grid" class="metric-grid" aria-live="polite"></div>
+
+          <div class="dashboard-grid">
+            <article class="panel panel-wide">
+              <div class="panel-heading">
+                <div>
+                  <p class="panel-kicker">TENANT HEALTH</p>
+                  <h2>租户运行状态</h2>
+                </div>
+                <button class="text-button" type="button" data-view-jump="tenants">
+                  查看全部版本
+                </button>
+              </div>
+              <div id="tenant-overview" class="tenant-table-wrap"></div>
+            </article>
+
+            <article class="panel">
+              <div class="panel-heading">
+                <div>
+                  <p class="panel-kicker">MESSAGE PATH</p>
+                  <h2>主链健康脉冲</h2>
+                </div>
+              </div>
+              <ol class="pipeline" aria-label="消息处理链路">
+                <li><span>01</span><strong>Gateway</strong><small>验签与 T0 持久化</small></li>
+                <li><span>02</span><strong>Worker</strong><small>租约、Runner 与 T2</small></li>
+                <li><span>03</span><strong>Projector</strong><small>Summary / Memory</small></li>
+                <li><span>04</span><strong>Dispatcher</strong><small>IM 异步回复</small></li>
+              </ol>
+              <div id="pipeline-advice" class="callout">连接后显示运行建议。</div>
+            </article>
+          </div>
+        </section>
+
+        <section class="view" data-view-panel="tenants" aria-labelledby="tenants-title" hidden>
+          <div class="page-heading">
+            <div>
+              <p class="eyebrow">TENANT DIRECTORY</p>
+              <h1 id="tenants-title">租户与配置版本</h1>
+              <p class="page-summary">每次发布产生不可变版本；回滚只切换活动快照。</p>
+            </div>
+            <button class="button button-primary" type="button" data-new-config>新建租户配置</button>
+          </div>
+
+          <div class="tenant-workspace">
+            <div>
+              <div class="section-label">已接入租户</div>
+              <div id="tenant-list" class="tenant-list"></div>
+            </div>
+            <article id="tenant-detail" class="panel detail-panel">
+              <div class="empty-state">
+                <span class="empty-glyph" aria-hidden="true">⌁</span>
+                <h2>选择一个租户</h2>
+                <p>查看活动应用、通道、存储路由和不可变版本记录。</p>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section
+          class="view"
+          data-view-panel="configuration"
+          aria-labelledby="configuration-title"
+          hidden
+        >
+          <div class="page-heading">
+            <div>
+              <p class="eyebrow">IMMUTABLE CONFIGURATION</p>
+              <h1 id="configuration-title">发布租户配置</h1>
+              <p class="page-summary">
+                编辑完整 TenantSpec。密钥字段只能填写 <code>secret://</code> 引用。
+              </p>
+            </div>
+            <div class="button-row">
+              <button id="load-template" class="button button-secondary" type="button">
+                载入安全模板
+              </button>
+              <button id="publish-config" class="button button-primary" type="button">
+                校验并发布
+              </button>
+            </div>
+          </div>
+
+          <div class="editor-grid">
+            <article class="panel editor-panel">
+              <div class="field-row">
+                <label for="tenant-path">目标租户 ID</label>
+                <input
+                  id="tenant-path"
+                  type="text"
+                  autocomplete="off"
+                  spellcheck="false"
+                  placeholder="例如 tenant-demo"
+                >
+              </div>
+              <label class="editor-label" for="config-editor">TenantSpec JSON</label>
+              <textarea
+                id="config-editor"
+                class="code-editor"
+                spellcheck="false"
+                aria-describedby="editor-help"
+              ></textarea>
+              <p id="editor-help" class="field-help">
+                发布前由服务端 Pydantic 模型再次校验；页面不会保存或回显真实密钥。
+              </p>
+            </article>
+
+            <aside class="panel guide-panel">
+              <p class="panel-kicker">PUBLISH CHECKLIST</p>
+              <h2>发布门禁</h2>
+              <ul class="check-list">
+                <li><span>01</span>tenant_id 与路径一致</li>
+                <li><span>02</span>revision 必须连续递增</li>
+                <li><span>03</span>app 与 channel revision 匹配</li>
+                <li><span>04</span>回调路径由 public_callback_id 推导</li>
+                <li><span>05</span>所有凭据只使用 secret 引用</li>
+              </ul>
+              <div class="callout callout-muted">
+                当前编辑器面向工程验收，保留完整 schema 表达能力，不在浏览器中收集真实 Token。
+              </div>
+            </aside>
+          </div>
+        </section>
+
+        <section class="view" data-view-panel="audit" aria-labelledby="audit-title" hidden>
+          <div class="page-heading">
+            <div>
+              <p class="eyebrow">AUDIT / TRACE</p>
+              <h1 id="audit-title">审计追踪</h1>
+              <p class="page-summary">以租户为边界查看决策、耗时、错误与 trace 关联。</p>
+            </div>
+            <label class="select-field">
+              <span>当前租户</span>
+              <select id="audit-tenant"></select>
+            </label>
+          </div>
+          <article class="panel">
+            <div id="audit-table" class="audit-table-wrap"></div>
+          </article>
+        </section>
+
+        <section class="view" data-view-panel="evidence" aria-labelledby="evidence-title" hidden>
+          <div class="page-heading">
+            <div>
+              <p class="eyebrow">ACCEPTANCE EVIDENCE</p>
+              <h1 id="evidence-title">冲刺档验收证据</h1>
+              <p class="page-summary">把“设计里写到了”转成可以直接检查的工程证据。</p>
+            </div>
+          </div>
+
+          <div class="evidence-grid">
+            <article class="evidence-card">
+              <span class="evidence-no">01</span>
+              <h2>多租户与节点化</h2>
+              <p>不可变配置、无状态 Worker、租约、fencing token 与 OCC。</p>
+              <strong>代码 + 合同测试</strong>
+            </article>
+            <article class="evidence-card">
+              <span class="evidence-no">02</span>
+              <h2>双 IM 接入</h2>
+              <p>企业微信加密回调与 Telegram webhook 使用独立协议适配器。</p>
+              <strong>协议向量 + HTTP 测试</strong>
+            </article>
+            <article class="evidence-card">
+              <span class="evidence-no">03</span>
+              <h2>数据可靠性</h2>
+              <p>Inbox、staged event、T2 原子提交、Outbox 和投影水位。</p>
+              <strong>迁移 + 并发不变量</strong>
+            </article>
+            <article class="evidence-card">
+              <span class="evidence-no">04</span>
+              <h2>隔离与安全</h2>
+              <p>FORCE RLS、租户 HMAC 身份、身份 ACL、输入/输出 Filter、密钥引用与脱敏。</p>
+              <strong>负向测试 + 审计</strong>
+            </article>
+            <article class="evidence-card evidence-card-warning">
+              <span class="evidence-no">05</span>
+              <h2>仍需实网验证</h2>
+              <p>真实模型、企微/Telegram、生产 PostgreSQL 和完整跨进程 trace。</p>
+              <strong>明确边界，不伪造结果</strong>
+            </article>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="auth-dialog" class="auth-dialog">
+      <form id="auth-form" method="dialog" class="auth-card">
+        <div class="auth-brand"><span class="brand-mark">T</span></div>
+        <p class="eyebrow">CONTROL PLANE ACCESS</p>
+        <h1>连接管理控制台</h1>
+        <p>输入本机配置的 Admin API Key。它只保存在当前浏览器标签页。</p>
+        <label for="admin-key">Admin API Key</label>
+        <input id="admin-key" type="password" autocomplete="current-password" required>
+        <p id="auth-error" class="form-error" role="alert"></p>
+        <button class="button button-primary button-block" type="submit">安全连接</button>
+        <small>开发环境默认值可在本地 <code>.env</code> 中查看，请勿提交真实密钥。</small>
+      </form>
+    </dialog>
+
+    <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
+
+    <script src="/console/assets/console.js" defer></script>
+  </body>
+</html>

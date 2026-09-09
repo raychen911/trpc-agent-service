@@ -1,0 +1,138 @@
+services:
+  api:
+    build: .
+    command: ["serve", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      TRPC_SERVICE_ENV: development
+      TRPC_SERVICE_DATABASE_URL: postgresql+asyncpg://agent_runtime:agent-runtime-dev@postgres:5432/agent
+      TRPC_SERVICE_REDIS_URL: redis://redis:6379/0
+      TRPC_SERVICE_SECRET_KEY: local-compose-secret-key-change-before-production
+      TRPC_SERVICE_ADMIN_API_KEY: local-compose-admin-key
+      TRPC_SERVICE_SECRET_ENV_ALLOWLIST: '["OPENAI_API_KEY", "TELEGRAM_BOT_TOKEN"]'
+      TRPC_SERVICE_OTEL_ENDPOINT: http://otel-collector:4317
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+    ports:
+      - "8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    build: .
+    command: ["worker"]
+    environment:
+      TRPC_SERVICE_ENV: development
+      TRPC_SERVICE_DATABASE_URL: postgresql+asyncpg://agent_runtime:agent-runtime-dev@postgres:5432/agent
+      TRPC_SERVICE_REDIS_URL: redis://redis:6379/0
+      TRPC_SERVICE_SECRET_KEY: local-compose-secret-key-change-before-production
+      TRPC_SERVICE_ADMIN_API_KEY: local-compose-admin-key
+      TRPC_SERVICE_SECRET_ENV_ALLOWLIST: '["OPENAI_API_KEY", "TELEGRAM_BOT_TOKEN"]'
+      TRPC_SERVICE_MODEL_PROVIDER: ${TRPC_SERVICE_MODEL_PROVIDER:-openai}
+      TRPC_SERVICE_MODEL_API_KEY: ${OPENAI_API_KEY:-}
+      TRPC_SERVICE_EVENT_STORE_BACKEND: sql
+      TRPC_SERVICE_OTEL_ENDPOINT: http://otel-collector:4317
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+
+  dispatcher:
+    build: .
+    command: ["dispatcher"]
+    environment:
+      TRPC_SERVICE_ENV: development
+      TRPC_SERVICE_DATABASE_URL: postgresql+asyncpg://agent_runtime:agent-runtime-dev@postgres:5432/agent
+      TRPC_SERVICE_REDIS_URL: redis://redis:6379/0
+      TRPC_SERVICE_SECRET_KEY: local-compose-secret-key-change-before-production
+      TRPC_SERVICE_ADMIN_API_KEY: local-compose-admin-key
+      TRPC_SERVICE_SECRET_ENV_ALLOWLIST: '["TELEGRAM_BOT_TOKEN"]'
+      TRPC_SERVICE_OTEL_ENDPOINT: http://otel-collector:4317
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+
+  projector:
+    build: .
+    command: ["projector"]
+    environment:
+      TRPC_SERVICE_ENV: development
+      TRPC_SERVICE_DATABASE_URL: postgresql+asyncpg://agent_runtime:agent-runtime-dev@postgres:5432/agent
+      TRPC_SERVICE_REDIS_URL: redis://redis:6379/0
+      TRPC_SERVICE_SECRET_KEY: local-compose-secret-key-change-before-production
+      TRPC_SERVICE_ADMIN_API_KEY: local-compose-admin-key
+      TRPC_SERVICE_EVENT_STORE_BACKEND: sql
+      TRPC_SERVICE_OTEL_ENDPOINT: http://otel-collector:4317
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+
+  migrate:
+    build: .
+    command: ["migrate"]
+    environment:
+      TRPC_SERVICE_ENV: development
+      TRPC_SERVICE_DATABASE_URL: postgresql+asyncpg://agent_owner:agent-owner-dev@postgres:5432/agent
+      TRPC_SERVICE_SECRET_KEY: local-compose-secret-key-change-before-production
+      TRPC_SERVICE_ADMIN_API_KEY: local-compose-admin-key
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    restart: "no"
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: agent
+      POSTGRES_USER: agent_owner
+      POSTGRES_PASSWORD: agent-owner-dev
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agent_owner -d agent"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./deploy/postgres-init.sql:/docker-entrypoint-initdb.d/10-runtime-role.sql:ro
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - redis_data:/data
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.120.0
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./deploy/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "4317:4317"
+      - "9464:9464"
+
+volumes:
+  postgres_data:
+  redis_data:

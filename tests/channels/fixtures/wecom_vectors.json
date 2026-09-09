@@ -1,0 +1,37 @@
+{
+  "source": {
+    "protocol": "Enterprise WeChat intelligent-robot JSON callback",
+    "note": "Synthetic non-secret vector using fixed random bytes; never use these credentials."
+  },
+  "token": "test-token-2026",
+  "encoding_aes_key": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+  "random_prefix_hex": "30313233343536373839616263646566",
+  "timestamp": "1787932800",
+  "nonce": "nonce-vector-001",
+  "payload": {
+    "msgid": "msg-vector-001",
+    "aibotid": "bot-001",
+    "chattype": "single",
+    "from": {
+      "userid": "user-001"
+    },
+    "response_url": "https://qyapi.weixin.qq.com/cgi-bin/aibot/response?response_code=TEST_SECRET",
+    "msgtype": "text",
+    "text": {
+      "content": "你好，Agent 👋"
+    }
+  },
+  "plaintext": "{\"msgid\":\"msg-vector-001\",\"aibotid\":\"bot-001\",\"chattype\":\"single\",\"from\":{\"userid\":\"user-001\"},\"response_url\":\"https://qyapi.weixin.qq.com/cgi-bin/aibot/response?response_code=TEST_SECRET\",\"msgtype\":\"text\",\"text\":{\"content\":\"你好，Agent 👋\"}}",
+  "ciphertext": "4j/AuRx71kQlxVlzbpsMWJ9NgulfTkDx1KkYQrb+HkpGycJzjs4AZIeEPkD4CDnmrxw7GyMWRBP3sfoZHCIAPwOsMmUFtK/0aXx71bV9T79CRH7MnxxPs5D22Gbh4Oo/gw3RcBKRVYyfpoLcweoJEsCA23+tKNv+2Vi9tV9V5M2QB39mPYeyO+LtVsy9zvRCfuEm6GGAZjEto1/HnM339d4k4nf6UYlGVxfX8yjtbLm7mFALL3NSWJ6gywbum1pUNNVzmoGQIk/oTBd30noDOfwBBr6ZnCI+38lqF1gJuqRkw0vDaP5K/r4tUpEUoNVpKX7KmPQD6K69cwc8u/FV2lCsS4038mpEyi0c92u0fH8VAwckqW9CXe4n3kBXMMkz",
+  "signature": "59253b0144ddbe9e9f985c157df1776a30b8ef58",
+  "callback_body": "{\"encrypt\":\"4j/AuRx71kQlxVlzbpsMWJ9NgulfTkDx1KkYQrb+HkpGycJzjs4AZIeEPkD4CDnmrxw7GyMWRBP3sfoZHCIAPwOsMmUFtK/0aXx71bV9T79CRH7MnxxPs5D22Gbh4Oo/gw3RcBKRVYyfpoLcweoJEsCA23+tKNv+2Vi9tV9V5M2QB39mPYeyO+LtVsy9zvRCfuEm6GGAZjEto1/HnM339d4k4nf6UYlGVxfX8yjtbLm7mFALL3NSWJ6gywbum1pUNNVzmoGQIk/oTBd30noDOfwBBr6ZnCI+38lqF1gJuqRkw0vDaP5K/r4tUpEUoNVpKX7KmPQD6K69cwc8u/FV2lCsS4038mpEyi0c92u0fH8VAwckqW9CXe4n3kBXMMkz\"}",
+  "passive_reply_payload": {
+    "msgtype": "stream",
+    "stream": {
+      "id": "stream-001",
+      "finish": false,
+      "content": "处理中…"
+    }
+  },
+  "passive_reply_body": "{\"encrypt\":\"4j/AuRx71kQlxVlzbpsMWBmtTD+8TphRyK87+nGuMHMxaQzew1ZbIj6uYqw5PBEyjnbVt6SzS2k8m09Rx1WmKgjJX++SWTu+JokLK5slanjlxuJlS43N9blBTTA/NzcaTLC3OSBVcXLGzVRe2cWYL0Nab6vB2rvx+aK+A2uqVX8=\",\"msgsignature\":\"9527b371c1fe8824549d55e3b74fc4d100099db5\",\"timestamp\":1787932800,\"nonce\":\"nonce-vector-001\"}"
+}
