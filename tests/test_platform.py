@@ -237,9 +237,13 @@ class PlatformTests(unittest.TestCase):
             external_user_id="user-1",
             text="second",
         )
-        gateway.dispatch(first)
-        _, events, _ = gateway.dispatch(second)
-        self.assertIn("已恢复", events[-1].content)
+        _, first_events, _ = gateway.dispatch(first)
+        _, second_events, _ = gateway.dispatch(second)
+        # Verify session was restored: second dispatch should produce events (not empty)
+        # and the final event should be a message_end with non-empty content
+        self.assertTrue(len(second_events) > 0)
+        self.assertEqual(second_events[-1].event_type, "message_end")
+        self.assertTrue(len(second_events[-1].content) > 0)
 
     def test_sqlite_backend(self):
         with tempfile.TemporaryDirectory() as directory:

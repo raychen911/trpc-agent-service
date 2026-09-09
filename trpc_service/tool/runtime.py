@@ -137,6 +137,9 @@ class ToolRegistry:
                 for injected_name in ("idempotency_key", "request_id"):
                     if injected_name not in parameters:
                         kwargs.pop(injected_name, None)
+            # Inject tenant_id if the handler expects it
+            if "tenant_id" in parameters and "tenant_id" not in kwargs and tenant_id is not None:
+                kwargs["tenant_id"] = tenant_id
             return handler(**kwargs)
 
         # First check tenant-specific MCP servers
@@ -144,12 +147,16 @@ class ToolRegistry:
             tenant_servers = self._tenant_mcp_servers.get(tenant_id, {})
             for server_name, server in tenant_servers.items():
                 if name in server["tools"]:
-                    return self._call_mcp_server(name, server, server_name, idempotency_key, **kwargs)
+                    # Remove idempotency_key from kwargs to avoid duplicate argument
+                    mcp_kwargs = {k: v for k, v in kwargs.items() if k != "idempotency_key"}
+                    return self._call_mcp_server(name, server, server_name, idempotency_key, **mcp_kwargs)
 
         # Then check global MCP servers
         for server_name, server in self._mcp_servers.items():
             if name in server["tools"]:
-                return self._call_mcp_server(name, server, server_name, idempotency_key, **kwargs)
+                # Remove idempotency_key from kwargs to avoid duplicate argument
+                mcp_kwargs = {k: v for k, v in kwargs.items() if k != "idempotency_key"}
+                return self._call_mcp_server(name, server, server_name, idempotency_key, **mcp_kwargs)
 
         raise KeyError(f"tool not registered: {name}")
 
@@ -182,7 +189,11 @@ class ToolRegistry:
 
     @property
     def mcp_servers(self) -> dict[str, dict[str, Any]]:
-        return dict(self._mcp_servers)
+        # Return global MCP servers merged with all tenant-specific servers
+        result = dict(self._mcp_servers)
+        for tenant_servers in self._tenant_mcp_servers.values():
+            result.update(tenant_servers)
+        return result
 
 
 def _handler_schema(handler: Callable[..., Any]) -> dict[str, Any]:
