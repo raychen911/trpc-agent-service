@@ -17,6 +17,7 @@ cp .env.example .env
 uv sync --frozen --all-extras
 uv run trpc-agent-service migrate
 uv run trpc-agent-service doctor
+uv run trpc-agent-service demo-seed
 uv run trpc-agent-service serve --host 127.0.0.1 --port 8000 --reload
 ```
 
@@ -26,7 +27,7 @@ Windows PowerShell 中第一条改为：
 Copy-Item .env.example .env
 ```
 
-默认 `.env.example` 是开发配置：SQLite、mock 模型标识、local 加密 event store、禁用 OTLP。它可以启动 Gateway，但不会自动运行一个可用的 LLM Agent。`doctor` 只检查数据库连接和 SDK 精确版本，不检查 IM、模型或投影后端。
+默认 `.env.example` 是开发配置：SQLite、mock 模型标识、local 加密 event store、禁用 OTLP。它可以启动 Gateway 和 `/console` 控制台，但不会自动运行一个可用的 LLM Agent。`demo-seed` 创建的通道全部禁用且默认拒绝身份，只用于展示控制面。`doctor` 只检查数据库连接和 SDK 精确版本，不检查 IM、模型或投影后端。
 
 启动后验证：
 
@@ -89,14 +90,14 @@ Compose 文件包含完整四角色，但当前开发机没有真实容器、Pos
 | 指标 | 主要维度 | 作用 | 当前接线状态 |
 |---|---|---|---|
 | `agent_platform_inbound_total` | tenant channel outcome | 入站接收与拒绝 | 已在 IM ingress 增加 |
-| `agent_platform_agent_duration_seconds` | tenant app outcome | Agent turn 耗时 | 已定义，尚未在 Worker 观测 |
+| `agent_platform_agent_duration_seconds` | tenant app outcome | Agent turn 耗时 | 已在 Runner 外围按成功/错误观测 |
 | `agent_platform_model_duration_seconds` | tenant provider model outcome | 模型耗时 | 已定义，尚未接线 |
 | `agent_platform_tool_duration_seconds` | tenant tool outcome | Tool 耗时 | 已定义，尚未接线 |
-| `agent_platform_storage_duration_seconds` | backend operation outcome | 存储延迟 | 已定义，尚未接线 |
-| `agent_platform_delivery_total` | tenant channel outcome | IM 投递结果 | 已定义，尚未接到 Dispatcher |
-| `agent_platform_model_tokens_total` | tenant app direction | token 用量 | 已定义，尚未接线 |
+| `agent_platform_storage_duration_seconds` | backend operation outcome | 存储延迟 | SQL Memory 查询已接线，其他操作待补 |
+| `agent_platform_delivery_total` | tenant channel outcome | IM 投递结果 | 已接到 Dispatcher 的持久化结果分类 |
+| `agent_platform_model_tokens_total` | tenant app direction | token 用量 | 已从 SDK usage metadata 记录输入/输出 |
 | `agent_platform_cost_micros_total` | tenant app category | 成本微单位 | 已定义，尚未接线 |
-| `agent_platform_session_leases` | worker | 活动租约 | 已定义，尚未接线 |
+| `agent_platform_session_leases` | worker | 活动租约 | 已随 Worker 领取和释放增减 |
 
 不应给指标加 user ID、session ID、request ID 或 trace ID label。这些值应留在日志/追踪/审计中，否则会形成 Prometheus 高基数故障。
 
@@ -112,7 +113,7 @@ Compose 文件包含完整四角色，但当前开发机没有真实容器、Pos
 - 每租户 token/成本速率突增；
 - OTel exporter drop 和 Collector 队列积压。
 
-上述部分队列 age、Projector 和数据库指标尚未在当前代码暴露，是生产观测补齐清单。
+上述模型/Tool 耗时、成本、队列 age、Projector 和数据库指标尚未完整暴露，是生产观测补齐清单。
 
 ## 6. 容量评估
 

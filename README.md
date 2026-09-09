@@ -61,11 +61,13 @@ flowchart LR
 | 可靠性 | Inbox、Session lease、fence、OCC、staged/committed event、ToolEffect、Outbox、append-only Audit |
 | tRPC 集成 | 精确锁定 `trpc-agent-py==1.1.19`，运行时兼容检查，真实 `Runner.run_async` 与自定义 `BaseSessionService` |
 | 数据后端 | SQL 权威面、SQL/Redis/InMemory Session 投影合同、双写迁移状态机、Summary/Memory 单调投影 |
-| 安全 | AES-GCM envelope、租户 AAD、环境密钥 allowlist、递归日志/trace 脱敏、URL 凭据清洗、PostgreSQL RLS |
+| 治理与安全 | 租户级输入/输出 Filter、IM 身份 ACL、Tool 白名单、AES-GCM envelope、递归日志/trace 脱敏、PostgreSQL RLS |
+| 记忆检索 | Projector 作为唯一写入者，SDK `preload_memory` 从租户/用户隔离的 SQL 投影只读召回 |
+| 可视化控制台 | 运行总览、租户版本、配置发布/回滚、内容无关的审计元数据与验收证据页 |
 | 部署 | Dockerfile、完整 Compose 四角色、Kubernetes/Kustomize 起点、migration owner/runtime 角色分离 |
 | 工程门禁 | frozen lock、Ruff、Mypy、pytest、覆盖率阈值、迁移往返、Alembic drift、PostgreSQL 专属 CI |
 
-尚未冒充“已经完成”的部分包括：真实企业微信/Telegram 账号联调、具体业务 Tool/MCP、附件下载沙箱、向量库/S3 适配器、完整跨进程 OTel parent context、KMS/Vault 与 OIDC Admin 鉴权。详细差距见 [验收矩阵](docs/acceptance.md#4-诚实边界与后续工程)。
+尚未冒充“已经完成”的部分包括：真实企业微信/Telegram 账号联调、具体业务 Tool/MCP、人工审批与硬预算账本、附件下载沙箱、向量库/S3 适配器、完整跨进程 OTel parent context、KMS/Vault 与 OIDC Admin 鉴权。详细差距见 [验收矩阵](docs/acceptance.md#4-诚实边界与后续工程)。
 
 ## 快速开始
 
@@ -78,6 +80,7 @@ cp .env.example .env
 uv sync --frozen --all-extras
 uv run trpc-agent-service migrate
 uv run trpc-agent-service doctor
+uv run trpc-agent-service demo-seed
 uv run trpc-agent-service serve --host 127.0.0.1 --port 8000 --reload
 ```
 
@@ -87,7 +90,9 @@ Windows PowerShell 将第一行改为：
 Copy-Item .env.example .env
 ```
 
-默认配置使用 SQLite 和 mock 模型标识，只用于 Gateway、Admin API 与合同测试。Worker 会拒绝以 mock provider 启动，避免演示桩误入业务流。需要实际 Worker 时，设置模型 provider/key 并分别启动：
+浏览器打开 `http://127.0.0.1:8000/console` 即可查看控制台。`demo-seed` 只在非生产环境发布一份确定性控制面样例：两个 IM 绑定均为 `disabled`、身份策略默认为拒绝、配置内只有 `secret://` 引用，不会向外部平台发消息。若没有复制 `.env.example`，本地管理密钥是 `development-admin-key`；若已复制，则以 `TRPC_SERVICE_ADMIN_API_KEY` 的值为准。
+
+默认配置使用 SQLite 和 mock 模型标识，只用于 Gateway、Admin API、控制台与合同测试。Worker 会拒绝以 mock provider 启动，避免演示桩误入业务流。需要实际 Worker 时，设置模型 provider/key 并分别启动：
 
 ```bash
 uv run trpc-agent-service worker
@@ -120,7 +125,7 @@ uv run pytest --cov=trpc_service --cov-report=term-missing
 uv pip check
 ```
 
-本地最新证据：`271 passed, 5 skipped`，语句/分支综合覆盖率为 `86.37%`；5 项跳过均为需要 `TEST_POSTGRES_URL` 的 PostgreSQL 专属合同。CI 会以非 superuser runtime 角色执行这些测试，覆盖 FORCE RLS、append-only、`SKIP LOCKED` 和 stale-fence 拒绝。最终成绩以当前提交的 GitHub Actions 结果为准。
+本地最新证据：`281 passed, 5 skipped`，语句/分支综合覆盖率为 `86.05%`；5 项跳过均为需要 `TEST_POSTGRES_URL` 的 PostgreSQL 专属合同。CI 会以非 superuser runtime 角色执行这些测试，覆盖 FORCE RLS、append-only、`SKIP LOCKED` 和 stale-fence 拒绝。最终成绩以当前提交的 GitHub Actions 结果为准。
 
 ## 文档导航
 
@@ -129,6 +134,8 @@ uv pip check
 - [一致性、幂等与故障语义](docs/reliability.md)
 - [IM 通道与完整时序](docs/channels.md)
 - [安全模型与 15 项生产风险](docs/security.md)
+- [可视化控制台与安全演示](docs/console.md)
+- [实网与目标环境人工验收清单](docs/manual-validation-checklist.md)
 - [部署、容量、灰度与恢复](docs/operations.md)
 - [开源组件评估与复用边界](docs/oss-evaluation.md)
 - [验收标准—证据追踪矩阵](docs/acceptance.md)

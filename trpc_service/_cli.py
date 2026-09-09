@@ -14,8 +14,10 @@ import uvicorn
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 
 from trpc_service.config import Settings, get_settings
+from trpc_service.demo import build_demo_tenant_spec
 from trpc_service.runtime import (
     RuntimeConfigurationError,
     run_dispatcher_role,
@@ -23,6 +25,7 @@ from trpc_service.runtime import (
     run_worker_role,
 )
 from trpc_service.storage import Database
+from trpc_service.tenant import TenantConfigError, TenantConfigService
 from trpc_service.version import __version__
 
 
@@ -38,6 +41,7 @@ def _parser() -> argparse.ArgumentParser:
 
     commands.add_parser("migrate", help="upgrade the configured database to head")
     commands.add_parser("doctor", help="run non-mutating dependency checks")
+    commands.add_parser("demo-seed", help="publish safe local console demo metadata")
     commands.add_parser("worker", help="run the durable Agent Worker polling role")
     commands.add_parser("dispatcher", help="run the durable IM Outbox delivery role")
     commands.add_parser("projector", help="run durable Summary/Memory projections")
@@ -88,6 +92,38 @@ async def _doctor() -> int:
     return 0 if checks["database"] == "ok" and checks["sdk_version"] == "1.1.19" else 1
 
 
+async def _demo_seed() -> int:
+    settings = get_settings()
+    if settings.env.value == "production":
+        raise RuntimeConfigurationError("demo-seed is forbidden in production")
+    database = Database(settings.database_url)
+    try:
+        try:
+            published = await TenantConfigService(database.session_factory).publish(
+                build_demo_tenant_spec(),
+                actor="local:demo-seed",
+            )
+        except DBAPIError as error:
+            raise RuntimeConfigurationError(
+                "database is unavailable or not migrated; run `trpc-agent-service migrate` first"
+            ) from error
+    finally:
+        await database.dispose()
+    print(
+        json.dumps(
+            {
+                "tenant_id": published.tenant_id,
+                "revision": published.revision,
+                "idempotent": published.idempotent,
+                "channels_enabled": False,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
 async def _run_supervised(
     runner: Callable[[Settings, asyncio.Event], Awaitable[None]],
 ) -> int:
@@ -114,6 +150,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if arguments.command == "doctor":
         return asyncio.run(_doctor())
+    if arguments.command == "demo-seed":
+        try:
+            return asyncio.run(_demo_seed())
+        except (RuntimeConfigurationError, TenantConfigError) as error:
+            print(f"demo-seed rejected: {error}", file=sys.stderr)
+            return 2
     if arguments.command in {"worker", "dispatcher", "projector"}:
         runners = {
             "worker": run_worker_role,

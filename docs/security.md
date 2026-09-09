@@ -45,8 +45,11 @@
 - `TenantToolSet` 只暴露租户白名单内、且已通过审批门的工具。
 - 同一白名单在模型建请求和 SDK 实际解析 Tool 时均检查，并要求 invocation metadata 中存在匹配的 `TenantContext`。
 - ToolSet 对象不允许运行时加工具，Agent 和 Filter 每轮重建，减少请求间可变状态泄漏。
+- 每个 Agent 默认附加 `TenantGovernanceFilter`；输入先于 Session/模型脱敏，输出事件在持久化和回复投影前再次脱敏。
+- 当前 Filter 覆盖电子邮箱、中国大陆手机号、身份证样式号码、支付卡样式号码、常见凭据赋值，支持租户级输入拒绝词、输出替换词和字符硬上限。
+- 每个 Channel binding 可按不可逆 `principal_id` 配置 allow/deny 集合和允许的单聊/群聊 scope；Worker 在运行 Agent 前重新校验，配置拒绝不会进入重试风暴。
 
-当前仍缺少可上线的具体 PII Filter、输入/输出内容策略、IM 用户 ACL、token/成本强制扣费和二次确认工作流。`ToolPolicy` 和 Filter factory 是可用扩展点，不应被文档表述为已实施的完整治理。
+这些是确定性基础控制，不等于完整 DLP。上线前仍需针对业务语料评估漏报/误报，补充模型化内容安全、Tool 参数级授权、真正的人工二次确认、并发配额以及 token/成本的预留—扣减账本。当前 `requires_approval` 只描述策略集合，不能表述为已接通人工工作流。
 
 ## 3. 密钥与敏感数据
 
@@ -90,9 +93,9 @@
 | R6 | 旧 Worker 延迟写入覆盖新 Worker | 租约、数据库时钟、fencing token、OCC | 生产 PG 高并发和故障注入 |
 | R7 | 不可幂等 Tool 重复执行 | Tool Effect 账本保留 `unknown` | 将实际 Tool 执行器全部接到账本，建对账队列 |
 | R8 | IM 模糊结果导致重复回复 | Outbox delivery fence，read timeout 和过期 send 进 `unknown` | 对账工具、运营界面、通道原生幂等键调研 |
-| R9 | Prompt injection 诱导危险工具 | 工具白名单和审批集合 | 具体 Filter、参数级授权、人工确认、沙箱与 egress 策略 |
+| R9 | Prompt injection 诱导危险工具 | 工具白名单、输入/输出 Filter、违规请求永久拒绝 | 语义级注入检测、参数级授权、人工确认、沙箱与 egress 策略 |
 | R10 | 静态 Admin key 被泄漏或无法归因 | 常量时间比较、生产强度校验 | 替换为 OIDC/mTLS、RBAC、细粒度动作审计；不信任自报 actor header |
-| R11 | 过量请求、token 或工具调用导致成本失控 | body 上限、Runner 有限循环、模型 token ceiling、Tool 次数上限 | 租户令牌桶、硬预算预留/扣减、并发舱壁和告警 |
+| R11 | 过量请求、token 或工具调用导致成本失控 | body/输入/输出上限、Runner 有限循环、模型 token ceiling、Tool 次数上限、token 指标 | 租户令牌桶、硬预算预留/扣减、并发舱壁和告警 |
 | R12 | 恶意附件和媒体解压炸弹 | 只传不透明 locator，当前文本 Worker 不下载 | 独立下载沙箱、尺寸/MIME/magic bytes 校验、AV 扫描、对象隔离 |
 | R13 | 依赖包或基础镜像供应链污染 | `uv.lock`、关键包精确锁定、CI `--frozen` 和 `pip check` | 镜像 digest、SBOM、签名验证、SCA 和定期升级窗口 |
 | R14 | 审计管理员篡改 | append-only trigger 与单条 record hash | WORM/SIEM 外部封存、KMS 签名、分离数据库所有者 |

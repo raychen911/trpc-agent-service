@@ -21,10 +21,12 @@ from trpc_service.agent import (
     AgentExecutionError,
     AgentFactory,
     ExecutionLimits,
+    GovernanceViolationError,
     TenantAgentRunner,
     TurnResult,
 )
 from trpc_service.channels.contracts import ReplyIntent, ReplyKind
+from trpc_service.metrics import METRICS
 from trpc_service.reliability.types import (
     AuditData,
     ClaimInput,
@@ -34,7 +36,7 @@ from trpc_service.reliability.types import (
     StaleVersionError,
 )
 from trpc_service.tenant.context import ConversationScope, TenantContext
-from trpc_service.tenant.models import AgentAppSpec, TenantSpec
+from trpc_service.tenant.models import AgentAppSpec, IdentityPolicy, TenantSpec
 from trpc_service.worker.contracts import (
     EncryptedEventCodec,
     FailureClass,
@@ -137,6 +139,11 @@ class ActiveTenantTurnResolver:
             scope = ConversationScope(claim_input.scope)
         except ValueError as exc:
             raise WorkerConfigurationError("claimed conversation scope is invalid") from exc
+        _enforce_identity_policy(
+            principal_id=claim_input.principal_id,
+            scope=scope,
+            policy=binding.identity_policy,
+        )
 
         context = TenantContext(
             tenant_id=claim_input.tenant_id,
@@ -181,7 +188,7 @@ class DefaultFailureClassifier:
             return FailureClass.LOST_CLAIM
         if isinstance(
             error,
-            (WorkerConfigurationError, InboundPayloadError),
+            (WorkerConfigurationError, InboundPayloadError, GovernanceViolationError),
         ):
             return FailureClass.PERMANENT
         if isinstance(error, (AgentExecutionError, TimeoutError, ConnectionError)):
@@ -306,6 +313,7 @@ class WorkerOrchestrator:
         if claim is None:
             return WorkerRunResult(WorkerOutcome.IDLE, tenant_id, worker_id)
 
+        METRICS.session_leases.labels(worker_id).inc()
         started = time.monotonic()
         claim_input: ClaimInput | None = None
         committed = None
@@ -431,6 +439,7 @@ class WorkerOrchestrator:
         finally:
             if service is not None:
                 await service.close()
+            METRICS.session_leases.labels(worker_id).dec()
 
     async def _defer_retry(self, claim: SessionClaim, *, error_type: str) -> None:
         now = self._clock()
@@ -599,6 +608,20 @@ class WorkerOrchestrator:
 def _validate_tenant_spec_identity(spec: TenantSpec, claim_input: ClaimInput) -> None:
     if spec.tenant_id != claim_input.tenant_id:
         raise WorkerConfigurationError("tenant loader returned a cross-tenant spec")
+
+
+def _enforce_identity_policy(
+    *,
+    principal_id: str,
+    scope: ConversationScope,
+    policy: IdentityPolicy,
+) -> None:
+    if scope.value not in policy.allowed_scopes:
+        raise WorkerConfigurationError("conversation scope is denied by channel policy")
+    if principal_id in policy.deny_principals:
+        raise WorkerConfigurationError("principal is denied by channel policy")
+    if policy.default_action == "deny" and principal_id not in policy.allow_principals:
+        raise WorkerConfigurationError("principal is not allowed by channel policy")
 
 
 def _validate_claim_input(claim: SessionClaim, value: ClaimInput) -> None:

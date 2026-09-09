@@ -13,6 +13,7 @@ from trpc_service.tenant.service import (
     RevisionSequenceError,
     TenantConfigService,
     TenantNotFoundError,
+    _publication_payload,
 )
 
 
@@ -75,6 +76,41 @@ async def test_publish_is_idempotent_and_materializes_binding(service) -> None:
         assert binding is not None
         assert binding.tenant_id == "tenant-acme"
         assert binding.app_revision == 1
+
+
+def test_publication_payload_canonicalizes_semantic_sets() -> None:
+    spec = _spec()
+    app = spec.apps[0].model_copy(
+        update={
+            "tools": spec.apps[0].tools.model_copy(
+                update={
+                    "allowed": frozenset({"zeta", "alpha"}),
+                    "requires_approval": frozenset({"zeta"}),
+                }
+            )
+        }
+    )
+    channel = spec.channels[0].model_copy(
+        update={
+            "identity_policy": spec.channels[0].identity_policy.model_copy(
+                update={
+                    "allow_principals": frozenset({"usr_z", "usr_a"}),
+                    "allowed_scopes": frozenset({"private", "group"}),
+                }
+            )
+        }
+    )
+    payload = _publication_payload(spec.model_copy(update={"apps": (app,), "channels": (channel,)}))
+
+    assert payload["apps"][0]["tools"]["allowed"] == ["alpha", "zeta"]
+    assert payload["channels"][0]["identity_policy"]["allow_principals"] == [
+        "usr_a",
+        "usr_z",
+    ]
+    assert payload["channels"][0]["identity_policy"]["allowed_scopes"] == [
+        "group",
+        "private",
+    ]
 
 
 async def test_revision_content_is_immutable(service) -> None:

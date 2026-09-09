@@ -34,8 +34,8 @@ git ls-tree -r --name-only 4cda37b
 | [cryptography](https://cryptography.io/en/latest/) `50.0.1` | AES-GCM、HKDF 和企微 AES-CBC 协议实现 | 使用成熟密码原语，不自创加密算法 | 根密钥轮换和 KMS/Vault Adapter 尚未完成 |
 | [aiogram](https://docs.aiogram.dev/en/latest/) `3.31.0` | Telegram Update 的严格结构解析 | 复用 Bot API 类型，不启动框架自己的轮询器 | webhook 认证、身份派生和投递由平台实现 |
 | [HTTPX](https://www.python-httpx.org/) `0.28.1` | IM Outbox HTTP 投递 | 明确超时、连接池和重定向策略，易于合同测试 | 禁止自动重定向；企微目标还要做 host allowlist |
-| [OpenTelemetry Python](https://opentelemetry.io/docs/languages/python/) | FastAPI trace 与 OTLP 导出 | 采用开放协议，Collector 与后端解耦 | 当前只完成入口插桩和出口属性清洗，尚非完整跨进程 trace 树 |
-| [Prometheus Python client](https://prometheus.github.io/client_python/) | `/metrics` 与低基数指标 | 拉取模型简单，适合平台运行指标 | 多数 Worker、Tool、Storage 指标已定义但尚未全部接线 |
+| [OpenTelemetry Python](https://opentelemetry.io/docs/languages/python/) | FastAPI trace 与 OTLP 导出 | 采用开放协议，Collector 与后端解耦 | 已完成入口插桩、ID 持久关联和出口属性清洗，尚非完整跨进程 trace 树 |
+| [Prometheus Python client](https://prometheus.github.io/client_python/) | `/metrics` 与低基数指标 | 拉取模型简单，适合平台运行指标 | 入站、Agent、token、Memory、租约和投递已接线；模型/Tool 细分与成本待补 |
 | [uv](https://docs.astral.sh/uv/) | 锁文件、同步、构建和 CI | `--frozen` 可阻止 CI 静默改锁文件 | `uv.lock` 不等于漏洞扫描或来源证明 |
 
 ## 4. tRPC-Agent-Python 的具体复用
@@ -47,7 +47,7 @@ git ls-tree -r --name-only 4cda37b
 | `Runner.run_async`，逐个消费完整 `Event` | T0 持久接收、消息去重、session 顺序号 |
 | `LlmAgent`、`RunConfig`、模型类 | 不可变 tenant/app/channel revision 与服务端路由 |
 | `BaseSessionService` 接口 | 绑定租约和 fencing token 的 SessionService |
-| ToolSet、FunctionTool、Filter 工厂 | 租户白名单、审批上下文、Tool Effect 副作用账本 |
+| ToolSet、FunctionTool、Filter、MemoryService | 租户白名单、输入/输出治理、审批上下文、Tool Effect 账本、租户隔离 Memory 投影 |
 | SDK 的 session/event 数据类型 | staged/committed/aborted 可见性和加密事件对象 |
 | SDK telemetry 扩展能力 | request/trace 持久关联、日志与 span 出口脱敏 |
 

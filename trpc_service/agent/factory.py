@@ -14,6 +14,7 @@ from trpc_agent_sdk.models import LLMModel
 from trpc_agent_sdk.tools import BaseTool
 
 from trpc_service.agent.compat import require_sdk_compatibility
+from trpc_service.agent.governance import TenantGovernanceFilter
 from trpc_service.tenant.context import TenantContext
 from trpc_service.tenant.models import AgentAppSpec
 from trpc_service.tool import TenantToolSet
@@ -111,7 +112,8 @@ class AgentFactory:
             raise AgentConfigurationError(
                 "model_resolver must return LLMModel or an SDK dynamic model factory"
             )
-        filters = [factory(tenant_context, app) for factory in self._filter_factories]
+        filters = [TenantGovernanceFilter(tenant_context, app.governance)]
+        filters.extend(factory(tenant_context, app) for factory in self._filter_factories)
         if any(not isinstance(item, BaseFilter) for item in filters):
             raise AgentConfigurationError("filter factory must return BaseFilter")
 

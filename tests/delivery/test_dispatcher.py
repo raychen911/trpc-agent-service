@@ -10,6 +10,7 @@ from typing import Any
 import httpx
 import pytest
 import respx
+from prometheus_client import REGISTRY
 from pydantic import SecretStr
 
 from trpc_service.delivery import DeliveryBinding, OutboxDispatcher, TextDeliveryPayload
@@ -368,6 +369,22 @@ async def test_telegram_server_failures_retry_but_definite_4xx_does_not() -> Non
     assert report.outcome is OutboxDeliveryOutcome.DEAD_LETTER
     assert report.error_type == "telegram_request_rejected"
     assert route.call_count == calls_before_rejection + 1
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_delivery_outcome_is_recorded_without_high_cardinality_labels() -> None:
+    labels = {"tenant": "tenant-a", "channel": "telegram", "outcome": "sent"}
+    before = REGISTRY.get_sample_value("agent_platform_delivery_total", labels) or 0.0
+    repository = FakeRepository(_claim("telegram", _telegram_route()))
+    respx.post(TELEGRAM_ENDPOINT).mock(
+        return_value=httpx.Response(200, json={"ok": True, "result": {"message_id": 42}})
+    )
+    async with httpx.AsyncClient() as client:
+        report = await _dispatcher(repository, "telegram", client).dispatch_once("tenant-a")
+
+    assert report.outcome is OutboxDeliveryOutcome.SENT
+    assert REGISTRY.get_sample_value("agent_platform_delivery_total", labels) == before + 1
 
 
 @pytest.mark.asyncio

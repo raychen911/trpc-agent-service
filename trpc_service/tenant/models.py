@@ -58,6 +58,53 @@ class ToolPolicy(BaseModel):
         return self
 
 
+class GovernancePolicy(BaseModel):
+    """Content controls executed before and after every Agent turn."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    redact_sensitive_data: bool = True
+    max_input_chars: int = Field(default=16_000, ge=1, le=1_000_000)
+    max_output_chars: int = Field(default=16_000, ge=1, le=1_000_000)
+    blocked_input_terms: tuple[str, ...] = ()
+    blocked_output_terms: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def blocked_terms_are_bounded(self) -> GovernancePolicy:
+        terms = (*self.blocked_input_terms, *self.blocked_output_terms)
+        if len(terms) > 128:
+            raise ValueError("governance policy may contain at most 128 blocked terms")
+        if any(not term.strip() or len(term) > 128 for term in terms):
+            raise ValueError("blocked terms must contain 1..128 non-blank characters")
+        return self
+
+
+class IdentityPolicy(BaseModel):
+    """Allow/deny policy over opaque channel principals and chat scopes."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    default_action: Literal["allow", "deny"] = "allow"
+    allow_principals: frozenset[str] = frozenset()
+    deny_principals: frozenset[str] = frozenset()
+    allowed_scopes: frozenset[Literal["private", "group", "group_member"]] = frozenset(
+        {"private", "group", "group_member"}
+    )
+
+    @model_validator(mode="after")
+    def identity_sets_are_safe(self) -> IdentityPolicy:
+        principals = self.allow_principals | self.deny_principals
+        if self.allow_principals & self.deny_principals:
+            raise ValueError("a principal cannot be both allowed and denied")
+        if len(principals) > 10_000:
+            raise ValueError("identity policy may contain at most 10000 principals")
+        if any(not value.strip() or len(value) > 128 for value in principals):
+            raise ValueError("principal ids must contain 1..128 non-blank characters")
+        if not self.allowed_scopes:
+            raise ValueError("identity policy must allow at least one conversation scope")
+        return self
+
+
 class ChannelSpec(BaseModel):
     """Channel binding configuration containing references, never raw secrets."""
 
@@ -72,7 +119,7 @@ class ChannelSpec(BaseModel):
     public_callback_id: str
     route_rule: dict[str, Any] = Field(default_factory=dict)
     secret_refs: dict[str, str]
-    identity_policy: dict[str, Any] = Field(default_factory=dict)
+    identity_policy: IdentityPolicy = IdentityPolicy()
     enabled: bool = True
 
     @model_validator(mode="after")
@@ -134,6 +181,7 @@ class AgentAppSpec(BaseModel):
     prompt: str
     model: ModelRoute
     tools: ToolPolicy = ToolPolicy()
+    governance: GovernancePolicy = GovernancePolicy()
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")

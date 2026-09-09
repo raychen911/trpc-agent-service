@@ -51,10 +51,10 @@ flowchart LR
 | Inbox | 去重、按 session 分配序号、持久化后才 ACK | 已实现 SQL 仓储及入口集成 |
 | Agent Worker | 领取任务、租约心跳、回放会话、运行 Agent、原子完成 | 编排、CLI 公平轮询进程、Compose/K8s 角色均已实现 |
 | Fenced SessionService | 把 SDK 非 partial 事件加密封存，以 OCC 和 fence 追加 | 已实现并有伪存储及 SQL 集成测试 |
-| Storage Adapter | 显式选择 Session、Scoped State、Memory、Summary、Knowledge、Artifact 后端 | SQL 权威面、InMemory/Redis Session 投影、迁移状态机和 SQL Summary/Memory 已实现；向量库/S3 仍是扩展合同 |
+| Storage Adapter | 显式选择 Session、Scoped State、Memory、Summary、Knowledge、Artifact 后端 | SQL 权威面、InMemory/Redis Session 投影、迁移状态机、SQL Summary/Memory 与 SDK Memory 只读桥接已实现；向量库/S3 仍是扩展合同 |
 | Outbox Dispatcher | 顺序领取回复、解密短期路由、投递并分类结果 | 核心类、HTTP 合同、CLI 常驻进程和部署角色已实现 |
 | Projector | 从 T2 任务读取 committed event，生成单调 Summary/Memory | durable job、lease/fence/heartbeat/retry/dead-letter、常驻进程已实现 |
-| Telemetry | FastAPI span、进程出口脱敏、Prometheus 指标 | 基础设施已实现；Worker、Tool、Storage、Dispatcher 的完整手工 span 尚未接齐 |
+| Telemetry | FastAPI span、进程出口脱敏、Prometheus 指标 | 入站、Agent、token、Memory 查询、活动租约和投递指标已接线；模型/Tool 耗时、成本账本与完整跨进程 span 尚未接齐 |
 
 ## 3. 消息与状态面
 
@@ -74,7 +74,7 @@ PostgreSQL 保存不可替代的权威事实：Inbox、AgentRun、SessionEvent�
 | `LlmAgent`、`RunConfig` 与有限次数循环 | 租户/应用/绑定不可变版本 |
 | `Event`、`Content`、`Part` 类型 | partial 事件抛弃、非 partial 事件加密及分阶段发布 |
 | `BaseSessionService` 扩展点 | 与领取绑定的 `FencedSessionService` |
-| ToolSet、FunctionTool 和 Filter 工厂 | 租户工具白名单、审批门、Tool Effect 幂等账本 |
+| ToolSet、FunctionTool、Filter 与 MemoryService 扩展点 | 租户工具白名单、输入/输出治理、身份 ACL、Tool Effect 幂等账本与投影 Memory 桥接 |
 | OpenAI 兼容模型类 | 平台固定 endpoint、租户只选受批准 provider/model |
 | SDK 内建 telemetry 扩展点 | OTLP 出口属性允许列表与日志递归脱敏 |
 
@@ -92,5 +92,6 @@ Kubernetes 文件是可审阅的生产起点，不是对任意集群“一键上
 - [一致性、幂等与故障语义](reliability.md)
 - [IM 通道](channels.md)
 - [安全模型](security.md)
+- [可视化控制台](console.md)
 - [运维手册](operations.md)
 - [验收追踪](acceptance.md)

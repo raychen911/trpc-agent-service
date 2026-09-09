@@ -29,6 +29,7 @@ from trpc_service.delivery.contracts import (
     TelegramDeliveryRoute,
     TextDeliveryPayload,
 )
+from trpc_service.metrics import METRICS
 from trpc_service.reliability.types import (
     OutboxDeliveryClaim,
     OutboxDeliveryOutcome,
@@ -125,7 +126,13 @@ class OutboxDispatcher:
             return DispatchReport(state=DispatchState.NO_WORK)
 
         decision = await self._prepare_and_deliver(claim)
+        channel = _metric_channel(claim)
         if decision.error_type == "delivery_lease_lost":
+            METRICS.delivery_total.labels(
+                claim.tenant_id,
+                channel,
+                decision.outcome.value,
+            ).inc()
             return DispatchReport(
                 state=DispatchState.LEASE_LOST,
                 outbox_id=claim.outbox_id,
@@ -143,6 +150,11 @@ class OutboxDispatcher:
             error_type=decision.error_type,
             next_retry_at=next_retry_at,
         )
+        METRICS.delivery_total.labels(
+            claim.tenant_id,
+            channel,
+            decision.outcome.value,
+        ).inc()
         return DispatchReport(
             state=DispatchState.RECORDED if persisted else DispatchState.LEASE_LOST,
             outbox_id=claim.outbox_id,
@@ -464,3 +476,13 @@ def _trusted_wecom_url(value: str, allowed_hosts: frozenset[str]) -> bool:
         and not parsed.fragment
         and parsed.path
     )
+
+
+def _metric_channel(claim: OutboxDeliveryClaim) -> str:
+    credential = claim.reply_credential
+    if credential is None:
+        return "unknown"
+    return {
+        _TELEGRAM_CREDENTIAL: "telegram",
+        _WECOM_CREDENTIAL: "wecom",
+    }.get(credential.credential_kind, "unknown")

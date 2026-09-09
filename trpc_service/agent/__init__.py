@@ -19,6 +19,12 @@ from trpc_service.agent.factory import (
     FilterFactory,
     ModelResolver,
 )
+from trpc_service.agent.governance import (
+    GovernanceViolationError,
+    TenantGovernanceFilter,
+    govern_agent_input,
+    redact_sensitive_text,
+)
 from trpc_service.agent.models import ModelRouteError, TenantModelResolver
 from trpc_service.agent.runtime import (
     AgentExecutionError,
@@ -40,15 +46,19 @@ __all__ = [
     "CompatibilityReport",
     "ExecutionLimits",
     "FilterFactory",
+    "GovernanceViolationError",
     "IncompatibleSdkError",
     "MissingFinalResponseError",
     "ModelResolver",
     "ModelRouteError",
     "TenantAgentRunner",
+    "TenantGovernanceFilter",
     "TenantModelResolver",
     "TurnResult",
     "framework_event_to_event_data",
     "framework_event_to_reply_intent",
+    "govern_agent_input",
     "probe_sdk_compatibility",
+    "redact_sensitive_text",
     "require_sdk_compatibility",
 ]

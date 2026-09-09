@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import pytest
+from prometheus_client import REGISTRY
 from trpc_agent_sdk.models import LLMModel
 from trpc_agent_sdk.types import Content, Part
 
@@ -15,6 +16,7 @@ from trpc_service.agent import (
     TenantAgentRunner,
 )
 from trpc_service.channels.contracts import ReplyKind
+from trpc_service.tenant.models import GovernancePolicy
 
 from .helpers import (
     BlockingFakeModel,
@@ -22,11 +24,16 @@ from .helpers import (
     ErrorFakeModel,
     RecordingMemoryService,
     RecordingSessionService,
+    SensitiveFakeModel,
     StreamingFakeModel,
     echo,
     make_app,
     make_context,
 )
+
+
+def _metric_value(name: str, labels: dict[str, str]) -> float:
+    return REGISTRY.get_sample_value(name, labels) or 0.0
 
 
 @pytest.mark.asyncio
@@ -87,6 +94,64 @@ async def test_real_runner_consumes_full_stream_and_persists_only_final() -> Non
     assert all(not event.partial for event in session.events)
     assert memory.store_calls == 0, "post-turn processing must be disabled"
     assert memory.close_calls == sessions.close_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_governance_filter_redacts_input_output_and_records_usage() -> None:
+    model = SensitiveFakeModel()
+    sessions = RecordingSessionService()
+    runtime = TenantAgentRunner(
+        agent_factory=AgentFactory(
+            model_resolver=lambda context, app: model,
+            registered_tools={"echo": echo},
+        ),
+        session_service=sessions,
+    )
+    context = make_context()
+    app = make_app(governance=GovernancePolicy(blocked_output_terms=("internal-only",)))
+    input_before = _metric_value(
+        "agent_platform_model_tokens_total",
+        {"tenant": "tenant-a", "app": "support", "direction": "input"},
+    )
+    output_before = _metric_value(
+        "agent_platform_model_tokens_total",
+        {"tenant": "tenant-a", "app": "support", "direction": "output"},
+    )
+
+    result = await runtime.run_turn(
+        tenant_context=context,
+        app=app,
+        new_message="contact client@example.com or 13900139000",
+        run_id="run-governed",
+        in_reply_to_delivery_id="delivery-governed",
+    )
+
+    request_text = "".join(part.text or "" for part in model.requests[0].contents[-1].parts or [])
+    assert request_text == ("contact [EMAIL_REDACTED] or [PHONE_REDACTED]")
+    assert result.reply_intent.text == (
+        "send to [EMAIL_REDACTED] or [PHONE_REDACTED]; [BLOCKED_TERM]"
+    )
+    session = await sessions.get_session(
+        app_name=result.build.app_name,
+        user_id=context.principal_id,
+        session_id=context.session_id,
+    )
+    assert session is not None
+    assert all("example.com" not in event.get_text() for event in session.events)
+    assert (
+        _metric_value(
+            "agent_platform_model_tokens_total",
+            {"tenant": "tenant-a", "app": "support", "direction": "input"},
+        )
+        == input_before + 7
+    )
+    assert (
+        _metric_value(
+            "agent_platform_model_tokens_total",
+            {"tenant": "tenant-a", "app": "support", "direction": "output"},
+        )
+        == output_before + 11
+    )
 
 
 @pytest.mark.asyncio

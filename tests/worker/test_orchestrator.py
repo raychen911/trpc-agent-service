@@ -8,10 +8,18 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from trpc_service.agent import GovernanceViolationError
 from trpc_service.reliability import SessionClaim
-from trpc_service.tenant.models import ChannelSpec, ChannelType, TenantSpec
+from trpc_service.tenant.models import (
+    ChannelSpec,
+    ChannelType,
+    IdentityPolicy,
+    TenantSpec,
+)
 from trpc_service.worker import (
     ActiveTenantTurnResolver,
+    DefaultFailureClassifier,
+    FailureClass,
     WorkerOrchestrator,
     WorkerOutcome,
 )
@@ -51,6 +59,14 @@ def make_orchestrator(
     )
 
 
+def test_governance_rejection_is_a_permanent_failure() -> None:
+    failure = DefaultFailureClassifier().classify(
+        GovernanceViolationError("blocked by tenant policy")
+    )
+
+    assert failure is FailureClass.PERMANENT
+
+
 @pytest.mark.asyncio
 async def test_config_resolver_loads_the_revision_pinned_at_ingress() -> None:
     class RecordingRevisionLoader:
@@ -87,6 +103,46 @@ async def test_config_resolver_loads_the_revision_pinned_at_ingress() -> None:
     assert loader.calls == [("tenant-a", 5)]
     assert resolved.config_revision == 5
     assert resolved.tenant_context.binding_revision == 5
+
+
+@pytest.mark.asyncio
+async def test_config_resolver_enforces_channel_identity_policy() -> None:
+    class PolicyLoader:
+        async def load_revision(self, tenant_id: str, revision: int) -> TenantSpec:
+            assert (tenant_id, revision) == ("tenant-a", 5)
+            return TenantSpec(
+                tenant_id="tenant-a",
+                revision=5,
+                display_name="Tenant A",
+                apps=(make_app(),),
+                channels=(
+                    ChannelSpec(
+                        binding_id="binding-a",
+                        app_id="support",
+                        app_revision=3,
+                        channel=ChannelType.TELEGRAM,
+                        external_account_id="bot-a",
+                        callback_path="/v1/channels/telegram/public-a/callback",
+                        public_callback_id="public-a",
+                        secret_refs={
+                            "webhook_secret": "secret://env/TELEGRAM_WEBHOOK_SECRET",
+                            "bot_token": "secret://env/TELEGRAM_BOT_TOKEN",
+                        },
+                        identity_policy=IdentityPolicy(
+                            default_action="deny",
+                            allow_principals=frozenset({"principal-a"}),
+                            allowed_scopes=frozenset({"private"}),
+                        ),
+                    ),
+                ),
+            )
+
+    resolver = ActiveTenantTurnResolver(PolicyLoader())
+    allowed = await resolver.resolve(make_claim_input(make_claim()))
+    assert allowed.tenant_context.principal_id == "principal-a"
+
+    with pytest.raises(ValueError, match="not allowed"):
+        await resolver.resolve(make_claim_input(make_claim(), principal_id="principal-b"))
 
 
 @pytest.mark.asyncio

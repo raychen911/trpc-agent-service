@@ -25,7 +25,7 @@
 | 同步和幂等策略 | `docs/reliability.md` | T0/T1/T2、幂等键、fence/OCC、UNKNOWN |
 | 多后端适配方案 | `docs/data-model.md`、`backends/` | 合同、能力声明、双读/shadow/cutover/rollback |
 | 风险清单 | `docs/security.md` | 15 项风险，不只写口号，区分已有控制与剩余工程 |
-| GitHub 代码实现 | 本仓库 | 四角色 CLI、Compose/K8s、迁移、271 项本地通过 |
+| GitHub 代码实现 | 本仓库 | 四角色 CLI、可视化控制台、Compose/K8s、迁移和自动化质量门禁 |
 
 ## 3. 高标准自验收
 
@@ -45,6 +45,7 @@
 - SDK event ciphertext 按 tenant/session/event/seq 作为 AES-GCM AAD，`event_object` 表按 tenant 主键和 RLS 隔离且 PostgreSQL 禁止 UPDATE/DELETE。
 - IM token、AES key、model key 和 response URL 不写普通业务字段；短期回复坐标 envelope encryption 后持久化。
 - 日志和 trace 出口采取 allowlist/递归脱敏；Prometheus label 不放 user/session/request/trace 等高基数值。
+- Agent 输入在进入 Session/模型前脱敏，输出事件在持久化/回复前再次脱敏；通道 principal/scope ACL 在 Worker 入口强制执行。
 - 生产配置拒绝 SQLite、HTTP public URL、默认 root/admin secret；Worker/Projector 拒绝非 SQL 权威 event store。
 
 ### 3.3 可运维性
@@ -52,6 +53,7 @@
 - migration owner 与 runtime DB role 分离；迁移执行 upgrade → downgrade → upgrade → drift check。
 - Gateway、Worker、Dispatcher、Projector 可独立运行、扩缩和优雅停机。
 - Compose 提供最小联调环境；Kustomize 提供 ServiceAccount、PDB、HPA、NetworkPolicy 与 Secret 边界。
+- `/console` 提供租户运行快照、不可变 revision、发布/回滚和内容无关审计视图；演示种子默认禁用所有通道。
 - 配置采用不可变 revision；旧消息固定接收时 revision；回滚不会改写历史版本。
 - 容量方案以 `lambda × latency`、SQL QPS、token、事件字节和租户公平性建模，不承诺未经压测的吞吐数字。
 
@@ -61,24 +63,27 @@
 |---|---|---|
 | IM 实网 | 协议、密码向量、HTTP 合同与投递分类已测 | 企业微信测试机器人与 Telegram test bot 的真实限流、超时、撤回、媒体联调 |
 | Tool/MCP | 白名单 ToolSet 和 ToolEffect 账本已测 | 将实际业务 Tool 逐个标注 effect class，并接审批/对账执行器 |
-| 治理 Filter | 工厂与隔离边界已留出 | PII/ACL/预算扣费/危险动作二次确认的具体业务策略 |
-| Memory/Summary | 常驻 Projector、确定性摘要、显式记忆已实现 | 若使用 LLM 抽取，需版本化 prompt、离线评估、隐私同意和回归集 |
+| 治理 Filter | 确定性敏感字段脱敏、输入/输出词项策略、长度上限、IM principal/scope ACL 已接入并测试 | 语义 DLP、参数级授权、硬预算扣费和危险动作人工确认 |
+| Memory/Summary | 常驻 Projector、确定性摘要、显式记忆、租户/用户隔离的 SDK Memory 查询已实现 | 若使用 LLM/向量召回，需版本化 prompt、离线评估、隐私同意和回归集 |
 | 向量/对象后端 | 数据模型、路由与迁移协议已设计 | Qdrant/Milvus/pgvector 和 S3/MinIO 的具体驱动、压测与故障注入 |
-| Observability | FastAPI 自动 span、ID 贯穿、OTLP 清洗、指标定义 | Worker/Tool/Storage/Dispatcher 手工 parent context 与全部指标接线 |
+| Observability | FastAPI 自动 span、ID 贯穿、OTLP 清洗；入站/Agent/token/Memory/租约/投递指标已接线 | Worker/Tool/Storage/Dispatcher 完整 parent context、模型/Tool 耗时与成本账本 |
 | 密钥与 Admin | allowlisted env resolver、加密、静态 Admin key | KMS/Vault/External Secrets、轮换版本、OIDC/mTLS/RBAC |
 | Kubernetes | 可审阅的 Kustomize 起点 | 目标集群的镜像 digest、托管后端、FQDN egress、队列指标 HPA 和 server dry-run |
 
 ## 5. 当前验证记录
 
-2026-09-01 本地 Windows/Python 3.12 记录：
+本分支当前 Windows/Python 3.12 验证记录：
 
 ```text
 ruff format --check: passed
 ruff check: passed
-mypy: 67 source files, no issues
-pytest: 271 passed, 5 skipped
-coverage: 86.37% (threshold 85%)
+mypy: 72 source files, no issues
+pytest: 281 passed, 5 skipped
+coverage: 86.05% (threshold 85%)
 Alembic: upgrade -> downgrade base -> upgrade -> check, passed through revision 0006
+wheel: console assets, demo seed, memory adapter and migrations included
+docker compose config: passed
+kubectl kustomize deploy/k8s/base: passed
 ```
 
 5 项跳过全部依赖真实 PostgreSQL 的 FORCE RLS、append-only、`SKIP LOCKED` 与 fencing 合同。本机结果不能代替它们；`.github/workflows/ci.yml` 的 `postgres-contract` job 会创建非 owner、非 superuser 且无 `BYPASSRLS` 的 runtime role 并执行。提交后的 GitHub Actions 结论优先于本记录。

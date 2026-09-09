@@ -7,6 +7,7 @@ import asyncio
 from collections.abc import AsyncGenerator
 from typing import Any
 
+from google.genai.types import GenerateContentResponseUsageMetadata
 from trpc_agent_sdk.context import AgentContext, InvocationContext
 from trpc_agent_sdk.memory import BaseMemoryService
 from trpc_agent_sdk.models import LLMModel, LlmRequest, LlmResponse
@@ -54,6 +55,42 @@ class StreamingFakeModel(LLMModel):
             partial=False,
         )
         self.drained = True
+
+
+class SensitiveFakeModel(LLMModel):
+    """Expose deterministic sensitive text and usage for governance tests."""
+
+    def __init__(self) -> None:
+        super().__init__(model_name="fake-sensitive")
+        self.requests: list[LlmRequest] = []
+
+    @classmethod
+    def supported_models(cls) -> list[str]:
+        return [r"fake-.*"]
+
+    async def _generate_async_impl(
+        self,
+        request: LlmRequest,
+        stream: bool = False,
+        ctx: InvocationContext | None = None,
+    ) -> AsyncGenerator[LlmResponse, None]:
+        del stream, ctx
+        self.validate_request(request)
+        self.requests.append(request)
+        yield LlmResponse(
+            content=Content(
+                role="model",
+                parts=[
+                    Part.from_text(text="send to owner@example.com or 13800138000; internal-only")
+                ],
+            ),
+            partial=False,
+            usage_metadata=GenerateContentResponseUsageMetadata(
+                prompt_token_count=7,
+                candidates_token_count=11,
+                total_token_count=18,
+            ),
+        )
 
 
 class BlockingFakeModel(LLMModel):

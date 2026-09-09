@@ -55,7 +55,7 @@ class TenantConfigService:
     async def publish(self, spec: TenantSpec, *, actor: str) -> PublishedConfig:
         """Publish exactly the next tenant revision, idempotently by content hash."""
 
-        payload = spec.model_dump(mode="json")
+        payload = _publication_payload(spec)
         content_hash = _content_hash(payload)
         async with self._session_factory() as session, session.begin():
             await _set_tenant_scope(session, spec.tenant_id)
@@ -229,7 +229,7 @@ class TenantConfigService:
                 "public_callback_id": channel.public_callback_id,
                 "route_rule": channel.route_rule,
                 "secret_refs": channel.secret_refs,
-                "identity_policy": channel.identity_policy,
+                "identity_policy": channel.identity_policy.model_dump(mode="json"),
                 "status": "active" if channel.enabled else "disabled",
             }
             if existing_binding is None:
@@ -279,6 +279,22 @@ def _content_hash(payload: dict[str, object]) -> str:
         separators=(",", ":"),
     ).encode()
     return hashlib.sha256(canonical).hexdigest()
+
+
+def _publication_payload(spec: TenantSpec) -> dict[str, Any]:
+    """Normalize set-valued policies so hashes survive process hash randomization."""
+
+    payload = spec.model_dump(mode="json")
+    for app in payload["apps"]:
+        tools = app["tools"]
+        tools["allowed"] = sorted(tools["allowed"])
+        tools["requires_approval"] = sorted(tools["requires_approval"])
+    for channel in payload["channels"]:
+        identity = channel["identity_policy"]
+        identity["allow_principals"] = sorted(identity["allow_principals"])
+        identity["deny_principals"] = sorted(identity["deny_principals"])
+        identity["allowed_scopes"] = sorted(identity["allowed_scopes"])
+    return payload
 
 
 async def _set_tenant_scope(session: AsyncSession, tenant_id: str) -> None:

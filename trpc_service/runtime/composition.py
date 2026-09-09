@@ -13,12 +13,14 @@ import httpx
 from opentelemetry.sdk.trace import TracerProvider
 from redis.asyncio import Redis
 from sqlalchemy import text
+from trpc_agent_sdk.tools import preload_memory_tool
 
 from trpc_service.agent import AgentFactory, ExecutionLimits, TenantModelResolver
 from trpc_service.config import Environment, Settings
 from trpc_service.delivery import OutboxDispatcher, SqlChannelBindingStore
 from trpc_service.delivery.contracts import DispatchState
 from trpc_service.log import configure_logging
+from trpc_service.memory import ProjectedSqlMemoryService
 from trpc_service.projection import (
     EncryptedProjectionTextReader,
     ExplicitInstructionMemoryExtractor,
@@ -89,9 +91,14 @@ async def run_worker_role(settings: Settings, stop: asyncio.Event) -> None:
             default_api_key=settings.model_api_key,
             base_url=str(settings.model_base_url) if settings.model_base_url is not None else None,
         )
-        agent_factory = AgentFactory(model_resolver=model_resolver)
+        memory_service = ProjectedSqlMemoryService(database.session_factory)
+        agent_factory = AgentFactory(
+            model_resolver=model_resolver,
+            registered_tools={"preload_memory": preload_memory_tool},
+        )
         executor_factory = TenantAgentExecutorFactory(
             agent_factory=agent_factory,
+            memory_service=memory_service,
             limits=ExecutionLimits(
                 max_llm_calls=settings.max_llm_calls,
                 max_iterations=settings.max_iterations,

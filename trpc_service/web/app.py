@@ -9,11 +9,13 @@ import re
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Annotated
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from opentelemetry import trace
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
@@ -39,6 +41,12 @@ from trpc_service.tenant.service import (
     TenantNotFoundError,
 )
 from trpc_service.version import __version__
+from trpc_service.web.admin import (
+    AuditConsoleEntry,
+    OperatorConsoleService,
+    PlatformConsoleOverview,
+    TenantRevisionSummary,
+)
 from trpc_service.web.ingress import (
     ChannelIngressService,
     IngressConfigurationError,
@@ -48,6 +56,7 @@ from trpc_service.web.ingress import (
 
 LOGGER = logging.getLogger(__name__)
 _REQUEST_ID = re.compile(r"\A[A-Za-z0-9._-]{1,64}\Z")
+_WEB_ROOT = Path(__file__).with_name("static")
 
 
 class RollbackRequest(BaseModel):
@@ -64,6 +73,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     database = Database(settings.database_url)
     app.state.database = database
     app.state.tenant_configs = TenantConfigService(database.session_factory)
+    app.state.operator_console = OperatorConsoleService(database.session_factory)
     app.state.channel_ingress = ChannelIngressService(
         session_factory=database.session_factory,
         settings=settings,
@@ -95,6 +105,11 @@ def create_app(
     )
     app.state.settings = resolved
     app.state.clock = clock or (lambda: datetime.now(UTC))
+    app.mount(
+        "/console/assets",
+        StaticFiles(directory=_WEB_ROOT),
+        name="console-assets",
+    )
     app.middleware("http")(_correlation_middleware)
     _register_system_routes(app)
     _register_admin_routes(app)
@@ -124,10 +139,27 @@ async def _correlation_middleware(
     response.headers["x-trace-id"] = trace_id
     response.headers["x-content-type-options"] = "nosniff"
     response.headers["cache-control"] = "no-store"
+    response.headers["referrer-policy"] = "no-referrer"
+    response.headers["x-frame-options"] = "DENY"
+    response.headers["permissions-policy"] = "camera=(), microphone=(), geolocation=()"
+    if request.url.path == "/console" or request.url.path.startswith("/console/"):
+        response.headers["content-security-policy"] = (
+            "default-src 'self'; script-src 'self'; style-src 'self'; "
+            "img-src 'self' data:; connect-src 'self'; object-src 'none'; "
+            "base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+        )
     return response
 
 
 def _register_system_routes(app: FastAPI) -> None:
+    @app.get("/", include_in_schema=False)
+    async def root() -> RedirectResponse:
+        return RedirectResponse("/console", status_code=status.HTTP_307_TEMPORARY_REDIRECT)
+
+    @app.get("/console", include_in_schema=False, response_class=HTMLResponse)
+    async def console() -> HTMLResponse:
+        return HTMLResponse((_WEB_ROOT / "index.html").read_text(encoding="utf-8"))
+
     @app.get("/health/live", include_in_schema=False)
     async def live() -> dict[str, str]:
         return {"status": "alive", "version": __version__}
@@ -163,6 +195,42 @@ def _admin_authorized(
 
 def _register_admin_routes(app: FastAPI) -> None:
     authorization = Depends(_admin_authorized)
+
+    @app.get(
+        "/v1/admin/overview",
+        response_model=PlatformConsoleOverview,
+        dependencies=[authorization],
+    )
+    async def platform_overview(request: Request) -> PlatformConsoleOverview:
+        service: OperatorConsoleService = request.app.state.operator_console
+        return await service.overview(environment=request.app.state.settings.env.value)
+
+    @app.get(
+        "/v1/admin/tenants/{tenant_id}/revisions",
+        response_model=list[TenantRevisionSummary],
+        dependencies=[authorization],
+    )
+    async def tenant_revisions(
+        tenant_id: str,
+        request: Request,
+    ) -> tuple[TenantRevisionSummary, ...]:
+        service: OperatorConsoleService = request.app.state.operator_console
+        return await service.revisions(tenant_id)
+
+    @app.get(
+        "/v1/admin/tenants/{tenant_id}/activity",
+        response_model=list[AuditConsoleEntry],
+        dependencies=[authorization],
+    )
+    async def tenant_activity(
+        tenant_id: str,
+        request: Request,
+        limit: int = 30,
+    ) -> tuple[AuditConsoleEntry, ...]:
+        if limit < 1 or limit > 100:
+            raise HTTPException(status_code=422, detail="limit must be between 1 and 100")
+        service: OperatorConsoleService = request.app.state.operator_console
+        return await service.activity(tenant_id, limit=limit)
 
     @app.post(
         "/v1/admin/tenants/{tenant_id}/revisions",

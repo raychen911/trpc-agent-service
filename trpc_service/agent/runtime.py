@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass
 
 from trpc_agent_sdk.configs import RunConfig
@@ -19,7 +20,9 @@ from trpc_service.agent.events import (
     framework_event_to_reply_intent,
 )
 from trpc_service.agent.factory import AgentBuild, AgentFactory
+from trpc_service.agent.governance import govern_agent_input
 from trpc_service.channels.contracts import ReplyIntent
+from trpc_service.metrics import METRICS
 from trpc_service.reliability.types import EventData
 from trpc_service.tenant.context import TenantContext
 from trpc_service.tenant.models import AgentAppSpec
@@ -95,8 +98,46 @@ class TenantAgentRunner:
             raise ValueError("run_id and in_reply_to_delivery_id must not be empty")
         if attempt_no < 1:
             raise ValueError("attempt_no must be positive")
+        started = time.monotonic()
+        outcome = "error"
+        try:
+            result = await self._execute_turn(
+                tenant_context=tenant_context,
+                app=app,
+                new_message=new_message,
+                run_id=run_id,
+                in_reply_to_delivery_id=in_reply_to_delivery_id,
+                attempt_no=attempt_no,
+                approved_tools=approved_tools,
+                timeout_seconds=timeout_seconds,
+            )
+            outcome = "sdk_error" if result.sdk_error else "success"
+            _record_token_metrics(tenant_context, result.framework_events)
+            return result
+        except AgentTurnTimeoutError:
+            outcome = "timeout"
+            raise
+        finally:
+            METRICS.agent_duration_seconds.labels(
+                tenant_context.tenant_id,
+                tenant_context.app_id,
+                outcome,
+            ).observe(max(0.0, time.monotonic() - started))
+
+    async def _execute_turn(
+        self,
+        *,
+        tenant_context: TenantContext,
+        app: AgentAppSpec,
+        new_message: str | Content | list[Content],
+        run_id: str,
+        in_reply_to_delivery_id: str,
+        attempt_no: int,
+        approved_tools: frozenset[str],
+        timeout_seconds: float | None,
+    ) -> TurnResult:
         effective_timeout = _effective_timeout(app, timeout_seconds)
-        sdk_message = _as_sdk_input(new_message)
+        sdk_message = _as_sdk_input(govern_agent_input(new_message, app.governance))
         build = self._agent_factory.build_for_context(
             tenant_context=tenant_context,
             app=app,
@@ -211,3 +252,33 @@ def _new_agent_context(
         timeout=timeout_ms,
         metadata={TENANT_CONTEXT_METADATA_KEY: tenant_context},
     )
+
+
+def _record_token_metrics(
+    tenant_context: TenantContext,
+    events: tuple[Event, ...],
+) -> None:
+    input_tokens = 0
+    output_tokens = 0
+    for event in events:
+        usage = event.usage_metadata
+        if usage is None:
+            continue
+        prompt = usage.prompt_token_count
+        candidates = usage.candidates_token_count
+        if isinstance(prompt, int) and not isinstance(prompt, bool) and prompt > 0:
+            input_tokens += prompt
+        if isinstance(candidates, int) and not isinstance(candidates, bool) and candidates > 0:
+            output_tokens += candidates
+    if input_tokens:
+        METRICS.token_total.labels(
+            tenant_context.tenant_id,
+            tenant_context.app_id,
+            "input",
+        ).inc(input_tokens)
+    if output_tokens:
+        METRICS.token_total.labels(
+            tenant_context.tenant_id,
+            tenant_context.app_id,
+            "output",
+        ).inc(output_tokens)
