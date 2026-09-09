@@ -25,7 +25,7 @@ Inbox/Outbox 和幂等后端支持水平扩展。
 以下路径不需要模型密钥或真实 IM 账号：
 
 ```bash
-git clone https://github.com/xyxhhhhh/trpc-agent-service.git
+git clone https://github.com/raychen911/trpc-agent-service.git
 cd trpc-agent-service
 git checkout feature/xiayuxuan
 uv sync --locked --extra dev --python 3.12
@@ -249,6 +249,8 @@ assert repository.get("demo-tenant").config_version == published.config_version
 发布新版本。完整字段和持久化模型见[数据模型设计](docs/DATA_MODEL.md)。
 
 ## IM 通道
+n**企业微信主验收入口是 wecom_ai_bot（智能机器人 API 模式、BotID + BotSecret 长连接），不是 wecom（传统回调）。**
+
 
 | 通道 | 状态 | 接入方式 |
 | --- | --- | --- |

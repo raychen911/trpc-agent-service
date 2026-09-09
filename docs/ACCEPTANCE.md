@@ -111,7 +111,7 @@
 - 测试: `tests/test_platform.py::PlatformTests::test_channel_registry`、`tests/test_platform.py::PlatformTests::test_legacy_wecom_registry_requires_explicit_opt_in`
 - 证据: `docs/IM_INTEGRATION.md`、`trpc_service/channels/registry.py`
 
-**企业微信主验收入口**: wecom_ai_bot (智能机器人 API 模式、BotID + BotSecret 长连接)。wecom (传统回调) 默认禁用,需 `ENABLE_LEGACY_WECOM=1` 才注册。
+**企业微信主验收入口**: wecom_ai_bot (智能机器人 API 模式、BotID + BotSecret 长连接)，不是 wecom (传统回调)。wecom 默认禁用,需 `ENABLE_LEGACY_WECOM=1` 才注册。**企业微信主验收入口**: wecom_ai_bot (智能机器人 API 模式、BotID + BotSecret 长连接)。wecom (传统回调) 默认禁用,需 `ENABLE_LEGACY_WECOM=1` 才注册。
 
 ### 3.2 群聊/单聊 session_id 生成规则
 
