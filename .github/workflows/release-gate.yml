@@ -2,11 +2,12 @@ name: release-gate
 
 on:
   workflow_dispatch:
-  pull_request:
-  push:
-    branches:
-      - main
-      - "feature/**"
+  # Disabled for competition submission
+  # pull_request:
+  # push:
+  #   branches:
+  #     - main
+  #     - "feature/**"
 
 permissions:
   contents: read
