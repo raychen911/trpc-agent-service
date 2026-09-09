@@ -1,0 +1,22 @@
+# ===================================================================
+# overlays/production - 生产覆盖层
+# ===================================================================
+# 说明: base 保持环境无关基线；镜像 tag / 副本数等环境差异在此覆盖。
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+images:
+  - name: trpc-agent-service
+    newTag: v1.0.0
+
+patches:
+  - target:
+      kind: Deployment
+      name: teneuris-gateway
+    patch: |
+      - op: replace
+        path: /spec/replicas
+        value: 3

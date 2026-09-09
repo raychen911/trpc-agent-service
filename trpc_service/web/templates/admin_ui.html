@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Teneuris Admin 控制台</title>
+<link rel="stylesheet" href="https://unpkg.com/tdesign-vue-next@1/dist/tdesign.min.css">
+<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<script src="https://unpkg.com/tdesign-vue-next@1/dist/tdesign.min.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+         background: linear-gradient(160deg, #eef3fb 0%, #e8edf7 60%, #eef2fa 100%); min-height: 100vh; }
+  .hero { background: linear-gradient(120deg, #0b2a6b 0%, #1f5bd8 55%, #4b9bff 100%);
+          color: #fff; padding: 26px 24px 58px; }
+  .hero-inner { max-width: 1440px; margin: 0 auto; padding: 0 20px; display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; flex-wrap: wrap; }
+  .hero h1 { margin: 0; font-size: 22px; letter-spacing: .5px; }
+  .hero p { margin: 6px 0 0; opacity: .85; font-size: 13px; }
+  .conn { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .wrap { max-width: min(1440px, calc(100vw - 48px)); margin: -34px auto 32px; padding: 0; }
+  .card { background: #fff; border-radius: 14px; box-shadow: 0 6px 24px rgba(15,40,105,.10); padding: 18px; margin-bottom: 16px; }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 16px; }
+  .stat { background: #fff; border-radius: 12px; padding: 16px 18px; box-shadow: 0 4px 16px rgba(15,40,105,.08); }
+  .stat .k { font-size: 12px; color: #8a94a6; }
+  .stat .v { font-size: 26px; font-weight: 600; margin-top: 4px; }
+  .stat .v small { font-size: 12px; color: #8a94a6; font-weight: 400; }
+  .stat.a { border-top: 3px solid #1f5bd8; } .stat.b { border-top: 3px solid #2ba471; }
+  .stat.c { border-top: 3px solid #ed7b2f; } .stat.d { border-top: 3px solid #8f5bd8; }
+  .toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
+  .card h3 { margin: 0 0 12px; font-size: 15px; color: #1d2b48; }
+  pre.json { background: #f6f7f9; padding: 14px; border-radius: 10px; overflow: auto; max-height: 440px; font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="hero"><div class="hero-inner">
+  <div>
+    <h1>✨ Teneuris Admin 控制台</h1>
+    <p>多租户 Agent 平台 · 租户管理 / 灰度下发 / 审计追溯</p>
+  </div>
+  <div class="conn">
+    <t-input v-model="key" type="password" placeholder="X-Admin-Key" style="width:230px" size="small"></t-input>
+    <t-input v-model="operator" placeholder="操作人（可选）" style="width:170px" size="small"></t-input>
+    <t-button theme="primary" size="small" @click="connect">连接</t-button>
+    <t-tag theme="light" size="small" style="color:#fff;background:rgba(255,255,255,.18);border:none">{{ connState }}</t-tag>
+  </div>
+</div></div>
+<div id="app" class="wrap">
+  <div class="stats">
+    <div class="stat a"><div class="k">租户总数</div><div class="v">{{ tenants.length }}</div></div>
+    <div class="stat b"><div class="k">活跃租户</div><div class="v">{{ statActive }}</div></div>
+    <div class="stat c"><div class="k">灰度中</div><div class="v">{{ statGray }}</div></div>
+    <div class="stat d"><div class="k">累计成本 <small>USD</small></div><div class="v">{{ statCost.toFixed(4) }}</div></div>
+  </div>
+
+  <div class="card">
+    <div class="toolbar">
+      <h3 style="flex:1;margin:0">租户列表</h3>
+      <t-button theme="primary" size="small" @click="openCreate">新建租户</t-button>
+      <t-button variant="outline" size="small" @click="load">刷新</t-button>
+    </div>
+    <t-table row-key="tenant_id" :columns="columns" :data="tenants" :loading="loading" stripe></t-table>
+  </div>
+
+  <!-- 新建租户 -->
+  <t-dialog v-model:visible="createVisible" header="新建租户" width="560px" :footer="false">
+    <t-form label-width="110px" @submit.prevent>
+      <t-form-item label="租户 ID"><t-input v-model="form.tenant_id" placeholder="如 team-a"></t-input></t-form-item>
+      <t-form-item label="名称"><t-input v-model="form.name"></t-input></t-form-item>
+      <t-form-item label="模型 provider"><t-input v-model="form.provider" placeholder="deepseek / openai / ..."></t-input></t-form-item>
+      <t-form-item label="模型名"><t-input v-model="form.model_name" placeholder="deepseek-chat"></t-input></t-form-item>
+      <t-form-item label="输入单价 $/1M"><t-input-number v-model="form.input_price" :min="0" :step="0.01" theme="column"></t-input-number></t-form-item>
+      <t-form-item label="输出单价 $/1M"><t-input-number v-model="form.output_price" :min="0" :step="0.01" theme="column"></t-input-number></t-form-item>
+      <t-form-item label="月度预算 USD"><t-input-number v-model="form.budget" :min="0" :step="0.01" theme="column"></t-input-number></t-form-item>
+      <t-form-item label="限流 /分钟"><t-input-number v-model="form.rate" :min="0" theme="column"></t-input-number></t-form-item>
+    </t-form>
+    <div style="text-align:right;margin-top:12px">
+      <t-button @click="createVisible=false">取消</t-button>
+      <t-button theme="primary" @click="create">创建</t-button>
+    </div>
+  </t-dialog>
+
+  <!-- 灰度 -->
+  <t-dialog v-model:visible="grayVisible" :header="'灰度配置：' + grayTarget" width="520px" :footer="false">
+    <t-form label-width="110px" @submit.prevent>
+      <t-form-item label="启用灰度"><t-switch v-model="grayForm.enabled"></t-switch></t-form-item>
+      <t-form-item label="命中比例 %"><t-input-number v-model="grayForm.percent" :min="0" :max="100" theme="column"></t-input-number></t-form-item>
+      <t-form-item label="Canary 覆盖">
+        <t-textarea v-model="grayForm.canary" :autosize="{minRows:4, maxRows:10}" placeholder='{"app":{"system_prompt":"新提示词"}}'></t-textarea>
+      </t-form-item>
+    </t-form>
+    <div style="text-align:right;margin-top:12px">
+      <t-button @click="grayVisible=false">取消</t-button>
+      <t-button theme="primary" @click="saveGray">下发</t-button>
+    </div>
+  </t-dialog>
+
+  <!-- 详情 -->
+  <t-dialog v-model:visible="detailVisible" :header="'租户详情：' + detailTarget" width="680px" :footer="false">
+    <pre class="json">{{ detailJson }}</pre>
+  </t-dialog>
+
+  <!-- 审计 -->
+  <t-dialog v-model:visible="auditVisible" :header="'审计日志：' + auditTarget" width="920px" :footer="false">
+    <t-table row-key="trace_id" :columns="auditColumns" :data="auditLogs" :loading="auditLoading" stripe size="small"></t-table>
+  </t-dialog>
+</div>
+
+<script>
+const { createApp, ref, reactive, computed } = Vue;
+
+const app = createApp({
+  setup() {
+    const key = ref(localStorage.getItem('teneuris_admin_key') || '');
+    const operator = ref('');
+    const connState = ref('未连接');
+    const tenants = ref([]);
+    const loading = ref(false);
+    const createVisible = ref(false);
+    const grayVisible = ref(false);
+    const detailVisible = ref(false);
+    const auditVisible = ref(false);
+    const auditLoading = ref(false);
+    const detailTarget = ref('');
+    const detailJson = ref('');
+    const auditTarget = ref('');
+    const auditLogs = ref([]);
+    const grayTarget = ref('');
+    const grayForm = reactive({ enabled: false, percent: 0, canary: '{}' });
+    const form = reactive({ tenant_id: '', name: '', provider: 'deepseek', model_name: 'deepseek-chat',
+                            input_price: 0.27, output_price: 1.10, budget: 0, rate: 60 });
+
+    const statActive = computed(() => tenants.value.filter(t => t.status === 'active').length);
+    const statGray = computed(() => tenants.value.filter(t => t.gray && t.gray.enabled).length);
+    const statCost = computed(() => tenants.value.reduce((s, t) => s + (t.used_budget_usd || 0), 0));
+
+    function headers() {
+      return { 'X-Admin-Key': key.value, 'X-Admin-Operator': operator.value, 'Content-Type': 'application/json' };
+    }
+    async function api(method, path, body) {
+      const resp = await fetch(path, { method, headers: headers(), body: body === undefined ? undefined : JSON.stringify(body) });
+      const data = await resp.json().catch(() => ({}));
+      if (resp.status === 401) { TDesign.MessagePlugin.error('鉴权失败（401），请检查 X-Admin-Key'); throw new Error('401'); }
+      if (!resp.ok) { TDesign.MessagePlugin.error(data.error || ('HTTP ' + resp.status)); throw new Error(data.error || resp.status); }
+      return data;
+    }
+
+    async function load() {
+      loading.value = true;
+      try {
+        const data = await api('GET', '/tenants');
+        tenants.value = data.tenants || [];
+        connState.value = '已连接 · ' + tenants.value.length + ' 个租户';
+        localStorage.setItem('teneuris_admin_key', key.value);
+      } catch (e) { connState.value = '连接失败'; }
+      loading.value = false;
+    }
+    function connect() { load(); }
+
+    function fmtBudget(row) {
+      const used = (row.used_budget_usd || 0).toFixed(4);
+      const total = row.monthly_budget_usd > 0 ? row.monthly_budget_usd : '不限';
+      return used + ' / ' + total;
+    }
+    function fmtModel(row) {
+      return (row.model && row.model.model_name) ? row.model.model_name : '-';
+    }
+    function fmtGray(row) {
+      return row.gray && row.gray.enabled ? (row.gray.percent + '%') : '关';
+    }
+
+    const columns = [
+      { colKey: 'tenant_id', title: '租户 ID', width: 130 },
+      { colKey: 'name', title: '名称', width: 140 },
+      { colKey: 'status', title: '状态', width: 90, cell: (h, { row }) =>
+          h('t-tag', { theme: row.status === 'active' ? 'success' : 'danger', variant: 'light' }, row.status) },
+      { colKey: 'model', title: '模型', width: 140, cell: (h, { row }) => fmtModel(row) },
+      { colKey: 'rate', title: '限流/分', width: 80, cell: (h, { row }) => String(row.rate_limit_per_min ?? '-') },
+      { colKey: 'budget', title: '预算(用/总)$', width: 130, cell: (h, { row }) => fmtBudget(row) },
+      { colKey: 'gray', title: '灰度', width: 70, cell: (h, { row }) => fmtGray(row) },
+      { colKey: 'op', title: '操作', width: 330, cell: renderActions },
+    ];
+
+    function renderActions(h, { row }) {
+      const mk = (label, opts, fn) => h('t-button', { size: 'small', onClick: fn, ...opts }, label);
+      return h('div', { style: 'display:flex;gap:6px;flex-wrap:wrap' }, [
+        mk(row.status === 'active' ? '停用' : '启用',
+           { theme: row.status === 'active' ? 'warning' : 'success' }, () => toggleStatus(row)),
+        mk('灰度', { variant: 'outline' }, () => openGray(row)),
+        mk('详情', { variant: 'outline' }, () => showDetail(row)),
+        mk('审计', { variant: 'outline' }, () => showAudit(row)),
+        mk('回滚', { variant: 'outline' }, () => rollback(row)),
+        mk('删除', { theme: 'danger', variant: 'outline' }, () => del(row)),
+      ]);
+    }
+
+    async function toggleStatus(row) {
+      const next = row.status === 'active' ? 'suspended' : 'active';
+      await api('PUT', '/tenants/' + row.tenant_id, { status: next });
+      TDesign.MessagePlugin.success(row.tenant_id + ' → ' + next);
+      load();
+    }
+    async function rollback(row) {
+      await api('POST', '/tenants/' + row.tenant_id + '/rollback');
+      TDesign.MessagePlugin.success(row.tenant_id + ' 已回滚到上一版本');
+      load();
+    }
+    async function del(row) {
+      if (!confirm('确认删除租户 ' + row.tenant_id + '？')) return;
+      await api('DELETE', '/tenants/' + row.tenant_id);
+      TDesign.MessagePlugin.success(row.tenant_id + ' 已删除');
+      load();
+    }
+
+    function openCreate() {
+      Object.assign(form, { tenant_id: '', name: '', provider: 'deepseek', model_name: 'deepseek-chat',
+                            input_price: 0.27, output_price: 1.10, budget: 0, rate: 60 });
+      createVisible.value = true;
+    }
+    async function create() {
+      const data = {
+        tenant_id: form.tenant_id, name: form.name,
+        model: { provider: form.provider, model_name: form.model_name,
+                 input_price_per_1m_usd: form.input_price, output_price_per_1m_usd: form.output_price },
+        im: [{ channel_type: 'web' }],
+        backends: { session: 'redis', memory: 'redis', summary: 'sql', audit: 'sql' },
+        monthly_budget_usd: form.budget, rate_limit_per_min: form.rate,
+      };
+      await api('POST', '/tenants', data);
+      TDesign.MessagePlugin.success('租户 ' + form.tenant_id + ' 已创建');
+      createVisible.value = false;
+      load();
+    }
+
+    function openGray(row) {
+      grayTarget.value = row.tenant_id;
+      grayForm.enabled = !!(row.gray && row.gray.enabled);
+      grayForm.percent = (row.gray && row.gray.percent) || 0;
+      grayForm.canary = JSON.stringify((row.gray && row.gray.canary) || {}, null, 2);
+      grayVisible.value = true;
+    }
+    async function saveGray() {
+      let canary = {};
+      try { canary = JSON.parse(grayForm.canary || '{}'); }
+      catch (e) { TDesign.MessagePlugin.error('Canary JSON 不合法'); return; }
+      await api('PUT', '/tenants/' + grayTarget.value,
+                { gray: { enabled: grayForm.enabled, percent: grayForm.percent, canary } });
+      TDesign.MessagePlugin.success('灰度配置已下发');
+      grayVisible.value = false;
+      load();
+    }
+
+    async function showDetail(row) {
+      detailTarget.value = row.tenant_id;
+      const data = await api('GET', '/tenants/' + row.tenant_id);
+      detailJson.value = JSON.stringify(data, null, 2);
+      detailVisible.value = true;
+    }
+
+    const auditColumns = [
+      { colKey: 'created_at', title: '时间', width: 165, cell: (h, { row }) => String(row.created_at || '').slice(0, 19) },
+      { colKey: 'decision', title: '决策', width: 110 },
+      { colKey: 'channel', title: '通道', width: 90 },
+      { colKey: 'user_id', title: '用户', width: 110 },
+      { colKey: 'tool_name', title: '工具', width: 100 },
+      { colKey: 'latency_ms', title: '耗时ms', width: 80 },
+      { colKey: 'cost', title: '成本$', width: 90 },
+      { colKey: 'error_type', title: '错误', width: 120 },
+      { colKey: 'trace_id', title: 'trace_id', width: 130 },
+    ];
+    async function showAudit(row) {
+      auditTarget.value = row.tenant_id;
+      auditVisible.value = true;
+      auditLoading.value = true;
+      try {
+        const data = await api('GET', '/audit/' + row.tenant_id);
+        auditLogs.value = data.logs || [];
+      } catch (e) { auditLogs.value = []; }
+      auditLoading.value = false;
+    }
+
+    return { key, operator, connState, tenants, loading, columns, createVisible, form, create, openCreate,
+             grayVisible, grayTarget, grayForm, saveGray, detailVisible, detailTarget, detailJson,
+             auditVisible, auditLoading, auditTarget, auditLogs, auditColumns,
+             statActive, statGray, statCost,
+             connect, load, toggleStatus, rollback, del, showDetail, showAudit };
+  },
+});
+app.use(TDesign);
+app.mount('#app');
+</script>
+</body>
+</html>

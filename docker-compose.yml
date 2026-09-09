@@ -1,0 +1,64 @@
+# ===================================================================
+# docker-compose.yml - Teneuris 多节点部署（2×Gateway + Redis）
+# ===================================================================
+# 拓扑: 2×Gateway（无状态 Worker）+ 1×Redis（共享 Session/Memory/幂等/锁）
+# 目的: 验证「无 sticky session、依赖共享后端」的核心架构主张——同一 session
+#       的两轮请求命中不同节点，第二轮仍能读到第一轮。
+# 用法: TENEURIS_RUNNER=mock docker compose up -d --build   # 离线多节点验证
+#       docker compose up -d --build                        # framework 真实 LLM
+#       验证: sh scripts/verify-multinode.sh（gw1:8001 / gw2:8004）
+# 镜像: 根 Dockerfile 多阶段生产镜像（uv.lock 锁定依赖 + 源码已打入，
+#       无需挂载源码）；.ide/Dockerfile 为 CNB 开发环境镜像，与本文件无关。
+# 生产注意:
+#   - runner 默认 mock（离线可复现）；真实 LLM 设 TENEURIS_RUNNER=framework
+#     并经 DEEPSEEK_API_KEY 注入
+#   - redis 已开 appendonly 持久化 + healthcheck；生产可换托管 Redis
+#   - SQL(tenant/audit/summary) 走容器内 sqlite，生产应换 mysql/pg
+#     （deploy/kustomize/ 为 K8s 生产推荐部署，含 Secret 注入与 fail-closed 校验）
+# ===================================================================
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    # 不暴露宿主端口：节点经服务名 redis:6379 访问（避免与宿主机 redis 冲突）
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  gw1:
+    build: .
+    image: teneuris:runtime
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      # 容器内 redis 经服务名访问；env 覆盖 config/teneuris.yaml（配置优先级契约）
+      TENEURIS_STORAGE_REDIS_DSN: redis://redis:6379/0
+      # 真实 LLM key（生产经 Secret 注入，不在镜像内写死）
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      # compose 场景 runner=mock 可离线复现；生产 K8s 清单默认 framework
+      TENEURIS_RUNNER: ${TENEURIS_RUNNER:-mock}
+    command:
+      ["sh", "-c",
+       "python -m trpc_service._cli gateway --runner \"${TENEURIS_RUNNER:-mock}\" --storage redis --config /app/config/teneuris.yaml"]
+    ports:
+      - "8001:8000"
+
+  gw2:
+    build: .
+    image: teneuris:runtime
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      TENEURIS_STORAGE_REDIS_DSN: redis://redis:6379/0
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      TENEURIS_RUNNER: ${TENEURIS_RUNNER:-mock}
+    command:
+      ["sh", "-c",
+       "python -m trpc_service._cli gateway --runner \"${TENEURIS_RUNNER:-mock}\" --storage redis --config /app/config/teneuris.yaml"]
+    ports:
+      # 8004 避开本地 start.sh 的 Admin API 8002（同机并存不撞端口）
+      - "8004:8000"

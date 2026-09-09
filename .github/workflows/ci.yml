@@ -1,0 +1,48 @@
+# ===================================================================
+# ci.yml - 质量门禁（lint + 测试 + 覆盖率）
+# ===================================================================
+# 说明: 任何分支的 push / PR 均强制执行；任一步失败则流水线失败，
+#   禁止交付。与本地 gate-check.sh 同一套门禁口径。
+# ===================================================================
+
+name: quality-gate
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          # 测试工具链（pytest-asyncio 为 async 用例必需；与 pyproject dev 组一致）
+          pip install pytest pytest-asyncio pytest-cov flake8
+
+      - name: flake8 静态检查
+        run: sh ./lint_flake8.sh
+
+      - name: 单元测试 + 覆盖率
+        run: sh ./coverage.sh

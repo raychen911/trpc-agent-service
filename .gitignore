@@ -1,27 +1,64 @@
-.idea
+# ===================================================================
+# .gitignore
+# ===================================================================
+
+# --- AI ---
+# .agent
+
+# --- 编辑器 ---
 .vscode
+
+# --- 系统 / 通用 ---
 .DS_Store
 *.lock
+# uv.lock 必须入库（Python 依赖精确锁定的核心载体，见 pyproject.toml）
+!uv.lock
 *.log
 
-*.egg-info
+# --- Go ---
+bin/
+dist/
+*.exe
+*.test
+*.out
+*.prof
 
-build
-dist
+# --- Python ---
+__pycache__/
+*.egg-info
 .venv
 venv
 venv*
-__pycache__
-
 .coverage
 htmlcov
 cov.tmp
 coverage.xml
 .pytest_cache
 
-node_modules
+# --- 运行时数据（SQLite / 日志）---
+*.db
+*.sqlite3
+
+# --- 密钥 / 本地环境（PRD 4.5: 密钥不落库）---
+# .env.example 是模板，需可提交；其余本地环境文件一律排除
+.env
+.env.*
+!.env.example
+
+# --- Node（如前端 / 工具链）---
+node_modules/
 package-lock.json
 pyrightconfig.json
 
+# --- 其他工具产物 ---
+
 # spec-workflow tool artifacts
 .spec-workflow
+
+# Redis 本地持久化产物（测试期 redis-server 默认 dump 路径 / appendonly 目录）
+dump.rdb
+data/appendonlydir/
+
+# K8s 密钥（从 secrets.example.yaml 复制后填写，勿提交）
+deploy/kustomize/**/secrets.yaml
+.agent/
