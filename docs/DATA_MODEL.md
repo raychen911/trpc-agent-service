@@ -10,9 +10,8 @@
   "status": "active",
   "active_config_version": 3,
   "audit_policy": {
-    "level": "tool_and_error",
     "retention_days": 180,
-    "redact_fields": ["authorization", "token", "secret", "api_key", "phone", "email"]
+    "redact_rules": ["authorization", "token", "secret", "api_key", "phone", "email"]
   },
   "quota_policy": {
     "qps_limit": 20,
@@ -133,8 +132,8 @@ CREATE TABLE channel_binding (
   channel TEXT NOT NULL,
   account_id TEXT NOT NULL,
   agent_app_id TEXT NOT NULL,
-  webhook_path TEXT NOT NULL,
-  token_ref TEXT NOT NULL,
+  webhook_path TEXT,
+  token_ref TEXT,
   secret_ref TEXT,
   status TEXT NOT NULL,
   config_version INTEGER NOT NULL,

@@ -98,7 +98,11 @@ def main() -> int:
     env_vars = load_env_file(env_file)
 
     env = os.environ.copy()
-    env.update(env_vars)  # Apply .env variables first
+    # Apply .env variables only if not already set in environment
+    for key, value in env_vars.items():
+        if key not in env:
+            env[key] = value
+    # Override with launcher-specific settings
     env.update(
         {
             # Keep the local smoke-test path dependency-free by default.

@@ -299,8 +299,24 @@ class TrpcAgentWorker(AgentWorker):
             raise _ApprovalRequired(approval_events)
         if not answer:
             raise RuntimeError("tRPC-Agent-Python runtime returned no assistant text")
-        input_tokens = len(_render_conversation(conversation).split())
-        output_tokens = len(answer.split())
+
+        # Use tiktoken for accurate token counting
+        try:
+            import tiktoken
+            encoding = tiktoken.get_encoding("cl100k_base")
+            input_tokens = len(encoding.encode(_render_conversation(conversation)))
+            output_tokens = len(encoding.encode(answer))
+        except (ImportError, Exception):
+            # Fallback: rough estimate for Chinese and other languages
+            input_text = _render_conversation(conversation)
+            chinese_input = sum(1 for c in input_text if '一' <= c <= '鿿')
+            other_input = len(input_text) - chinese_input
+            input_tokens = chinese_input * 2 + other_input // 4
+
+            chinese_output = sum(1 for c in answer if '一' <= c <= '鿿')
+            other_output = len(answer) - chinese_output
+            output_tokens = chinese_output * 2 + other_output // 4
+
         return ModelResponse(answer, input_tokens, output_tokens, input_tokens + output_tokens)
 
     def _runtime_context(self):

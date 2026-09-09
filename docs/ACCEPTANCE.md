@@ -73,16 +73,16 @@
 
 **实现**:
 - 代码: `trpc_service/storage/base.py` (SessionStore, MemoryStore, SummaryStore, ArtifactStore, KnowledgeStore, AuditStore, IdempotencyStore, CompensationStore)
-- 证据: `docs/DATA_MODEL.md:281-395`
+- 证据: `docs/DATA_MODEL.md` (完整数据模型)
 
 ### 2.3 数据同步策略
 
 **要求**: 设计数据同步策略,至少覆盖: 多节点并发写入同一 session 的一致性、Session event/state/summary 的更新顺序、Memory 写入后的跨节点可见性、后端迁移方案、IM 消息重复投递幂等处理。
 
 **实现**:
-- 并发写: `trpc_service/storage/session_mailbox.py:230-426` (Inbox/Outbox、lease)
-- 幂等: `trpc_service/storage/base.py:397-422` (IdempotencyStore)、`tests/test_platform.py::PlatformTests::test_webhook_dispatch_and_idempotency`
-- 补偿: `trpc_service/storage/base.py:424-462` (CompensationStore)、`tests/test_platform.py::PlatformTests::test_sqlite_compensation_round_trip_does_not_override_idempotency`
+- 并发写: `trpc_service/storage/session_mailbox.py` (Inbox/Outbox、lease)
+- 幂等: `trpc_service/storage/base.py` (IdempotencyStore)、`tests/test_platform.py::PlatformTests::test_webhook_dispatch_and_idempotency`
+- 补偿: `trpc_service/storage/base.py` (CompensationStore)、`tests/test_platform.py::PlatformTests::test_sqlite_compensation_round_trip_does_not_override_idempotency`
 - 后端迁移: `trpc_service/storage/migration_control.py`、`tests/test_platform.py::PlatformTests::test_migration_round_trip_with_sqlite_storage`
 - Schema 迁移: `trpc_service/database/`、`tests/test_database_migrations.py`、`scripts/database_migration_gate.py`
 - 证据: `docs/MIGRATION.md`、`scripts/database_migration_gate.py`、`tests/test_database_migrations.py`

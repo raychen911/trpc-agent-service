@@ -1,3 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-python -m unittest discover -s tests -v
+uv run coverage run -m pytest tests/ -v
+uv run coverage report -m
+uv run coverage html
+echo "Coverage report generated in htmlcov/index.html"

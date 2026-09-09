@@ -23,6 +23,7 @@ class ToolRegistry:
     def __init__(self) -> None:
         self._tools: dict[str, Callable[..., ToolResult]] = {}
         self._mcp_servers: dict[str, dict[str, Any]] = {}
+        self._tenant_mcp_servers: dict[str, dict[str, dict[str, Any]]] = {}
 
     def register(self, name: str, handler: Callable[..., ToolResult]) -> None:
         self._tools[name] = handler
@@ -31,6 +32,19 @@ class ToolRegistry:
     def registered_names(self) -> set[str]:
         names = set(self._tools)
         for server in self._mcp_servers.values():
+            names.update(server["tools"])
+        for tenant_servers in self._tenant_mcp_servers.values():
+            for server in tenant_servers.values():
+                names.update(server["tools"])
+        return names
+
+    def registered_names_for_tenant(self, tenant_id: str) -> set[str]:
+        """Return tool names including tenant-scoped MCP servers."""
+        names = set(self._tools)
+        for server in self._mcp_servers.values():
+            names.update(server["tools"])
+        tenant_servers = self._tenant_mcp_servers.get(tenant_id, {})
+        for server in tenant_servers.values():
             names.update(server["tools"])
         return names
 
@@ -95,16 +109,23 @@ class ToolRegistry:
         tools: list[str],
         headers: dict[str, str] | None = None,
         timeout: float = 10,
+        tenant_id: str | None = None,
     ) -> None:
         validate_outbound_url(endpoint)
-        self._mcp_servers[name] = {
+        server_config = {
             "endpoint": endpoint,
             "tools": list(tools),
             "headers": dict(headers or {}),
             "timeout": timeout,
         }
+        if tenant_id:
+            if tenant_id not in self._tenant_mcp_servers:
+                self._tenant_mcp_servers[tenant_id] = {}
+            self._tenant_mcp_servers[tenant_id][name] = server_config
+        else:
+            self._mcp_servers[name] = server_config
 
-    def call(self, name: str, **kwargs: Any) -> ToolResult:
+    def call(self, name: str, tenant_id: str | None = None, **kwargs: Any) -> ToolResult:
         idempotency_key = kwargs.get("idempotency_key")
         if name in self._tools:
             handler = self._tools[name]
@@ -117,32 +138,47 @@ class ToolRegistry:
                     if injected_name not in parameters:
                         kwargs.pop(injected_name, None)
             return handler(**kwargs)
+
+        # First check tenant-specific MCP servers
+        if tenant_id:
+            tenant_servers = self._tenant_mcp_servers.get(tenant_id, {})
+            for server_name, server in tenant_servers.items():
+                if name in server["tools"]:
+                    return self._call_mcp_server(name, server, server_name, idempotency_key, **kwargs)
+
+        # Then check global MCP servers
         for server_name, server in self._mcp_servers.items():
             if name in server["tools"]:
-                body = {
-                    "jsonrpc": "2.0",
-                    "id": kwargs.get("request_id", name),
-                    "method": "tools/call",
-                    "params": {
-                        "name": name,
-                        "arguments": kwargs.get("arguments", {}),
-                        "metadata": {"idempotency_key": idempotency_key} if idempotency_key else {},
-                    },
-                }
-                request = Request(
-                    validate_outbound_url(server["endpoint"]),
-                    data=json.dumps(body).encode("utf-8"),
-                    headers={"Content-Type": "application/json", **server.get("headers", {})},
-                    method="POST",
-                )
-                with urlopen(request, timeout=float(server.get("timeout", 10))) as response:
-                    result = json.loads(response.read().decode("utf-8"))
-                if result.get("error"):
-                    raise RuntimeError(str(result["error"]))
-                value = result.get("result", {})
-                content = value.get("content", value) if isinstance(value, dict) else value
-                return ToolResult(name, str(content), {"mcp_server": server_name})
+                return self._call_mcp_server(name, server, server_name, idempotency_key, **kwargs)
+
         raise KeyError(f"tool not registered: {name}")
+
+    def _call_mcp_server(
+        self, name: str, server: dict[str, Any], server_name: str, idempotency_key: str | None, **kwargs: Any
+    ) -> ToolResult:
+        body = {
+            "jsonrpc": "2.0",
+            "id": kwargs.get("request_id", name),
+            "method": "tools/call",
+            "params": {
+                "name": name,
+                "arguments": kwargs.get("arguments", {}),
+                "metadata": {"idempotency_key": idempotency_key} if idempotency_key else {},
+            },
+        }
+        request = Request(
+            validate_outbound_url(server["endpoint"]),
+            data=json.dumps(body).encode("utf-8"),
+            headers={"Content-Type": "application/json", **server.get("headers", {})},
+            method="POST",
+        )
+        with urlopen(request, timeout=float(server.get("timeout", 10))) as response:
+            result = json.loads(response.read().decode("utf-8"))
+        if result.get("error"):
+            raise RuntimeError(str(result["error"]))
+        value = result.get("result", {})
+        content = value.get("content", value) if isinstance(value, dict) else value
+        return ToolResult(name, str(content), {"mcp_server": server_name})
 
     @property
     def mcp_servers(self) -> dict[str, dict[str, Any]]:

@@ -226,7 +226,7 @@ class AgentWorker:
         app = config.app(context.agent_app_id)
         storage = storage or self.storage
         for server in app.metadata.get("mcp_servers", []):
-            self.tools.register_mcp_server(**server)
+            self.tools.register_mcp_server(**server, tenant_id=context.tenant_id)
         policy = TenantPolicy(config, context.agent_app_id)
         events: list[AgentEvent] = []
         with self.telemetry.span("runner.run", context):
@@ -813,6 +813,7 @@ class AgentWorker:
                         if self.tools.has_local_tool(name):
                             result = self.tools.call(
                                 name,
+                                tenant_id=request.tenant_context.tenant_id,
                                 **arguments,
                                 request_id=request.tenant_context.trace_id,
                                 idempotency_key=tool_key,
@@ -820,6 +821,7 @@ class AgentWorker:
                         else:
                             result = self.tools.call(
                                 name,
+                                tenant_id=request.tenant_context.tenant_id,
                                 arguments=arguments,
                                 request_id=request.tenant_context.trace_id,
                                 idempotency_key=tool_key,
@@ -1300,9 +1302,25 @@ class AgentGateway:
                 observe_request(config.tenant_id, message.channel, "revoked")
                 return session_id, [AgentEvent("message_revoked", "", {"revoked": True})], response_ref
 
-            estimated_input_tokens = len((message.text or "").split())
+            # Use tiktoken for accurate token estimation (supports Chinese and all languages)
+            # Fallback to word split if tiktoken is not available
+            try:
+                import tiktoken
+                encoding = tiktoken.get_encoding("cl100k_base")  # GPT-3.5/4 encoding
+                estimated_input_tokens = len(encoding.encode(message.text or ""))
+            except (ImportError, Exception):
+                # Rough estimate: 1 Chinese char ≈ 2 tokens, 1 English word ≈ 1.3 tokens
+                text = message.text or ""
+                chinese_chars = sum(1 for c in text if '一' <= c <= '鿿')
+                other_chars = len(text) - chinese_chars
+                estimated_input_tokens = chinese_chars * 2 + other_chars // 4
+
+            # Reserve tokens for max_output to prevent budget overflow
+            model_config = config.app(binding.agent_app_id).model_config
+            max_output_tokens = model_config.max_output_tokens
+            estimated_total_tokens = estimated_input_tokens + max_output_tokens
             estimated_cost = (
-                estimated_input_tokens * config.app(binding.agent_app_id).model_config.cost_per_1k_tokens / 1000
+                estimated_total_tokens * model_config.cost_per_1k_tokens / 1000
             )
             try:
                 self.quota.check(
