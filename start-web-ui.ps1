@@ -12,4 +12,12 @@ if (Test-Path -LiteralPath $venvPython) {
     exit $LASTEXITCODE
 }
 
-Write-Error "uv or the project virtual environment was not found. Run: uv sync --locked --extra dev --python 3.12"
+# Fallback to global Python (matching Linux start.sh behavior)
+$globalPython = Get-Command python -ErrorAction SilentlyContinue
+if ($globalPython) {
+    Write-Warning "Using global Python. Consider running: uv sync --locked --extra dev --python 3.12"
+    python scripts\web_ui_launcher.py @args
+    exit $LASTEXITCODE
+}
+
+Write-Error "uv, virtual environment, or Python was not found. Install Python or run: uv sync --locked --extra dev --python 3.12"

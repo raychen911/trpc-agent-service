@@ -106,6 +106,14 @@ uv sync --locked --extra dev --python 3.12
 python -m pip install -r requirements-dev.txt
 ```
 
+### 企业微信智能机器人（可选）
+
+企业微信长连接模式需要额外安装 SDK：
+
+```bash
+pip install wecom-aibot-sdk-python
+```
+
 ## 测试与质量门禁
 
 推荐直接执行仓库门禁：
