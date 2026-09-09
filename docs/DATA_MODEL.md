@@ -8,7 +8,7 @@
 {
   "tenant_id": "tenant_demo",
   "status": "active",
-  "active_config_version": 3,
+  "config_version": 3,
   "audit_policy": {
     "retention_days": 180,
     "redact_rules": ["authorization", "token", "secret", "api_key", "phone", "email"]
@@ -16,8 +16,7 @@
   "quota_policy": {
     "qps_limit": 20,
     "daily_token_limit": 1000000,
-    "daily_cost_limit": 200.0,
-    "max_input_chars": 8000
+    "daily_cost_limit": 200.0
   },
   "apps": [
     {
@@ -87,7 +86,7 @@ CREATE TABLE tenant (
   tenant_id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   status TEXT NOT NULL,
-  active_config_version INTEGER NOT NULL,
+  config_version INTEGER NOT NULL,
   created_at TIMESTAMP NOT NULL,
   updated_at TIMESTAMP NOT NULL
 );

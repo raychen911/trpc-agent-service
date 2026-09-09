@@ -12,7 +12,7 @@
 - 代码: `trpc_service/tenant/models.py`
   - `TenantConfig`: 包含 `tenant_id`、`config_version`、`apps`、`channel_bindings`、`storage_profile`、`audit_policy`、`quota_policy`、`gray_release_policy`；模型和工具策略按 `AgentApp` 配置
 - 测试: `tests/test_platform.py::PlatformTests::test_session_is_tenant_and_conversation_scoped`
-- 证据: `docs/DATA_MODEL.md:3-80`、`docs/ARCHITECTURE.md:45-48`
+- 证据: `docs/DATA_MODEL.md`、`docs/ARCHITECTURE.md`
 
 ### 1.2 节点部署拓扑
 
@@ -20,7 +20,7 @@
 
 **实现**:
 - 代码: `trpc_service/gateway/router.py` (Gateway/Worker)、`trpc_service/channels/` (Channel Adapter)、`trpc_service/storage/` (Storage Adapter)、`trpc_service/web/app.py` (Admin API)、`trpc_service/telemetry/` (Telemetry)
-- 文档: `docs/ARCHITECTURE.md:5-36`
+- 文档: `docs/ARCHITECTURE.md`
 - 部署: `deployment/docker-compose.yml`、`deployment/kubernetes/platform.yaml`
 
 ### 1.3 多节点水平扩展
@@ -28,17 +28,17 @@
 **要求**: 支持多节点水平扩展,说明用户消息如何路由到正确租户和正确 session。
 
 **实现**:
-- 代码: `trpc_service/gateway/router.py:110-182` (`dispatch`)
+- 代码: `trpc_service/gateway/router.py` (`dispatch`)
   - 路径: channel + account_id -> tenant/app -> session_id = hash(tenant_id + channel + account_id + user_id + agent_app_id)
 - 测试: `tests/test_platform.py::PlatformTests::test_concurrent_session_updates_preserve_tenant_scope`
-- 证据: `docs/ARCHITECTURE.md:51-53`
+- 证据: `docs/ARCHITECTURE.md`
 
 ### 1.4 会话粘性（Sticky session）
 
 **要求**: 说明是否需要 sticky session;如果不需要,说明如何依赖共享 Session / Memory 后端实现无状态 Worker。
 
 **实现**:
-- 文档: `docs/ARCHITECTURE.md:53-55`
+- 文档: `docs/ARCHITECTURE.md`
   - 明确不需要 sticky session,Worker 依赖共享 Session/Memory/Inbox/Outbox 后端,InMemory 仅限单进程演示
 - 测试: `tests/test_session_mailbox_v2.py::test_session_mailbox_expired_takeover_fences_old_worker`
 
@@ -47,14 +47,14 @@
 **要求**: 设计租户隔离机制,包括配置隔离、数据隔离、工具权限隔离、日志脱敏和密钥管理。
 
 **实现**:
-- 配置版本隔离: `trpc_service/tenant/models.py:158-224` (`publish/rollback`)
+- 配置版本隔离: `trpc_service/tenant/models.py` (`publish/rollback`)
 - Redis key 前缀: `trpc_service/storage/redis_store.py` `_key`
 - SQL 复合主键: `trpc_service/storage/sql_store.py`；PostgreSQL RLS 验证见 `tests/test_postgres_rls.py`
 - 工具 Filter: `trpc_service/policy/tenant_filter.py`
 - 日志脱敏: `trpc_service/security/secrets.py`、`trpc_service/telemetry/tracing.py`
 - 密钥管理: `trpc_service/security/secrets.py`
 - 测试: `tests/test_postgres_rls.py::PostgresRLSIntegrationTests::test_app_role_isolation_and_admin_visibility`
-- 证据: `docs/ARCHITECTURE.md:47-50`、`tests/test_postgres_rls.py`
+- 证据: `docs/ARCHITECTURE.md`、`tests/test_postgres_rls.py`
 
 ## 数据同步与多后端支持
 
@@ -64,8 +64,8 @@
 
 **实现**:
 - 代码: `trpc_service/storage/` (base.py, in_memory.py, redis_store.py, sql_store.py, postgres_store.py, vector_store.py, object_store.py)
-- 配置: `trpc_service/tenant/models.py:116-131` (`StorageProfile`)
-- 证据: `docs/DATA_MODEL.md:281-290`
+- 配置: `trpc_service/tenant/models.py` (`StorageProfile`)
+- 证据: `docs/DATA_MODEL.md`
 
 ### 2.2 统一数据访问抽象
 
@@ -91,13 +91,13 @@
 
 **要求**: 说明不同后端的一致性取舍,例如强一致、最终一致、读写延迟、成本和运维复杂度。
 
-**实现**: `docs/MIGRATION.md:3-50`、`docs/ARCHITECTURE.md:61-70`
+**实现**: `docs/MIGRATION.md`、`docs/ARCHITECTURE.md`
 
 ### 2.5 数据模型
 
 **要求**: 给出一个最小数据模型或表结构示例,至少包含 tenant、agent app、session、message/event、memory、summary、channel binding、audit log。
 
-**实现**: `docs/DATA_MODEL.md:81-240`
+**实现**: `docs/DATA_MODEL.md`
 
 ## IM 软件接入
 
@@ -118,9 +118,9 @@
 **要求**: 说明群聊和单聊的 session_id 生成规则,以及用户跨群、跨租户时的隔离策略。
 
 **实现**:
-- 代码: `trpc_service/gateway/router.py:152-156`
+- 代码: `trpc_service/gateway/router.py`
   - session_id = hash(tenant_id + channel + account_id + user_id|group_id + agent_app_id)
-- 证据: `docs/ARCHITECTURE.md:51-53`
+- 证据: `docs/ARCHITECTURE.md`
 
 ### 3.3 IM 平台限制
 
@@ -129,7 +129,7 @@
 **实现**:
 - 代码: `trpc_service/channels/reliable.py` (split_text、ChannelRateLimiter、重试/DLQ)、`trpc_service/channels/outbound_queue.py`、`trpc_service/policy/quota.py`
 - 测试: `tests/test_platform.py::PlatformTests::test_reliable_delivery_retries_and_dead_letters`、`tests/test_platform.py::PlatformTests::test_quota_enforcer_rejects_qps_and_daily_usage`
-- 证据: `docs/ARCHITECTURE.md:83-88`、`docs/IM_INTEGRATION.md`
+- 证据: `docs/ARCHITECTURE.md`、`docs/IM_INTEGRATION.md`
 
 ## 治理、监控和安全
 
@@ -140,7 +140,7 @@
 **实现**:
 - 代码: `trpc_service/policy/tenant_filter.py`
 - 测试: `tests/test_platform.py::PlatformTests::test_tool_approval_requires_persistent_confirmation`、`tests/test_hardening.py::HardeningTests::test_tool_risk_and_budget_are_enforced`
-- 证据: `docs/ARCHITECTURE.md:71-75`
+- 证据: `docs/ARCHITECTURE.md`
 
 ### 4.2 监控指标
 
@@ -149,7 +149,7 @@
 **实现**:
 - 代码: `trpc_service/telemetry/metrics.py`
 - 测试: `tests/test_platform.py::PlatformTests::test_gateway_preserves_inbound_traceparent_without_otel_exporter`
-- 证据: `docs/CAPACITY.md:28-36`
+- 证据: `docs/CAPACITY.md`
 
 ### 4.3 OpenTelemetry trace
 
@@ -158,15 +158,15 @@
 **实现**:
 - 代码: `trpc_service/telemetry/tracing.py`
 - 测试: `tests/test_platform.py::PlatformTests::test_gateway_preserves_inbound_traceparent_without_otel_exporter`
-- 证据: `docs/ARCHITECTURE.md:76-82`、`docs/SEQUENCE.md`
+- 证据: `docs/ARCHITECTURE.md`、`docs/SEQUENCE.md`
 
 ### 4.4 审计日志字段
 
 **要求**: 设计审计日志字段,至少包含 tenant_id、channel、user_id、session_id、agent_name、tool_name、decision、latency、error_type、cost、trace_id。
 
 **实现**:
-- 代码: `trpc_service/storage/base.py:337-363` (AuditStore)
-- 模型: `docs/DATA_MODEL.md:240-260`
+- 代码: `trpc_service/storage/base.py` (AuditStore)
+- 模型: `docs/DATA_MODEL.md`
 - 测试: `tests/test_platform.py::PlatformTests::test_sdk_tool_adapter_executes_platform_tool_with_audit`
 
 ### 4.5 密钥管理和脱敏
@@ -176,7 +176,7 @@
 **实现**:
 - 代码: `trpc_service/security/secrets.py`、`trpc_service/telemetry/tracing.py`
 - 测试: `tests/test_platform.py::PlatformTests::test_secret_redaction_covers_text_and_nested_provider_data`、`tests/test_platform.py::PlatformTests::test_wecom_robot_webhook_url_can_be_secret_reference`
-- 证据: `docs/ARCHITECTURE.md:47-50`
+- 证据: `docs/ARCHITECTURE.md`
 
 ### 4.6 生产治理、可观测性与运维验收
 
@@ -211,7 +211,7 @@
 **要求**: 设计节点故障、IM 重试、数据库短暂不可用、模型超时、工具执行失败时的降级策略。
 
 **实现**:
-- 代码: `trpc_service/gateway/router.py` (timeout/retry)、`trpc_service/storage/session_mailbox.py:230-426` (Inbox/Outbox、lease fencing)
+- 代码: `trpc_service/gateway/router.py` (timeout/retry)、`trpc_service/storage/session_mailbox.py` (Inbox/Outbox、lease fencing)
 - 测试: `tests/test_session_mailbox_v2.py::test_session_mailbox_expired_takeover_fences_old_worker`、`tests/test_hardening.py::HardeningTests::test_toxiproxy_cycle_requires_outage_and_recovery`
 - 证据: `docs/ARCHITECTURE.md`、`docs/OPERATIONS.md`
 
@@ -220,15 +220,15 @@
 **要求**: 说明如何做灰度发布和租户级配置回滚。
 
 **实现**:
-- 代码: `trpc_service/tenant/models.py:158-224` (publish/rollback/gray-release)
+- 代码: `trpc_service/tenant/models.py` (publish/rollback/gray-release)
 - 测试: `tests/test_platform.py::PlatformTests::test_tenant_versions_survive_repository_restart`、`tests/test_platform.py::PlatformTests::test_tenant_gray_release_resolves_candidate_by_session`
-- 证据: `docs/ARCHITECTURE.md:45-48`
+- 证据: `docs/ARCHITECTURE.md`
 
 ### 5.3 容量评估
 
 **要求**: 说明如何做容量评估,例如每节点并发 session 数、平均 token 消耗、Redis / SQL QPS、IM 回调峰值。
 
-**实现**: `docs/CAPACITY.md:11-27`
+**实现**: `docs/CAPACITY.md`
 
 ### 5.4 部署方案
 
@@ -238,7 +238,7 @@
 - Docker Compose: `deployment/docker-compose.yml`
 - Kubernetes: `deployment/kubernetes/platform.yaml`
 - 测试: `tests/test_hardening.py::HardeningTests::test_production_kubernetes_manifest_passes_static_gate`
-- 证据: `docs/ARCHITECTURE.md:113-149`
+- 证据: `docs/ARCHITECTURE.md`
 
 ## 交付物
 
@@ -248,15 +248,15 @@
 
 ### 6.2 系统架构图
 
-**实现**: `docs/ARCHITECTURE.md:5-36` (Mermaid 图)
+**实现**: `docs/ARCHITECTURE.md` (Mermaid 图)
 
 ### 6.3 核心时序图
 
-**实现**: `docs/SEQUENCE.md:5-87` (企业微信智能机器人消息 -> Agent 执行 -> Tool 调用 -> Session / Memory 写入 -> IM 回复)
+**实现**: `docs/SEQUENCE.md` (企业微信智能机器人消息 -> Agent 执行 -> Tool 调用 -> Session / Memory 写入 -> IM 回复)
 
 ### 6.4 数据模型
 
-**实现**: `docs/DATA_MODEL.md:81-395`
+**实现**: `docs/DATA_MODEL.md`
 
 ### 6.5 数据同步和幂等策略
 
@@ -264,7 +264,7 @@
 
 ### 6.6 多后端适配方案
 
-**实现**: `docs/MIGRATION.md:101-126`、`docs/DATA_MODEL.md:281-290`
+**实现**: `docs/MIGRATION.md`、`docs/DATA_MODEL.md`
 
 ### 6.7 风险清单
 
@@ -278,6 +278,6 @@
 
 **要求**: 方案需要明确哪些能力可直接复用 tRPC-Agent-Python,哪些需要新增平台层模块。
 
-**实现**: `docs/ARCHITECTURE.md:37-43`、`docs/IMPLEMENTATION.md:121-145`
+**实现**: `docs/ARCHITECTURE.md`、`docs/IMPLEMENTATION.md`
 - 复用: Runner、Session、Memory、Summary、Knowledge、Tool/MCP、Filter、模型 Provider、FastAPI/Web、Telemetry
 - 新增平台层: tenant、gateway、channels、storage (Redis/SQL/PostgreSQL/vector/object)、policy、security、admin、deployment

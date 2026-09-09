@@ -27,6 +27,7 @@ Inbox/Outbox 和幂等后端支持水平扩展。
 ```bash
 git clone https://github.com/xyxhhhhh/trpc-agent-service.git
 cd trpc-agent-service
+git checkout feature/xiayuxuan
 uv sync --locked --extra dev --python 3.12
 uv run python scripts/quality_gate.py
 uv run python scripts/release_gate.py
