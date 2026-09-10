@@ -1,0 +1,80 @@
+x-service-environment: &service-environment
+  TRPC_SERVICE_APP_ENV: development
+  TRPC_SERVICE_DATABASE_URL: postgresql+asyncpg://trpc_agent:local-password@postgres:5432/trpc_agent
+  TRPC_SERVICE_MODEL_PROVIDER: openai
+  TRPC_SERVICE_MODEL_NAME: zai-org/GLM-5.2
+  TRPC_SERVICE_MODEL_BASE_URL: https://api.siliconflow.cn/v1
+  TRPC_SERVICE_MODEL_API_KEY_REF: env://TRPC_AGENT_API_KEY
+  TRPC_SERVICE_ADMIN_API_KEY_REF: env://TRPC_SERVICE_ADMIN_API_KEY
+  TRPC_SERVICE_SESSION_HMAC_KEY_REF: env://TRPC_SERVICE_SESSION_HMAC_KEY
+  TRPC_SERVICE_EXECUTION_BACKEND: redis
+  TRPC_SERVICE_QUEUE_REDIS_URL_REF: env://TRPC_QUEUE_REDIS_URL
+  TRPC_QUEUE_REDIS_URL: redis://redis:6379/0
+  TRPC_REDIS_URL: redis://redis:6379/1
+  TRPC_AGENT_API_KEY: ${TRPC_AGENT_API_KEY:-local-placeholder}
+  TRPC_SERVICE_ADMIN_API_KEY: ${TRPC_SERVICE_ADMIN_API_KEY:-local-admin-key}
+  TRPC_SERVICE_SESSION_HMAC_KEY: ${TRPC_SERVICE_SESSION_HMAC_KEY:-local-session-key-at-least-16}
+
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: trpc-agent-service:local
+    command: ["python", "-m", "trpc_service._cli", "serve"]
+    environment:
+      <<: *service-environment
+      TRPC_SERVICE_HOST: 0.0.0.0
+    ports:
+      - "127.0.0.1:18000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    image: trpc-agent-service:local
+    command: ["python", "-m", "trpc_service._cli", "run-worker"]
+    environment:
+      <<: *service-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: trpc_agent
+      POSTGRES_USER: trpc_agent
+      POSTGRES_PASSWORD: local-password
+    ports:
+      - "127.0.0.1:15432:5432"
+    volumes:
+      - multi-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trpc_agent -d trpc_agent"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "127.0.0.1:16379:6379"
+    volumes:
+      - multi-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+
+volumes:
+  multi-postgres-data:
+  multi-redis-data:

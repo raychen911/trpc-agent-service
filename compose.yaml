@@ -1,0 +1,41 @@
+services:
+  agent-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      TRPC_SERVICE_HOST: 0.0.0.0
+      TRPC_SERVICE_DATABASE_URL: sqlite+aiosqlite:////app-data/trpc_agent_service.db
+      TRPC_REDIS_URL: redis://redis:6379/0
+      TRPC_AGENT_API_KEY: ${TRPC_AGENT_API_KEY:-}
+      TRPC_SERVICE_ADMIN_API_KEY: ${TRPC_SERVICE_ADMIN_API_KEY:-}
+      TRPC_SERVICE_SESSION_HMAC_KEY: ${TRPC_SERVICE_SESSION_HMAC_KEY:-}
+      TRPC_TELEGRAM_BOT_TOKEN: ${TRPC_TELEGRAM_BOT_TOKEN:-}
+      TRPC_WECOM_BOT_SECRET: ${TRPC_WECOM_BOT_SECRET:-}
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - agent-data:/app-data
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  agent-data:
+  redis-data:

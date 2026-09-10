@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-channels
+  namespace: trpc-agent
+spec:
+  replicas: 0
+  selector:
+    matchLabels:
+      app: agent-channels
+  template:
+    metadata:
+      labels:
+        app: agent-channels
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+      containers:
+        - name: channels
+          image: trpc-agent-service:local
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "trpc_service._cli", "run-channels"]
+          envFrom:
+            - configMapRef:
+                name: trpc-agent-config
+            - secretRef:
+                name: trpc-agent-secrets
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
