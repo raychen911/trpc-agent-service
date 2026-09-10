@@ -1,23 +1,34 @@
 .idea
 .vscode
 .DS_Store
-*.lock
 *.log
+.env*
+!.env.example
+deploy/k8s/secret.local.yaml
+data/*
+!data/.gitkeep
 
 *.egg-info
 
 build
 dist
+.package-dist
 .venv
 venv
 venv*
 __pycache__
+.build-pycache
+.test-tmp
+.ruff_cache
+.uv-cache
+.tools
 
 .coverage
 htmlcov
 cov.tmp
 coverage.xml
 .pytest_cache
+pytest-cache-files-*
 
 node_modules
 package-lock.json
