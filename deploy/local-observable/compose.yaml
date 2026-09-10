@@ -1,0 +1,158 @@
+# Minimal observable deployment overlay (US6, FR-026).
+#
+# Brings up: schema-init + Gateway + Worker-A/B + OTel Collector, reusing the
+# Redis/PostgreSQL authority from deploy/local-shared (started separately).
+# Core healthchecks use /health/ready; real Feishu/WeCom adapters live behind
+# the explicit `real-channels` profile; secrets only come from the current
+# process environment or .env.local.
+name: trpc-agent-local-observable
+
+include:
+  - path: ../local-shared/compose.yaml
+    project_directory: ../local-shared
+
+services:
+  schema-init:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    command: ["uv", "run", "trpc-agent-shared-init"]
+    env_file:
+      - path: .env.local
+        required: false
+    environment:
+      TRPC_SHARED_DATABASE_URL: postgresql+asyncpg://trpc_agent:${TRPC_DEMO_POSTGRES_PASSWORD:?set TRPC_DEMO_POSTGRES_PASSWORD}@postgres:5432/trpc_agent
+      TRPC_SHARED_REDIS_URL: redis://:${TRPC_DEMO_REDIS_PASSWORD:?set TRPC_DEMO_REDIS_PASSWORD}@redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [shared-state]
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.120.0
+    command: ["--config", "/etc/otel-collector.yaml"]
+    volumes:
+      - ../local-observable/otel-collector.yaml:/etc/otel-collector.yaml:ro
+    ports:
+      - "127.0.0.1:4318:4318"
+      - "127.0.0.1:55679:55679"
+    healthcheck:
+      test: ["CMD", "/otelcol-contrib", "validate", "--config=/etc/otel-collector.yaml"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+    networks: [shared-state]
+
+  gateway:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    command: ["uv", "run", "trpc-agent-shared-serve", "--host", "0.0.0.0", "--port", "8080", "--node-id", "gateway-1"]
+    env_file:
+      - path: .env.local
+        required: false
+    environment:
+      TRPC_SHARED_DATABASE_URL: postgresql+asyncpg://trpc_agent:${TRPC_DEMO_POSTGRES_PASSWORD:?set TRPC_DEMO_POSTGRES_PASSWORD}@postgres:5432/trpc_agent
+      TRPC_SHARED_REDIS_URL: redis://:${TRPC_DEMO_REDIS_PASSWORD:?set TRPC_DEMO_REDIS_PASSWORD}@redis:6379/0
+      TRPC_OTLP_ENDPOINT: http://otel-collector:4318
+      TRPC_OPS_TOKEN: ${TRPC_DEMO_OPS_TOKEN:?set TRPC_DEMO_OPS_TOKEN}
+      TRPC_CONTAINERIZED: "1"
+      TRPC_NODE_ID: gateway-1
+    ports:
+      - "127.0.0.1:8080:8080"
+    healthcheck:
+      test: [CMD-SHELL, "python -c \"import urllib.request,sys;sys.exit(0 if urllib.request.urlopen('http://localhost:8080/health/ready').status==200 else 1)\""]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    depends_on:
+      schema-init:
+        condition: service_completed_successfully
+      otel-collector:
+        condition: service_healthy
+    networks: [shared-state]
+
+  worker-a:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    command: ["uv", "run", "trpc-agent-shared-serve", "--host", "0.0.0.0", "--port", "8080", "--node-id", "worker-a"]
+    env_file:
+      - path: .env.local
+        required: false
+    environment:
+      TRPC_SHARED_DATABASE_URL: postgresql+asyncpg://trpc_agent:${TRPC_DEMO_POSTGRES_PASSWORD:?set TRPC_DEMO_POSTGRES_PASSWORD}@postgres:5432/trpc_agent
+      TRPC_SHARED_REDIS_URL: redis://:${TRPC_DEMO_REDIS_PASSWORD:?set TRPC_DEMO_REDIS_PASSWORD}@redis:6379/0
+      TRPC_OTLP_ENDPOINT: http://otel-collector:4318
+      TRPC_CONTAINERIZED: "1"
+      TRPC_NODE_ID: worker-a
+    healthcheck:
+      test: [CMD-SHELL, "python -c \"import urllib.request,sys;sys.exit(0 if urllib.request.urlopen('http://localhost:8080/health/ready').status==200 else 1)\""]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    depends_on:
+      schema-init:
+        condition: service_completed_successfully
+      otel-collector:
+        condition: service_healthy
+    networks: [shared-state]
+
+  worker-b:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    command: ["uv", "run", "trpc-agent-shared-serve", "--host", "0.0.0.0", "--port", "8080", "--node-id", "worker-b"]
+    env_file:
+      - path: .env.local
+        required: false
+    environment:
+      TRPC_SHARED_DATABASE_URL: postgresql+asyncpg://trpc_agent:${TRPC_DEMO_POSTGRES_PASSWORD:?set TRPC_DEMO_POSTGRES_PASSWORD}@postgres:5432/trpc_agent
+      TRPC_SHARED_REDIS_URL: redis://:${TRPC_DEMO_REDIS_PASSWORD:?set TRPC_DEMO_REDIS_PASSWORD}@redis:6379/0
+      TRPC_OTLP_ENDPOINT: http://otel-collector:4318
+      TRPC_CONTAINERIZED: "1"
+      TRPC_NODE_ID: worker-b
+    healthcheck:
+      test: [CMD-SHELL, "python -c \"import urllib.request,sys;sys.exit(0 if urllib.request.urlopen('http://localhost:8080/health/ready').status==200 else 1)\""]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    depends_on:
+      schema-init:
+        condition: service_completed_successfully
+      otel-collector:
+        condition: service_healthy
+    networks: [shared-state]
+
+  # Real channel adapters are opt-in only; they need live tenant secrets.
+  feishu-adapter:
+    profiles: ["real-channels"]
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    command: ["uv", "run", "python", "-m", "trpc_service._shared_server", "--role", "feishu-adapter"]
+    env_file:
+      - path: .env.local
+        required: true
+    depends_on:
+      gateway:
+        condition: service_healthy
+    networks: [shared-state]
+
+  wecom-adapter:
+    profiles: ["real-channels"]
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    command: ["uv", "run", "python", "-m", "trpc_service._shared_server", "--role", "wecom-adapter"]
+    env_file:
+      - path: .env.local
+        required: true
+    depends_on:
+      gateway:
+        condition: service_healthy
+    networks: [shared-state]
+
+networks:
+  shared-state:
+    driver: bridge

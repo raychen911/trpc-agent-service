@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trpc-agent-service"
+version = "0.1.0"
+description = "Multi-tenant tRPC-Agent service platform"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "asyncpg==0.31.0",
+    "httpx==0.28.1",
+    "lark-channel-sdk==1.4.0",
+    "opentelemetry-api==1.44.0",
+    "opentelemetry-sdk==1.44.0",
+    "opentelemetry-exporter-otlp-proto-http==1.44.0",
+    "pydantic==2.13.5",
+    "redis==8.1.0",
+    "sqlalchemy==2.0.52",
+    "starlette==1.6.0",
+    "trpc-agent-py==1.1.19",
+    "uvicorn==0.52.4",
+    "wecom-aibot-python-sdk==1.0.2",
+]
+
+[project.scripts]
+trpc-agent-sdk-validate = "trpc_service.agent.sdk_validation:main"
+trpc-agent-local-serve = "trpc_service._cli:serve_main"
+trpc-agent-local-send = "trpc_service._cli:send_main"
+trpc-agent-shared-init = "trpc_service._cli:shared_init_main"
+trpc-agent-shared-channel-init = "trpc_service._cli:shared_channel_init_main"
+trpc-agent-shared-serve = "trpc_service._cli:shared_serve_main"
+trpc-agent-channel-serve = "trpc_service._cli:channel_serve_main"
+trpc-agent-trace-diagnose = "trpc_service._cli:trace_diagnose_main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3,<10",
+    "pytest-asyncio>=0.25,<2",
+]
+
+[tool.setuptools.packages.find]
+include = ["trpc_service*"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "shared_backend: requires the local Redis and PostgreSQL shared-state profile",
+    "capacity: deterministic local capacity gate harness (local evidence only)",
+    "deployment: local observable overlay harness (simulated unless Docker available)",
+    "fault_exercise: repeatable fault injection exercises (offline harness)",
+]

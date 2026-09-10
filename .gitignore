@@ -2,7 +2,13 @@
 .vscode
 .DS_Store
 *.lock
+!uv.lock
 *.log
+*.pyc
+*.tmp
+*.swp
+.env*
+Thumbs.db
 
 *.egg-info
 
@@ -25,3 +31,5 @@ pyrightconfig.json
 
 # spec-workflow tool artifacts
 .spec-workflow
+
+.pytest-tmp*/

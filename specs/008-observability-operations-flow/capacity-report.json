@@ -1,0 +1,47 @@
+{
+  "report_version": "capacity-v1",
+  "evidence_class": "local_evidence",
+  "environment_fingerprint": "a7a3eac171e606ba",
+  "scenario_version": "formal-v1",
+  "verdict": "pass",
+  "gates": {
+    "correctness_gate": true,
+    "overhead_gate": true,
+    "max_relative_overhead_pct": 10.0
+  },
+  "measured_facts": {
+    "baseline_throughput": 9722.529802254547,
+    "enabled_throughput": 9600.212996725688,
+    "baseline_p50_ms": 0.9777,
+    "enabled_p50_ms": 1.0032,
+    "baseline_p95_ms": 1.2762,
+    "enabled_p95_ms": 1.2042,
+    "baseline_p99_ms": 1.3219,
+    "enabled_p99_ms": 1.3658,
+    "cpu_peak": 0.0,
+    "memory_peak": 0.0,
+    "redis_peak": 0.0,
+    "postgres_peak": 0.0
+  },
+  "derived_estimates": {
+    "throughput_delta_pct": 1.2580759125109076,
+    "p50_delta_pct": 2.6081620128873966,
+    "p95_delta_pct": 0.0,
+    "p99_delta_pct": 3.320977381042426
+  },
+  "uncovered_factors": [
+    "real model provider latency",
+    "real IM channel rate limits",
+    "production infrastructure topology",
+    "multi-region network variance"
+  ],
+  "scenario": {
+    "version": "formal-v1",
+    "tenant_count": 2,
+    "worker_count": 2,
+    "concurrent_sessions": 100,
+    "messages_per_session": 10,
+    "seed": 2026091100
+  },
+  "harness_run_id": "capacity-0001"
+}

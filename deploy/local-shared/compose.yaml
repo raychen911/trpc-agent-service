@@ -1,0 +1,50 @@
+name: trpc-agent-local-shared
+
+services:
+  redis:
+    image: redis:7.4.11-alpine3.21
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --requirepass
+      - ${TRPC_DEMO_REDIS_PASSWORD:?set TRPC_DEMO_REDIS_PASSWORD}
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - redis-cli -a "$$TRPC_DEMO_REDIS_PASSWORD" ping | grep PONG
+      interval: 2s
+      timeout: 2s
+      retries: 20
+    environment:
+      TRPC_DEMO_REDIS_PASSWORD: ${TRPC_DEMO_REDIS_PASSWORD:?set TRPC_DEMO_REDIS_PASSWORD}
+    volumes:
+      - redis-data:/data
+    networks: [shared-state]
+
+  postgres:
+    image: postgres:17.11-alpine3.24
+    ports:
+      - "127.0.0.1:5432:5432"
+    environment:
+      POSTGRES_DB: trpc_agent
+      POSTGRES_USER: trpc_agent
+      POSTGRES_PASSWORD: ${TRPC_DEMO_POSTGRES_PASSWORD:?set TRPC_DEMO_POSTGRES_PASSWORD}
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U trpc_agent -d trpc_agent]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks: [shared-state]
+
+volumes:
+  redis-data:
+  postgres-data:
+
+networks:
+  shared-state:
+    driver: bridge

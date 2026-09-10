@@ -1,0 +1,60 @@
+# OTel Collector for the minimal observable deployment (DEC-001, FR-008).
+#
+# Tail policy mirrors the platform sampling semantics: critical traces are
+# kept in full, ordinary successful traces default to 10%. Trace-affinity
+# keeps all spans of one trace on the same collector; the debug exporter is
+# the network-side second line of defense for local diagnosis.
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 2s
+    send_batch_size: 512
+  # Trace-affinity: all spans of one trace are routed together so the tail
+  # decision is made over the whole trace, not per span.
+  groupbytrace:
+    wait_duration: 10s
+    num_traces: 50000
+  tail_sampling:
+    decision_wait: 10s
+    num_traces: 50000
+    expected_new_traces_per_sec: 200
+    policies:
+      # 1. Critical outcomes (errors, hard gates, cross-tenant violations)
+      #    are ALWAYS kept — mirrors the platform keep_full categories.
+      - name: keep-errors
+        type: status_code
+        status_code: {status_codes: [ERROR]}
+      - name: keep-critical-attributes
+        type: string_attribute
+        string_attribute:
+          key: trpc.outcome
+          values: [hard_gate_triggered, cross_tenant_leak, audit_unavailable, outcome_unknown]
+      # 2. Ordinary successful traces: 10% default sample, same as platform.
+      - name: default-probabilistic
+        type: probabilistic
+        probabilistic: {sampling_percentage: 10}
+
+exporters:
+  debug:
+    verbosity: basic
+  otlphttp/local-debug:
+    endpoint: http://localhost:55679
+    tls:
+      insecure: true
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [groupbytrace, tail_sampling, batch]
+      exporters: [debug]
