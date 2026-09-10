@@ -3,6 +3,7 @@
 .DS_Store
 *.lock
 *.log
+.env
 
 *.egg-info
 
@@ -25,3 +26,14 @@ pyrightconfig.json
 
 # spec-workflow tool artifacts
 .spec-workflow
+
+# è¿è¡Œæ—¶äº§ç‰©
+.server.pid
+data/audit/*.jsonl
+
+# ÔËĞĞÊ±É³Ïä¹¤×÷Ä¿Â¼£¨Ã¿×â»§ data/workspace/<tenant_id>£©
+data/workspace/
+server.log
+server.err.log
+server*.log
+trpc_service/data/

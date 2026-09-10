@@ -1,0 +1,21 @@
+﻿%% 核心时序图（关键链路）：企微用户发消息 → Agent → Tool → Session/Memory → 回复
+sequenceDiagram
+    autonumber
+    participant U as 企微用户
+    participant GW as 通道适配 + 网关
+    participant AG as AgentRunner<br/>(LlmAgent + 治理 Filter)
+    participant T as Tool
+    participant S as Redis/SQL<br/>Session·Memory
+    participant AU as 审计/指标
+
+    U->>GW: 发消息（HTTP 回调 / 长连接）
+    GW->>GW: 验签 → 幂等去重 → 限流/预算校验
+    GW->>S: 读会话上下文
+    GW->>AG: run(agent_context{trace_id})
+    AG->>AG: 决定调用 query_order<br/>(白名单✓ 脱敏✓ 预算✓)
+    AG->>T: execute_tool
+    T-->>AG: 订单结果
+    AG->>S: append_event → state → 异步 summary → Memory 写入
+    AG-->>GW: 回复文本（输出脱敏）
+    GW->>AU: 审计落盘 + 指标（同一 trace_id）
+    GW-->>U: 回复消息

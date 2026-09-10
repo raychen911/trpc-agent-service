@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tRPC Agent Service</title>
+<style>
+  :root { --bg:#0f1115; --panel:#171a21; --border:#262b36; --text:#e6e8ee; --muted:#8a91a0; --accent:#3b82f6; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: "Segoe UI", system-ui, sans-serif; background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; }
+  header { padding: 14px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 16px; font-size: 15px; }
+  header h1 { font-size: 16px; font-weight: 600; }
+  select, input, button { background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; font-size: 14px; }
+  button { cursor: pointer; background: var(--accent); border-color: var(--accent); font-weight: 500; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  #messages { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 12px; }
+  .msg { max-width: 72%; padding: 10px 14px; border-radius: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; font-size: 14px; }
+  .msg.user { align-self: flex-end; background: var(--accent); }
+  .msg.agent { align-self: flex-start; background: var(--panel); border: 1px solid var(--border); }
+  .msg.error { align-self: flex-start; background: #3a1d1d; border: 1px solid #6b2b2b; color: #ffb4b4; }
+  details.reasoning { margin-top: 6px; font-size: 12px; }
+  details.reasoning summary { cursor: pointer; color: var(--muted); user-select: none; }
+  details.reasoning .body { color: rgba(138, 145, 160, 0.55); white-space: pre-wrap; margin-top: 4px; line-height: 1.5; }
+  .meta { align-self: flex-start; font-size: 12px; color: var(--muted); }
+  footer { padding: 14px 20px; border-top: 1px solid var(--border); display: flex; gap: 10px; }
+  #input { flex: 1; }
+</style>
+</head>
+<body>
+<header>
+  <h1>tRPC Agent Service</h1>
+  <label for="tenant">租户</label>
+  <select id="tenant"></select>
+  <button id="newSession" style="background:var(--panel); border:1px solid var(--border); color:var(--muted);">新会话</button>
+  <span id="status" style="color:var(--muted); font-size:13px;"></span>
+</header>
+<main id="messages"></main>
+<footer>
+  <input id="input" placeholder="输入消息，回车发送…" autocomplete="off">
+  <button id="send">发送</button>
+</footer>
+<script>
+const state = { tenant: null, sessionId: null };
+
+function sessionKey() { return `trpc:session:${state.tenant || ''}`; }
+
+async function init() {
+  const res = await fetch('/api/v1/tenants');
+  const tenants = await res.json();
+  const sel = document.getElementById('tenant');
+  sel.innerHTML = tenants.map(t =>
+    `<option value="${t.tenant_id}">${t.name} (${t.tenant_id})</option>`).join('');
+  if (tenants.length) { state.tenant = tenants[0].tenant_id; loadTenant(); }
+  printSystem(tenants.length ? `已加载 ${tenants.length} 个租户` : '没有可用租户，请先创建');
+}
+
+function loadTenant() {
+  const t = document.getElementById('tenant').value;
+  state.tenant = t;
+  // localStorage 续聊：同租户刷新/重开浏览器延续会话
+  state.sessionId = localStorage.getItem(sessionKey()) || null;
+  document.getElementById('messages').innerHTML = '';
+  loadHistory();
+}
+
+async function loadHistory() {
+  if (!state.sessionId) return;
+  try {
+    const res = await fetch(
+      `/api/v1/chat/history?tenant_id=${encodeURIComponent(state.tenant)}`
+      + `&session_id=${encodeURIComponent(state.sessionId)}&user_id=web_user`
+    );
+    if (!res.ok) return;
+    const items = await res.json();
+    for (const item of items) print(item.text, item.role === 'user' ? 'user' : 'agent');
+    if (items.length) printSystem(`已恢复 ${items.length} 条历史消息（session: ${state.sessionId.slice(0, 8)}…）`);
+  } catch (err) { /* 历史加载失败不阻断聊天 */ }
+}
+
+function newSession() {
+  state.sessionId = null;
+  localStorage.removeItem(sessionKey());
+  document.getElementById('messages').innerHTML = '';
+  printSystem('已开启新会话');
+}
+
+function print(msg, cls, meta) {
+  const box = document.getElementById('messages');
+  const m = document.createElement('div');
+  m.className = `msg ${cls}`;
+  m.textContent = msg;
+  box.appendChild(m);
+  if (meta) { const mm = document.createElement('div'); mm.className = 'meta'; mm.textContent = meta; box.appendChild(mm); }
+  box.scrollTop = box.scrollHeight;
+}
+
+function printSystem(msg) { print(msg, 'agent'); }
+
+function printWithReasoning(msg, reasoning, meta) {
+  const box = document.getElementById('messages');
+  const m = document.createElement('div');
+  m.className = 'msg agent';
+  m.textContent = msg;
+  if (reasoning) {
+    const d = document.createElement('details');
+    d.className = 'reasoning';
+    const s = document.createElement('summary');
+    s.textContent = '思考过程（点击展开）';
+    const b = document.createElement('div');
+    b.className = 'body';
+    b.textContent = reasoning;
+    d.appendChild(s);
+    d.appendChild(b);
+    m.appendChild(d);
+  }
+  box.appendChild(m);
+  if (meta) { const mm = document.createElement('div'); mm.className = 'meta'; mm.textContent = meta; box.appendChild(mm); }
+  box.scrollTop = box.scrollHeight;
+}
+
+async function send() {
+  const input = document.getElementById('input');
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  print(text, 'user');
+  const btn = document.getElementById('send');
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/v1/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        tenant_id: state.tenant,
+        message: text,
+        session_id: state.sessionId,
+        user_id: 'web_user',
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || data.message || res.statusText);
+    state.sessionId = data.session_id;
+    localStorage.setItem(sessionKey(), data.session_id);  // 续聊凭据持久化
+    printWithReasoning(data.reply || '(空回复)', data.reasoning || '', `session: ${data.session_id}`);
+  } catch (err) {
+    print(`请求失败：${err.message}`, 'error');
+  } finally {
+    btn.disabled = false;
+    document.getElementById('input').focus();
+  }
+}
+
+document.getElementById('send').addEventListener('click', send);
+document.getElementById('input').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+});
+document.getElementById('tenant').addEventListener('change', loadTenant);
+document.getElementById('newSession').addEventListener('click', newSession);
+init();
+</script>
+</body>
+</html>

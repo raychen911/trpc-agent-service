@@ -1,0 +1,31 @@
+%% 系统架构图：多租户节点化 Agent 部署平台
+flowchart TB
+    subgraph Clients["接入方"]
+        WEB["Web UI"]
+        FEISHU["飞书"]
+        WECOM["企业微信<br/>(HTTP 回调 / 智能机器人长连接)"]
+    end
+
+    subgraph GatewayLayer["Agent Gateway（无状态，可水平扩展）"]
+        AUTH["验签 → 去重 → 限流/预算校验"]
+        ROUTER["SessionRouter"]
+        ADMIN["Admin API"]
+    end
+
+    subgraph WorkerLayer["Agent Worker（无状态）"]
+        AGENT["LlmAgent + 治理 Filter 链<br/>(白名单/脱敏/预算/二次确认)"]
+        TOOLS["FunctionTool×N"]
+    end
+
+    subgraph StorageLayer["存储与可观测"]
+        BACKEND[("Redis / MySQL<br/>Session·Memory·审计")]
+        OTEL["OTel<br/>trace_id 贯穿"]
+    end
+
+    WEB --> AUTH
+    FEISHU --> AUTH
+    WECOM --> AUTH
+    SBOT["企微智能机器人"] --> AUTH
+    AUTH --> ROUTER --> AGENT --> TOOLS --> BACKEND
+    ADMIN --> BACKEND
+    AGENT -.-> OTEL

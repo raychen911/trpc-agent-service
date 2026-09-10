@@ -1,0 +1,70 @@
+services:
+  gateway:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - KEY=${KEY}
+      - URL=${URL}
+      - MODEL=${MODEL}
+      - QUEUE_MODE=redis
+      - REDIS_URL=redis://redis:6379/3
+      - SQL_URL=${SQL_URL:-mysql+pymysql://root:${MYSQL_ROOT_PASSWORD:-change_me}@mysql:3306/trpc_agent}
+      - OTEL_ENABLED=${OTEL_ENABLED:-0}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}
+    depends_on:
+      - redis
+      - mysql
+    restart: unless-stopped
+
+  worker:
+    build: .
+    # 多节点水平扩展：无状态 Worker 消费 Redis 队列执行 Agent
+    # （session 状态在共享 Redis/SQL 后端，无需 sticky session；
+    #   扩容 = 加 worker 副本）
+    command: ["python", "-m", "trpc_service.worker"]
+    environment:
+      - KEY=${KEY}
+      - URL=${URL}
+      - MODEL=${MODEL}
+      - QUEUE_MODE=redis
+      - REDIS_URL=redis://redis:6379/3
+      - BUDGET_REDIS_URL=redis://redis:6379/1
+      - DEDUPE_REDIS_URL=redis://redis:6379/2
+      - SQL_URL=${SQL_URL:-mysql+pymysql://root:${MYSQL_ROOT_PASSWORD:-change_me}@mysql:3306/trpc_agent}
+    depends_on:
+      - redis
+      - mysql
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-change_me}
+      MYSQL_DATABASE: trpc_agent
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    restart: unless-stopped
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    command: ["--config=/etc/otel-config.yaml"]
+    volumes:
+      - ./deploy/otel-config.yaml:/etc/otel-config.yaml:ro
+    ports:
+      - "4318:4318"
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+  mysql-data:

@@ -1,0 +1,73 @@
+tenants:
+  - tenant_id: "tenant_001"
+    name: "客服团队"
+    app:
+      app_name: "customer_service"
+      description: "客服团队的AI助手"
+      instruction: "你是客服助手，帮助用户解答订单和物流问题。"
+    model:
+      provider: "qwen"
+      model_name: "qwen3.7-flash"
+      api_key: ""
+      base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    storage:
+      session_backend: "sql"
+    tools:
+      allowed_tools:
+        - "query_order"
+        - "check_logistics"
+    audit:
+      enabled: true
+      mask_pii: true
+      retention_days: 90
+    channels:
+      feishu:
+        enabled: false          # 真机接入时置 true 并填入飞书开放平台凭证
+        app_id: "cli_placeholder"
+        app_secret: ""           # 凭证走 FEISHU_APP_SECRET 环境变量
+        token: ""                # 凭证走 FEISHU_TOKEN 环境变量
+        encrypt_key: ""         # 配置后强制回调验签
+      wecom_smartbot:
+        enabled: true            # 智能机器人长连接（免公网）；Secret 走 WECOM_BOT_SECRET 环境变量
+        bot_id: ""               # 凭证走 WECOM_SMARTBOT_ID 环境变量
+        secret: ""
+      wecom:
+        enabled: true            # 真机测试中（勿提交凭证：测试完成后改为环境变量注入）
+        token: ""                # 凭证走 WECOM_TOKEN 环境变量                # ← 企微后台「接收消息」配置页随机获取后填这里
+        encoding_aes_key: ""     # 凭证走 WECOM_AES_KEY 环境变量     # ← 43 位 AESKey，同上
+        corp_id: ""              # 凭证走 WECOM_CORP_ID 环境变量
+        bot_id: ""               # 凭证走 WECOM_AGENT_ID 环境变量
+    daily_api_calls: 10000
+
+  - tenant_id: "tenant_002"
+    name: "研发团队"
+    app:
+      app_name: "dev_assistant"
+      description: "研发团队的AI助手"
+      instruction: "你是研发助手，帮助开发者解答技术问题。"
+    model:
+      provider: "qwen"
+      model_name: "qwen3.7-flash"
+      api_key: ""
+      base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    storage:
+      session_backend: "in_memory"
+    tools:
+      allowed_tools:
+        - "search_code"
+        - "query_docs"
+        - "skill_list"
+        - "skill_list_docs"
+        - "skill_list_tools"
+        - "skill_load"
+        - "skill_run"
+        - "skill_select_docs"
+        - "skill_select_tools"
+    audit:
+      enabled: true
+      mask_pii: false
+      retention_days: 30
+    daily_api_calls: 5000
+    rate_limit_per_minute: 30
+    skills:
+      enabled: true
