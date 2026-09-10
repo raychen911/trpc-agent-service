@@ -1,0 +1,54 @@
+groups:
+  - name: trpc-agent-platform
+    interval: 30s
+    rules:
+      - alert: TrpcAgentGatewayDown
+        expr: up{job="trpc-agent-gateway"} < 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: tRPC Agent gateway is unavailable
+          description: No healthy gateway target has been scraped for two minutes.
+      - alert: TrpcAgentHighErrorRate
+        expr: |
+          sum(rate(trpc_agent_requests_total{status="error"}[5m]))
+          /
+          clamp_min(sum(rate(trpc_agent_requests_total[5m])), 1) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: tRPC Agent request error rate is high
+          description: More than five percent of requests have failed for ten minutes.
+      - alert: TrpcAgentDeliveryFailures
+        expr: |
+          sum(rate(trpc_agent_im_deliveries_total{status="error"}[5m]))
+          /
+          clamp_min(sum(rate(trpc_agent_im_deliveries_total[5m])), 1) > 0.02
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: IM delivery failure rate is high
+          description: More than two percent of outbound deliveries have failed for ten minutes.
+      - alert: TrpcAgentBackendLatency
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(trpc_agent_session_backend_latency_seconds_bucket[5m]))
+          ) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Session backend latency is elevated
+          description: The aggregate p95 session backend latency is above one second.
+      - alert: TrpcAgentToolBudgetDenials
+        expr: increase(trpc_agent_errors_total{error_type=~".*budget.*|.*quota.*"}[15m]) > 20
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Tenant tool or quota denials increased
+          description: Investigate tenant policy, traffic spikes, or a runaway agent.

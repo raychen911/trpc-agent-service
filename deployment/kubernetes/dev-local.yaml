@@ -1,0 +1,304 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: trpc-agent
+---
+# Create the `trpc-agent-secrets` Secret out of band before applying this
+# development manifest. The Secret is intentionally not stored in Git.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trpc-agent-config
+  namespace: trpc-agent
+data:
+  PYTHONPATH: /app
+  REDIS_URL: redis://redis:6379/0
+  WORKER_QUEUE_URL: redis://redis:6379/0
+  OUTBOUND_QUEUE_URL: redis://redis:6379/0
+  OUTBOUND_QUEUE_ENABLED: "1"
+  DEFAULT_SESSION_BACKEND: redis
+  DEFAULT_MEMORY_BACKEND: postgres
+  DEFAULT_SUMMARY_BACKEND: postgres
+  DEFAULT_KNOWLEDGE_BACKEND: postgres
+  DEFAULT_ARTIFACT_BACKEND: object
+  DEFAULT_AUDIT_BACKEND: postgres
+  SYNC_DEMO_DEFAULT_STORAGE: "1"
+  POSTGRES_RLS_ENABLED: "0"
+  POSTGRES_AUTO_CREATE_SCHEMA: "1"
+  REQUIRE_SHARED_COORDINATION: "1"
+  COMPENSATION_REPLAY_LIMIT: "100"
+  COMPENSATION_INTERVAL_SECONDS: "5"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: trpc-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7.2.5-alpine
+          ports:
+            - containerPort: 6379
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 2
+            periodSeconds: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: trpc-agent
+spec:
+  selector:
+    app: redis
+  ports:
+    - port: 6379
+      targetPort: 6379
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-data
+  namespace: trpc-agent
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: trpc-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16.4-alpine
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: trpc_agent
+            - name: POSTGRES_USER
+              value: trpc_agent
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: trpc-agent-secrets
+                  key: POSTGRES_PASSWORD
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "trpc_agent", "-d", "trpc_agent"]
+            initialDelaySeconds: 4
+            periodSeconds: 5
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: postgres-data
+          persistentVolumeClaim:
+            claimName: postgres-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: trpc-agent
+spec:
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  namespace: trpc-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: trpc-agent-gateway
+  template:
+    metadata:
+      labels:
+        app: trpc-agent-gateway
+    spec:
+      containers:
+        - name: gateway
+          image: docker.io/library/deployment-gateway:0.1.0
+          imagePullPolicy: Never
+          command: ["uvicorn", "trpc_service.web.app:app", "--host", "0.0.0.0", "--port", "8000"]
+          ports:
+            - containerPort: 8000
+          env:
+            - name: OTEL_SERVICE_NAME
+              value: trpc-agent-gateway
+            - name: OUTBOUND_QUEUE_CONSUMER
+              value: "0"
+          envFrom:
+            - configMapRef:
+                name: trpc-agent-config
+            - secretRef:
+                name: trpc-agent-secrets
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          volumeMounts:
+            - name: app-data
+              mountPath: /app/data
+      volumes:
+        - name: app-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway
+  namespace: trpc-agent
+spec:
+  selector:
+    app: trpc-agent-gateway
+  ports:
+    - port: 8000
+      targetPort: 8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  namespace: trpc-agent
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: trpc-agent-worker
+  template:
+    metadata:
+      labels:
+        app: trpc-agent-worker
+    spec:
+      containers:
+        - name: worker
+          image: docker.io/library/deployment-gateway:0.1.0
+          imagePullPolicy: Never
+          command: ["python", "-m", "trpc_service._cli", "worker"]
+          env:
+            - name: WORKER_COUNT
+              value: "2"
+            - name: OTEL_SERVICE_NAME
+              value: trpc-agent-worker
+          envFrom:
+            - configMapRef:
+                name: trpc-agent-config
+            - secretRef:
+                name: trpc-agent-secrets
+          volumeMounts:
+            - name: app-data
+              mountPath: /app/data
+      volumes:
+        - name: app-data
+          emptyDir: {}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: compensation-worker
+  namespace: trpc-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: trpc-agent-compensation
+  template:
+    metadata:
+      labels:
+        app: trpc-agent-compensation
+    spec:
+      containers:
+        - name: compensation-worker
+          image: docker.io/library/deployment-gateway:0.1.0
+          imagePullPolicy: Never
+          command: ["python", "-m", "trpc_service._cli", "compensate", "--limit", "100", "--interval", "5"]
+          env:
+            - name: OTEL_SERVICE_NAME
+              value: trpc-agent-compensation
+          envFrom:
+            - configMapRef:
+                name: trpc-agent-config
+            - secretRef:
+                name: trpc-agent-secrets
+          volumeMounts:
+            - name: app-data
+              mountPath: /app/data
+      volumes:
+        - name: app-data
+          emptyDir: {}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: outbound-worker
+  namespace: trpc-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: trpc-agent-outbound
+  template:
+    metadata:
+      labels:
+        app: trpc-agent-outbound
+    spec:
+      containers:
+        - name: outbound-worker
+          image: docker.io/library/deployment-gateway:0.1.0
+          imagePullPolicy: Never
+          command: ["python", "-m", "trpc_service._cli", "outbound"]
+          env:
+            - name: OTEL_SERVICE_NAME
+              value: trpc-agent-outbound
+          envFrom:
+            - configMapRef:
+                name: trpc-agent-config
+            - secretRef:
+                name: trpc-agent-secrets
+          volumeMounts:
+            - name: app-data
+              mountPath: /app/data
+      volumes:
+        - name: app-data
+          emptyDir: {}
