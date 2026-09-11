@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "pricing": {
+    "default": {
+      "input_microunits_per_1k": 2000,
+      "output_microunits_per_1k": 6000
+    }
+  }
+}

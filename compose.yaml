@@ -1,0 +1,207 @@
+# Stage 7A minimal production-shaped topology:
+#   gateway (1) + worker (2) + admin (1) + redis + postgres + otel-collector
+#   + ONE one-shot init service (the ONLY place migrations/tenant import run).
+#
+# Secrets are NEVER committed: every token/password/API key is ${VAR}
+# interpolation from the host environment (see .env.example).  Unconfigured
+# IM long connections stay OFF by default — WeCom/Feishu credentials are only
+# loaded through the OPTIONAL deploy/im.env env_file, never interpolated here.
+#
+# The app CLI defaults bind 127.0.0.1; the published ports below map
+# localhost only, matching the "local test console" posture.
+
+x-app-environment: &app-environment
+  TRPC_INTERNAL_TOKEN: ${TRPC_INTERNAL_TOKEN:?set TRPC_INTERNAL_TOKEN to a random secret (>= 32 chars)}
+
+x-database-url: &database-url "postgresql+asyncpg://${TRPC_COMPOSE_PG_USER:?set TRPC_COMPOSE_PG_USER}:${TRPC_COMPOSE_PG_PASSWORD:?set TRPC_COMPOSE_PG_PASSWORD}@postgres:5432/${TRPC_COMPOSE_PG_DB:-trpc}"
+
+x-trace-environment: &trace-environment
+  TRPC_TRACE_ENABLED: ${TRPC_TRACE_ENABLED:-false}
+  TRPC_TRACE_OTLP_ENDPOINT: http://otel-collector:4318/v1/traces
+
+x-worker-environment: &worker-environment
+  <<: [*app-environment, *trace-environment]
+  TRPC_DATABASE_URL: *database-url
+  TRPC_REDIS_URL: redis://redis:6379
+  TRPC_MODEL_PROVIDER: ${TRPC_MODEL_PROVIDER:-openai-compatible}
+  TRPC_MODEL_NAME: ${TRPC_MODEL_NAME:-}
+  TRPC_MODEL_BASE_URL: ${TRPC_MODEL_BASE_URL:-}
+  TRPC_MODEL_API_KEY: ${TRPC_MODEL_API_KEY:-}
+  TRPC_S3_ENDPOINT: minio:9000
+  TRPC_S3_ACCESS_KEY: ${TRPC_S3_ACCESS_KEY:?set TRPC_S3_ACCESS_KEY}
+  TRPC_S3_SECRET_KEY: ${TRPC_S3_SECRET_KEY:?set TRPC_S3_SECRET_KEY}
+  TRPC_S3_BUCKET: ${TRPC_S3_BUCKET:-trpc-artifacts}
+
+x-healthcheck: &healthcheck-defaults
+  interval: 5s
+  timeout: 3s
+  retries: 30
+  start_period: 15s
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${TRPC_COMPOSE_PG_USER:?set TRPC_COMPOSE_PG_USER}
+      POSTGRES_PASSWORD: ${TRPC_COMPOSE_PG_PASSWORD:?set TRPC_COMPOSE_PG_PASSWORD}
+      POSTGRES_DB: ${TRPC_COMPOSE_PG_DB:-trpc}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      <<: *healthcheck-defaults
+    restart: unless-stopped
+
+  redis:
+    image: redis:7
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      <<: *healthcheck-defaults
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    command: ["server", "/data"]
+    environment:
+      MINIO_ROOT_USER: ${TRPC_S3_ACCESS_KEY:?set TRPC_S3_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${TRPC_S3_SECRET_KEY:?set TRPC_S3_SECRET_KEY}
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      <<: *healthcheck-defaults
+    restart: unless-stopped
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.132.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./deploy/otel-collector.yaml:/etc/otelcol/config.yaml:ro
+    healthcheck:
+      # contrib images ship no shell/wget: validate the binary + config as the
+      # liveness probe; deeper failures surface via dependent services.
+      test: ["CMD", "/otelcol-contrib", "validate", "--config=/etc/otelcol/config.yaml"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+
+  init:
+    # ONE-shot schema migration + tenant bootstrap.  Every long-running
+    # service waits for service_completed_successfully, so migrations can
+    # never run concurrently from two Workers.
+    build: .
+    entrypoint: ["/bin/sh", "-c"]
+    # --path is explicit: inside the installed image the CLI's fallback would
+    # resolve next to site-packages, not /app (cwd is /app via WORKDIR).
+    command: ["trpc-agent-service db-migrate && trpc-agent-service tenant-config-import --path data/tenants.json && trpc-agent-service backend-init"]
+    environment:
+      TRPC_DATABASE_URL: *database-url
+      TRPC_REDIS_URL: redis://redis:6379
+      TRPC_S3_ENDPOINT: minio:9000
+      TRPC_S3_ACCESS_KEY: ${TRPC_S3_ACCESS_KEY:?set TRPC_S3_ACCESS_KEY}
+      TRPC_S3_SECRET_KEY: ${TRPC_S3_SECRET_KEY:?set TRPC_S3_SECRET_KEY}
+      TRPC_S3_BUCKET: ${TRPC_S3_BUCKET:-trpc-artifacts}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: "no"
+
+  worker-a:
+    build: .
+    command: ["worker", "--host", "0.0.0.0", "--port", "8001"]
+    environment:
+      <<: *worker-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys;sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=3).status == 200 else 1)"]
+      <<: *healthcheck-defaults
+    restart: unless-stopped
+
+  worker-b:
+    build: .
+    command: ["worker", "--host", "0.0.0.0", "--port", "8002"]
+    environment:
+      <<: *worker-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys;sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8002/health', timeout=3).status == 200 else 1)"]
+      <<: *healthcheck-defaults
+    restart: unless-stopped
+
+  gateway:
+    build: .
+    command: ["gateway", "--host", "0.0.0.0", "--port", "8000"]
+    # Optional IM opt-in: create deploy/im.env to enable WeCom/Feishu long
+    # connections.  Absent by default -> adapters stay disabled.
+    env_file:
+      - path: ./deploy/im.env
+        required: false
+    environment:
+      <<: [*app-environment, *trace-environment]
+      TRPC_DATABASE_URL: *database-url
+      TRPC_REDIS_URL: redis://redis:6379
+      TRPC_WORKER_BASE_URLS: http://worker-a:8001,http://worker-b:8002
+      # Empty by default: callback verification remains unavailable until an
+      # enabled binding references these operator-supplied values.
+      TRPC_WECOM_WEBHOOK_TOKEN: ${TRPC_WECOM_WEBHOOK_TOKEN:-}
+      TRPC_WECOM_WEBHOOK_AES_KEY: ${TRPC_WECOM_WEBHOOK_AES_KEY:-}
+    ports:
+      - "${TRPC_GATEWAY_PUBLISH_HOST:-127.0.0.1}:${TRPC_GATEWAY_PUBLISH_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys;sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).status == 200 else 1)"]
+      <<: *healthcheck-defaults
+    restart: unless-stopped
+
+  admin:
+    build: .
+    command: ["admin", "--host", "0.0.0.0", "--port", "8003"]
+    environment:
+      TRPC_ADMIN_TOKEN: ${TRPC_ADMIN_TOKEN:?set TRPC_ADMIN_TOKEN to a random secret (>= 32 chars)}
+      TRPC_DATABASE_URL: *database-url
+    ports:
+      - "${TRPC_ADMIN_PUBLISH_HOST:-127.0.0.1}:${TRPC_ADMIN_PUBLISH_PORT:-8003}:8003"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys;sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8003/health', timeout=3).status == 200 else 1)"]
+      <<: *healthcheck-defaults
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:
+  miniodata:

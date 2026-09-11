@@ -1,0 +1,45 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+  namespace: trpc-agent
+spec:
+  selector:
+    app: otel-collector
+  ports:
+    - name: otlp-http
+      port: 4318
+      targetPort: otlp-http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+  namespace: trpc-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: otel-collector}
+  template:
+    metadata:
+      labels: {app: otel-collector}
+    spec:
+      terminationGracePeriodSeconds: 20
+      containers:
+        - name: otel-collector
+          image: otel/opentelemetry-collector-contrib:0.132.0
+          args: [--config=/etc/otel/config.yaml]
+          ports:
+            - name: otlp-http
+              containerPort: 4318
+          readinessProbe: {httpGet: {path: /, port: 13133}}
+          livenessProbe: {httpGet: {path: /, port: 13133}}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/otel
+      volumes:
+        - name: config
+          configMap: {name: otel-collector-config}

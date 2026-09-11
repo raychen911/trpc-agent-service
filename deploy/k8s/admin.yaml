@@ -1,0 +1,40 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: admin
+  namespace: trpc-agent
+spec:
+  selector: {app: admin}
+  ports:
+    - port: 8003
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: admin
+  namespace: trpc-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: admin}
+  template:
+    metadata:
+      labels: {app: admin}
+    spec:
+      terminationGracePeriodSeconds: 20
+      containers:
+        - name: admin
+          image: trpc-agent-service:local
+          args: [admin, --host, 0.0.0.0, --port, "8003"]
+          ports: [{name: http, containerPort: 8003}]
+          env:
+            - name: TRPC_DATABASE_URL
+              valueFrom: {secretKeyRef: {name: trpc-agent-secrets, key: TRPC_DATABASE_URL}}
+            - name: TRPC_ADMIN_TOKEN
+              valueFrom: {secretKeyRef: {name: trpc-agent-secrets, key: TRPC_ADMIN_TOKEN}}
+          readinessProbe: {httpGet: {path: /health, port: http}}
+          livenessProbe: {httpGet: {path: /health, port: http}}
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: 500m, memory: 512Mi}

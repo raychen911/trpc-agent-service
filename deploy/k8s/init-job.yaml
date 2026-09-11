@@ -1,0 +1,28 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: trpc-agent-init
+  namespace: trpc-agent
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels: {app: trpc-agent-init}
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: init
+          image: trpc-agent-service:local
+          command: [sh, -c, 'trpc-agent-service db-migrate && trpc-agent-service tenant-config-import --path data/tenants.json && trpc-agent-service backend-init']
+          envFrom:
+            - configMapRef: {name: trpc-agent-config}
+          env:
+            - name: TRPC_DATABASE_URL
+              valueFrom: {secretKeyRef: {name: trpc-agent-secrets, key: TRPC_DATABASE_URL}}
+            - name: TRPC_S3_ACCESS_KEY
+              valueFrom: {secretKeyRef: {name: trpc-agent-secrets, key: TRPC_S3_ACCESS_KEY}}
+            - name: TRPC_S3_SECRET_KEY
+              valueFrom: {secretKeyRef: {name: trpc-agent-secrets, key: TRPC_S3_SECRET_KEY}}
+          resources:
+            requests: {cpu: 250m, memory: 256Mi}
+            limits: {cpu: "1", memory: 512Mi}

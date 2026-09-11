@@ -1,0 +1,159 @@
+{
+  "schema_version": 1,
+  "tenants": [
+    {
+      "tenant_id": "tenant_default",
+      "enabled": true,
+      "version": 2,
+      "app": {
+        "app_id": "app_demo",
+        "instruction": "You are a helpful assistant for the vertical chat demo. Use the get_current_time tool whenever the user asks about the current time or a related temporal question. Otherwise, answer clearly and concisely.",
+        "model_profile": "default",
+        "allowed_tools": [
+          "get_current_time"
+        ]
+      },
+      "governance": {
+        "allowed_channels": [
+          "web",
+          "web_console",
+          "wecom",
+          "feishu"
+        ],
+        "allowed_user_ids": [],
+        "tool_decisions": {},
+        "content_policy": {
+          "enabled": true,
+          "input_action": "block",
+          "output_action": "allow"
+        },
+        "limits": null
+      },
+      "backend_profile": {
+        "state_backend": "redis",
+        "artifact_backend": "s3",
+        "knowledge_backend": "sql",
+        "audit_backend": "sql"
+      },
+      "audit_policy": {
+        "retention_days": 365,
+        "delivery_events": "all"
+      }
+    },
+    {
+      "tenant_id": "tenant_a",
+      "enabled": true,
+      "version": 1,
+      "app": {
+        "app_id": "app_demo",
+        "instruction": "You are a helpful assistant for tenant A. Use the get_current_time tool when asked about time.",
+        "model_profile": "default",
+        "allowed_tools": [
+          "get_current_time"
+        ]
+      },
+      "governance": {
+        "allowed_channels": [
+          "web",
+          "web_console",
+          "wecom",
+          "feishu"
+        ],
+        "allowed_user_ids": [],
+        "tool_decisions": {},
+        "content_policy": {
+          "enabled": true,
+          "input_action": "block",
+          "output_action": "block"
+        },
+        "limits": null
+      },
+      "backend_profile": {
+        "state_backend": "redis",
+        "artifact_backend": "s3",
+        "knowledge_backend": "sql",
+        "audit_backend": "sql"
+      },
+      "audit_policy": {
+        "retention_days": 365,
+        "delivery_events": "all"
+      }
+    },
+    {
+      "tenant_id": "tenant_b",
+      "enabled": true,
+      "version": 1,
+      "app": {
+        "app_id": "app_demo",
+        "instruction": "You are a helpful assistant for tenant B.",
+        "model_profile": "default",
+        "allowed_tools": []
+      },
+      "governance": {
+        "allowed_channels": [
+          "web",
+          "web_console",
+          "wecom",
+          "feishu"
+        ],
+        "allowed_user_ids": [],
+        "tool_decisions": {},
+        "content_policy": {
+          "enabled": true,
+          "input_action": "block",
+          "output_action": "block"
+        },
+        "limits": null
+      },
+      "backend_profile": {
+        "state_backend": "redis",
+        "artifact_backend": "s3",
+        "knowledge_backend": "sql",
+        "audit_backend": "sql"
+      },
+      "audit_policy": {
+        "retention_days": 365,
+        "delivery_events": "all"
+      }
+    },
+    {
+      "tenant_id": "tenant_disabled",
+      "enabled": false,
+      "version": 1,
+      "app": {
+        "app_id": "app_demo",
+        "instruction": "This tenant is disabled.",
+        "model_profile": "default",
+        "allowed_tools": [
+          "get_current_time"
+        ]
+      },
+      "governance": {
+        "allowed_channels": [
+          "web",
+          "web_console",
+          "wecom",
+          "feishu"
+        ],
+        "allowed_user_ids": [],
+        "tool_decisions": {},
+        "content_policy": {
+          "enabled": true,
+          "input_action": "block",
+          "output_action": "block"
+        },
+        "limits": null
+      },
+      "backend_profile": {
+        "state_backend": "redis",
+        "artifact_backend": "s3",
+        "knowledge_backend": "sql",
+        "audit_backend": "sql"
+      },
+      "audit_policy": {
+        "retention_days": 365,
+        "delivery_events": "all"
+      }
+    }
+  ]
+}

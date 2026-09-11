@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>tRPC Agent Service — Web Console Adapter</title>
+  <style>
+    :root { color-scheme: light dark; --fg: #111; --bg: #fafafa; --muted: #666; --border: #ddd; --accent: #2d6cdf; }
+    @media (prefers-color-scheme: dark) { :root { --fg: #eee; --bg: #181818; --muted: #aaa; --border: #333; --accent: #6ea8fe; } }
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 14px/1.45 system-ui, sans-serif; background: var(--bg); color: var(--fg); }
+    .wrap { max-width: 720px; margin: 0 auto; padding: 24px 16px 80px; }
+    h1 { margin: 0 0 8px; font-size: 18px; }
+    .hint { color: var(--muted); margin-bottom: 16px; }
+    #log { border: 1px solid var(--border); border-radius: 8px; padding: 12px; min-height: 240px; max-height: 50vh; overflow: auto; background: var(--bg); }
+    .msg { padding: 8px 10px; margin: 6px 0; border-radius: 6px; white-space: pre-wrap; word-wrap: break-word; }
+    .msg.user { background: var(--accent); color: #fff; align-self: flex-end; }
+    .msg.assistant { background: rgba(127,127,127,0.08); }
+    .msg.tool { color: var(--muted); font-style: italic; }
+    .msg.error { color: #b00020; }
+    .controls { display: flex; gap: 8px; margin-top: 12px; }
+    textarea { flex: 1; resize: vertical; min-height: 60px; padding: 8px; font: inherit; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--fg); }
+    button { padding: 8px 14px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--fg); cursor: pointer; }
+    button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .session { font-size: 12px; color: var(--muted); margin-left: auto; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>tRPC Agent Service — Web Console Adapter</h1>
+    <p class="hint">Single-process vertical chat loop. Real model from <code>.env</code>. Ask about the current time to see the <code>get_current_time</code> tool fire.</p>
+    <div id="log" aria-live="polite"></div>
+    <div class="controls">
+      <textarea id="input" placeholder="Type a message…" autofocus></textarea>
+      <button id="send" class="primary">Send</button>
+      <button id="new-session" title="Start a fresh session">New</button>
+      <span id="session-label" class="session"></span>
+    </div>
+  </div>
+  <script>
+    (function () {
+      const log = document.getElementById('log');
+      const input = document.getElementById('input');
+      const sendBtn = document.getElementById('send');
+      const newBtn = document.getElementById('new-session');
+      const sessionLabel = document.getElementById('session-label');
+
+      const TENANT_ID = 'tenant_default';
+
+      let userId = localStorage.getItem('trpc-user-id');
+      if (!userId) { userId = cryptoRandomId(); localStorage.setItem('trpc-user-id', userId); }
+
+      let conversationId = localStorage.getItem('trpc-conversation-id');
+      if (!conversationId) { conversationId = cryptoRandomId(); localStorage.setItem('trpc-conversation-id', conversationId); }
+
+      sessionLabel.textContent = 'conv: ' + conversationId.slice(0, 8);
+
+      function cryptoRandomId() {
+        if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+        return 'id-' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+      }
+      function append(text, cls) {
+        const div = document.createElement('div');
+        div.className = 'msg ' + (cls || '');
+        div.textContent = text;
+        log.appendChild(div);
+        log.scrollTop = log.scrollHeight;
+      }
+      async function send() {
+        const text = input.value.trim();
+        if (!text) return;
+        input.value = '';
+        await sendText(text);
+      }
+      async function sendText(text) {
+        append(text, 'user');
+        sendBtn.disabled = true;
+        const assistant = document.createElement('div');
+        assistant.className = 'msg assistant';
+        assistant.textContent = '';
+        log.appendChild(assistant);
+        const messageId = cryptoRandomId();
+        try {
+          const response = await fetch('/api/console/messages/stream', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              tenant_id: TENANT_ID,
+              user_id: userId,
+              conversation_id: conversationId,
+              message_id: messageId,
+              message: text
+            })
+          });
+          if (!response.ok || !response.body) {
+            assistant.classList.add('error');
+            assistant.textContent = 'Request failed (' + response.status + ').';
+            return;
+          }
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = '';
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            let idx;
+            while ((idx = buffer.indexOf('\n\n')) !== -1) {
+              const raw = buffer.slice(0, idx);
+              buffer = buffer.slice(idx + 2);
+              const line = raw.split('\n').find(l => l.startsWith('data:'));
+              if (!line) continue;
+              let payload;
+              try { payload = JSON.parse(line.slice(5).trim()); } catch (_) { continue; }
+              if (payload.type === 'delta') {
+                assistant.textContent += payload.data;
+              } else if (payload.type === 'tool') {
+                const t = payload.data || {};
+                if (t.kind === 'call') {
+                  append('🔧 tool call: ' + t.name + '(' + JSON.stringify(t.args || {}) + ')', 'tool');
+                } else if (t.kind === 'result') {
+                  append('↪︎ tool result: ' + t.name + ' → ' + JSON.stringify(t.response || {}).slice(0, 200), 'tool');
+                }
+              } else if (payload.type === 'approval') {
+                const a = payload.data || {};
+                const row = document.createElement('div');
+                row.className = 'msg tool';
+                row.textContent = '\u2696\ufe0f approval required: ' + (a.tool_name || 'tool') + ' - the tool has NOT run yet.';
+                const mkBtn = function (verb, prefix, label) {
+                  const b = document.createElement('button');
+                  b.textContent = label;
+                  b.onclick = function () { sendText(prefix + a.approval_id); };
+                  row.appendChild(b);
+                };
+                mkBtn('approve', '/approve ', 'Approve');
+                mkBtn('reject', '/reject ', 'Reject');
+                log.appendChild(row);
+                log.scrollTop = log.scrollHeight;
+              } else if (payload.type === 'error') {
+                assistant.classList.add('error');
+                assistant.textContent = payload.data || 'Model error.';
+              } else if (payload.type === 'done') {
+                // stream complete
+              }
+            }
+          }
+          if (!assistant.textContent) assistant.textContent = '(no reply)';
+        } catch (err) {
+          assistant.classList.add('error');
+          assistant.textContent = 'Network error.';
+        } finally {
+          sendBtn.disabled = false;
+          input.focus();
+        }
+      }
+      sendBtn.addEventListener('click', send);
+      input.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+      });
+      newBtn.addEventListener('click', function () {
+        conversationId = cryptoRandomId();
+        localStorage.setItem('trpc-conversation-id', conversationId);
+        sessionLabel.textContent = 'conv: ' + conversationId.slice(0, 8);
+        log.innerHTML = '';
+      });
+    })();
+  </script>
+</body>
+</html>

@@ -1,6 +1,8 @@
 .idea
 .vscode
 .DS_Store
+.env
+deploy/im.env
 *.lock
 *.log
 
@@ -17,6 +19,9 @@ __pycache__
 htmlcov
 cov.tmp
 coverage.xml
+artifacts/final-acceptance/
+data/*.pid
+data/*.log
 .pytest_cache
 
 node_modules
@@ -25,3 +30,10 @@ pyrightconfig.json
 
 # spec-workflow tool artifacts
 .spec-workflow
+
+# Local development process notes
+.qoder/
+docs/superpowers/
+docs/agent-execution-context.md
+docs/会议纪要.md
+docs/实施设计.md

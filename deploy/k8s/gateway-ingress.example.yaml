@@ -1,0 +1,27 @@
+# Copy to a private deployment file, replace both placeholders, then apply it
+# after `kubectl apply -k deploy/k8s`.  This example is deliberately omitted
+# from kustomization.yaml so it cannot publish a placeholder hostname.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: gateway-wecom
+  namespace: trpc-agent
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - REPLACE_WITH_PUBLIC_HOST
+      secretName: REPLACE_WITH_TLS_SECRET
+  rules:
+    - host: REPLACE_WITH_PUBLIC_HOST
+      http:
+        paths:
+          - path: /webhooks/wecom
+            pathType: Prefix
+            backend:
+              service:
+                name: gateway
+                port:
+                  number: 8000
