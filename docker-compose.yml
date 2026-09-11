@@ -1,0 +1,105 @@
+services:
+  gateway:
+    build: .
+    environment:
+      TRPC_SERVICE_BACKEND: postgres-redis
+      TRPC_SERVICE_ROLE: all
+      TRPC_SERVICE_WORKER_COUNT: "2"
+      TRPC_SERVICE_DATABASE_URL: postgresql://trpc:trpc@postgres:5432/trpc
+      TRPC_SERVICE_CONTROL_DATABASE_URL: postgresql://trpc:trpc@postgres:5432/trpc
+      TRPC_SERVICE_REDIS_URL: redis://redis:6379/0
+      TRPC_SERVICE_AUTO_MIGRATE: "false"
+      TRPC_SERVICE_IM_DRY_RUN: ${TRPC_SERVICE_IM_DRY_RUN:-true}
+      TRPC_SERVICE_SESSION_HMAC_KEY: ${TRPC_SERVICE_SESSION_HMAC_KEY:-development-only-change-me}
+      TRPC_SERVICE_ADMIN_TOKEN_REF: env://TRPC_ADMIN_TOKEN
+      TRPC_ADMIN_TOKEN: ${TRPC_ADMIN_TOKEN:-change-me}
+      TRPC_AGENT_MODEL_NAME: ${TRPC_AGENT_MODEL_NAME:-}
+      TRPC_AGENT_API_KEY: ${TRPC_AGENT_API_KEY:-}
+      TRPC_AGENT_BASE_URL: ${TRPC_AGENT_BASE_URL:-}
+      TRPC_AGENT_FALLBACK_MODEL_NAME: ${TRPC_AGENT_FALLBACK_MODEL_NAME:-}
+      TRPC_AGENT_FALLBACK_API_KEY: ${TRPC_AGENT_FALLBACK_API_KEY:-}
+      TRPC_AGENT_FALLBACK_BASE_URL: ${TRPC_AGENT_FALLBACK_BASE_URL:-}
+      TRPC_AGENT_RUN_TIMEOUT_SECONDS: ${TRPC_AGENT_RUN_TIMEOUT_SECONDS:-120}
+      TRPC_SERVICE_FEISHU_CONNECTION_MODE: ${TRPC_SERVICE_FEISHU_CONNECTION_MODE:-webhook}
+      TRPC_SERVICE_FEISHU_TENANT_ID: ${TRPC_SERVICE_FEISHU_TENANT_ID:-acme}
+      TRPC_SERVICE_FEISHU_APP_ID: ${TRPC_SERVICE_FEISHU_APP_ID:-}
+      TRPC_SERVICE_FEISHU_APP_SECRET_REF: ${TRPC_SERVICE_FEISHU_APP_SECRET_REF:-}
+      TRPC_SERVICE_FEISHU_VERIFICATION_TOKEN_REF: ${TRPC_SERVICE_FEISHU_VERIFICATION_TOKEN_REF:-}
+      TRPC_SERVICE_FEISHU_ENCRYPT_KEY_REF: ${TRPC_SERVICE_FEISHU_ENCRYPT_KEY_REF:-}
+      TRPC_SERVICE_FEISHU_API_BASE_URL: ${TRPC_SERVICE_FEISHU_API_BASE_URL:-https://open.feishu.cn}
+      TRPC_SERVICE_FEISHU_LOG_LEVEL: ${TRPC_SERVICE_FEISHU_LOG_LEVEL:-WARNING}
+      FEISHU_APP_SECRET: ${FEISHU_APP_SECRET:-}
+      FEISHU_VERIFICATION_TOKEN: ${FEISHU_VERIFICATION_TOKEN:-}
+      FEISHU_ENCRYPT_KEY: ${FEISHU_ENCRYPT_KEY:-}
+      TRPC_SERVICE_WECOM_BOT_ID: ${TRPC_SERVICE_WECOM_BOT_ID:-}
+      TRPC_SERVICE_WECOM_BOT_SECRET_REF: ${TRPC_SERVICE_WECOM_BOT_SECRET_REF:-}
+      TRPC_SERVICE_WECOM_BOT_TENANT_ID: ${TRPC_SERVICE_WECOM_BOT_TENANT_ID:-acme}
+      TRPC_SERVICE_WECOM_BOT_WS_URL: ${TRPC_SERVICE_WECOM_BOT_WS_URL:-wss://openws.work.weixin.qq.com}
+      WECOM_BOT_SECRET: ${WECOM_BOT_SECRET:-}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_SERVICE_NAME: trpc-agent-gateway
+    ports: ["8080:8080"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health/ready')"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+  admin:
+    build: .
+    environment:
+      TRPC_SERVICE_BACKEND: postgres-redis
+      TRPC_SERVICE_ROLE: admin
+      TRPC_SERVICE_CONTROL_DATABASE_URL: postgresql://trpc:trpc@postgres:5432/trpc
+      TRPC_SERVICE_ADMIN_TOKEN_REF: env://TRPC_ADMIN_TOKEN
+      TRPC_ADMIN_TOKEN: ${TRPC_ADMIN_TOKEN:-change-me}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_SERVICE_NAME: trpc-agent-admin
+    ports: ["8081:8080"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+  migrate:
+    build: .
+    command: ["/app/.venv/bin/trpc-service", "migrate"]
+    environment:
+      TRPC_SERVICE_MIGRATION_DATABASE_URL: postgresql://trpc:trpc@postgres:5432/trpc
+    depends_on:
+      postgres: {condition: service_healthy}
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: trpc
+      POSTGRES_PASSWORD: trpc
+      POSTGRES_DB: trpc
+    volumes: ["postgres-data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trpc"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: ["redis-data:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    volumes: ["./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
+    ports: ["9090:9090"]
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.119.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes: ["./deploy/otel-collector.yml:/etc/otelcol/config.yaml:ro"]
+    ports: ["4318:4318"]
+volumes:
+  postgres-data:
+  redis-data:

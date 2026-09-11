@@ -1,0 +1,19 @@
+resources:
+  - deployment.yaml
+  - service.yaml
+  - network-policy.yaml
+  - pdb.yaml
+  - autoscaling.yaml
+  - migration-job.yaml
+  - admin.yaml
+  - telemetry.yaml
+configMapGenerator:
+  - name: trpc-agent-config
+    literals:
+      - TRPC_SERVICE_BACKEND=postgres-redis
+      - TRPC_SERVICE_ENV=production
+      - TRPC_SERVICE_PORT=8080
+      - TRPC_SERVICE_WORKER_COUNT=2
+      - TRPC_SERVICE_AUTO_MIGRATE=false
+      - TRPC_SERVICE_IM_DRY_RUN=false
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://trpc-otel-collector:4318

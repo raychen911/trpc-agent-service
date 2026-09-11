@@ -1,0 +1,45 @@
+[project]
+name = "trpc-agent-service"
+version = "0.1.0"
+description = "Multi-tenant IM gateway for tRPC-Agent-Python"
+requires-python = ">=3.10"
+dependencies = [
+  "asyncpg>=0.29,<1",
+  "boto3>=1.35,<2",
+  "cryptography>=42.0",
+  "fastapi>=0.110",
+  "lark-oapi>=1.4,<2",
+  "opentelemetry-api>=1.27,<2",
+  "opentelemetry-exporter-otlp-proto-http>=1.27,<2",
+  "opentelemetry-instrumentation-fastapi>=0.48b0,<1",
+  "opentelemetry-sdk>=1.27,<2",
+  "openai>=1.68,<2",
+  "prometheus-client>=0.21,<1",
+  "python-dotenv>=1.0",
+  "redis>=5.0,<7",
+  "trpc-agent-py>=1.1,<1.2",
+  "wecom-aibot-python-sdk>=1.0.2,<2",
+  "uvicorn>=0.29",
+]
+
+[project.scripts]
+trpc-service = "trpc_service._cli:main"
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[dependency-groups]
+dev = ["pytest>=8,<9", "pytest-cov>=5,<7", "ruff>=0.9,<1"]
+
+[tool.setuptools.packages.find]
+include = ["trpc_service*"]
+
+[tool.setuptools.data-files]
+"share/trpc-agent-service" = ["migrations/*.sql"]
+
+[tool.ruff]
+line-length = 120
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

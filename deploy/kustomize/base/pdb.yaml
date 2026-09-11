@@ -1,0 +1,13 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: trpc-agent-gateway}
+spec:
+  minAvailable: 1
+  selector: {matchLabels: {app: trpc-agent-service, role: gateway}}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: trpc-agent-worker}
+spec:
+  minAvailable: 1
+  selector: {matchLabels: {app: trpc-agent-service, role: worker}}

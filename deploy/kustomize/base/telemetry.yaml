@@ -1,0 +1,55 @@
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: trpc-otel-collector}
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc: {endpoint: 0.0.0.0:4317}
+          http: {endpoint: 0.0.0.0:4318}
+    processors:
+      memory_limiter: {check_interval: 1s, limit_mib: 256}
+      batch: {}
+    exporters:
+      debug: {verbosity: basic}
+    service:
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [debug]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: trpc-otel-collector}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: trpc-otel-collector}}
+  template:
+    metadata: {labels: {app: trpc-otel-collector}}
+    spec:
+      containers:
+        - name: collector
+          image: otel/opentelemetry-collector-contrib:0.119.0
+          args: ["--config=/etc/otelcol/config.yaml"]
+          ports:
+            - {name: otlp-grpc, containerPort: 4317}
+            - {name: otlp-http, containerPort: 4318}
+          volumeMounts:
+            - {name: config, mountPath: /etc/otelcol}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: "1", memory: 512Mi}
+      volumes:
+        - name: config
+          configMap: {name: trpc-otel-collector}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: trpc-otel-collector}
+spec:
+  selector: {app: trpc-otel-collector}
+  ports:
+    - {name: otlp-grpc, port: 4317, targetPort: otlp-grpc}
+    - {name: otlp-http, port: 4318, targetPort: otlp-http}

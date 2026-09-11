@@ -1,7 +1,11 @@
 .idea
 .vscode
 .DS_Store
+.env
+.env.*
+!.env.example
 *.lock
+!uv.lock
 *.log
 
 *.egg-info
@@ -25,3 +29,5 @@ pyrightconfig.json
 
 # spec-workflow tool artifacts
 .spec-workflow
+docs/reference-analysis.md
+tmp/

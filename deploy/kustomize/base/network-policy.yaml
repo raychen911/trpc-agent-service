@@ -1,0 +1,15 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: trpc-agent-service}
+spec:
+  podSelector: {matchLabels: {app: trpc-agent-service}}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - ports: [{protocol: TCP, port: 8080}]
+  egress:
+    - ports:
+        - {protocol: TCP, port: 443}
+        - {protocol: TCP, port: 5432}
+        - {protocol: TCP, port: 6379}
+        - {protocol: TCP, port: 4318}
+        - {protocol: UDP, port: 53}

@@ -1,0 +1,9 @@
+global:
+  scrape_interval: 15s
+scrape_configs:
+  - job_name: trpc-agent-service
+    metrics_path: /metrics
+    dns_sd_configs:
+      - names: ["gateway", "worker", "admin"]
+        type: A
+        port: 8080

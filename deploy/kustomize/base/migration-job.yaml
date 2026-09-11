@@ -1,0 +1,14 @@
+apiVersion: batch/v1
+kind: Job
+metadata: {name: trpc-agent-migrate}
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: migrate
+          image: trpc-agent-service:latest
+          command: ["/app/.venv/bin/trpc-service", "migrate"]
+          envFrom:
+            - secretRef: {name: trpc-agent-migration-secrets}
