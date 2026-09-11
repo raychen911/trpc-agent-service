@@ -1,0 +1,51 @@
+"""Provider adapters that normalize callbacks and safely deliver reply envelopes."""
+
+from .adapters import (
+    Attachment,
+    CallbackRequest,
+    ChannelAdapter,
+    ChannelBinding,
+    ChannelError,
+    DeliveryCapability,
+    DeliveryResult,
+    InboundEnvelope,
+    MockChannelAdapter,
+    Principal,
+    QueryableDeliveryAdapter,
+    ReplyBlock,
+    ReplyEnvelope,
+    TelegramAdapter,
+    WeComAdapter,
+    deterministic_session_id,
+)
+from .wecom_aibot import (
+    DEFAULT_WS_URL,
+    AIBotRegistry,
+    WeComAIBotAdapter,
+    WeComAIBotConnection,
+    WeComAIBotSupervisor,
+)
+
+__all__ = [
+    "Attachment",
+    "AIBotRegistry",
+    "CallbackRequest",
+    "ChannelAdapter",
+    "ChannelBinding",
+    "ChannelError",
+    "QueryableDeliveryAdapter",
+    "DeliveryCapability",
+    "DeliveryResult",
+    "DEFAULT_WS_URL",
+    "InboundEnvelope",
+    "MockChannelAdapter",
+    "Principal",
+    "ReplyBlock",
+    "ReplyEnvelope",
+    "TelegramAdapter",
+    "WeComAdapter",
+    "WeComAIBotAdapter",
+    "WeComAIBotConnection",
+    "WeComAIBotSupervisor",
+    "deterministic_session_id",
+]

@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "trpc-agent-service.fullname" . }}-dispatcher
+  labels:
+    {{- include "trpc-agent-service.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dispatcher
+spec:
+  replicas: {{ .Values.dispatcher.replicas }}
+  selector:
+    matchLabels:
+      {{- include "trpc-agent-service.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: dispatcher
+  template:
+    metadata:
+      labels:
+        {{- include "trpc-agent-service.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: dispatcher
+    spec:
+      serviceAccountName: {{ include "trpc-agent-service.serviceAccountName" . }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: dispatcher
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["python", "-m", "trpc_service._cli", "dispatcher", "--no-once"]
+          envFrom:
+            - configMapRef: {name: {{ include "trpc-agent-service.fullname" . }}}
+          env:
+            - name: TRPC_SERVICE_DATABASE_URL
+              valueFrom:
+                secretKeyRef: {name: {{ required "secrets.existingSecret is required" .Values.secrets.existingSecret }}, key: {{ .Values.secrets.keys.dispatcherDatabaseUrl }}}
+            - name: TRPC_SERVICE_DATABASE_ROLE
+              value: agent_dispatcher
+            - name: TRPC_SERVICE_REDIS_URL
+              valueFrom:
+                secretKeyRef: {name: {{ required "secrets.existingSecret is required" .Values.secrets.existingSecret }}, key: {{ .Values.secrets.keys.redisUrl }}}
+            - name: TRPC_SERVICE_DISPATCHER_ID
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          resources:
+            {{- toYaml .Values.dispatcher.resources | nindent 12 }}

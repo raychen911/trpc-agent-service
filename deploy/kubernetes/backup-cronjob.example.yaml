@@ -1,0 +1,43 @@
+# Optional backup job. Replace the PVC name and only apply after validating
+# storage encryption/retention. It retains dumps plus SHA-256 checksums.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: trpc-agent-service-backup
+  namespace: trpc-agent
+spec:
+  schedule: "17 2 * * *"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 999
+            runAsGroup: 999
+            seccompProfile: {type: RuntimeDefault}
+          containers:
+            - name: pg-dump
+              image: postgres:16-alpine
+              command: [/bin/sh, -ec]
+              args:
+                - >-
+                  umask 077;
+                  stamp=$$(date -u +%Y%m%dT%H%M%SZ);
+                  target=/backup/trpc-agent-$$stamp.dump;
+                  pg_dump --format=custom --no-owner --no-privileges --file $$target "$${TRPC_SERVICE_DATABASE_URL}";
+                  sha256sum $$target > $$target.sha256
+              env:
+                - name: TRPC_SERVICE_DATABASE_URL
+                  valueFrom:
+                    secretKeyRef: {name: trpc-agent-service-secrets, key: TRPC_SERVICE_DATABASE_URL}
+              volumeMounts: [{name: backup, mountPath: /backup}]
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: {drop: [ALL]}
+          volumes:
+            - name: backup
+              persistentVolumeClaim: {claimName: REPLACE_WITH_ENCRYPTED_BACKUP_PVC}

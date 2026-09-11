@@ -1,0 +1,42 @@
+---
+{{- if .Values.migration.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "trpc-agent-service.fullname" . }}-migrate
+  labels:
+    {{- include "trpc-agent-service.labels" . | nindent 4 }}
+  {{- if .Values.migration.hook }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+  {{- end }}
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: {{ include "trpc-agent-service.serviceAccountName" . }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: migrate
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          args: ["python", "-m", "trpc_service._cli", "migrate"]
+          envFrom:
+            - configMapRef: {name: {{ include "trpc-agent-service.fullname" . }}}
+          env:
+            - name: TRPC_SERVICE_DATABASE_URL
+              valueFrom:
+                secretKeyRef: {name: {{ required "secrets.existingSecret is required" .Values.secrets.existingSecret }}, key: {{ .Values.secrets.keys.migratorDatabaseUrl }}}
+            - name: TRPC_SERVICE_DATABASE_ROLE
+              value: platform_schema_owner
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+{{- end }}

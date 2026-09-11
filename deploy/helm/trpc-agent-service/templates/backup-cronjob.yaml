@@ -1,0 +1,55 @@
+{{- if .Values.backup.enabled }}
+{{- if not .Values.backup.existingPvc }}
+{{- fail "backup.existingPvc is required when backup.enabled=true" }}
+{{- end }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "trpc-agent-service.fullname" . }}-backup
+  labels:
+    {{- include "trpc-agent-service.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.backup.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 999
+            runAsGroup: 999
+            seccompProfile: {type: RuntimeDefault}
+          containers:
+            - name: pg-dump
+              image: {{ .Values.backup.image | quote }}
+              command: ["/bin/sh", "-ec"]
+              args:
+                - >-
+                  umask 077;
+                  stamp=$$(date -u +%Y%m%dT%H%M%SZ);
+                  target={{ .Values.backup.mountPath }}/trpc-agent-$$stamp.dump;
+                  pg_dump --format=custom --no-owner --no-privileges
+                  --file $$target "$$TRPC_SERVICE_DATABASE_URL";
+                  sha256sum $$target > $$target.sha256
+              env:
+                - name: TRPC_SERVICE_DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ required "secrets.existingSecret is required" .Values.secrets.existingSecret }}
+                      key: TRPC_SERVICE_DATABASE_URL
+              volumeMounts:
+                - name: backup
+                  mountPath: {{ .Values.backup.mountPath }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: {drop: ["ALL"]}
+          volumes:
+            - name: backup
+              persistentVolumeClaim:
+                claimName: {{ .Values.backup.existingPvc | quote }}
+{{- end }}

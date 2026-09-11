@@ -1,0 +1,63 @@
+{{- if and (eq .Values.config.runtimeBackend "postgres") (not .Values.storageProfiles.existingPvc) }}
+{{- fail "storageProfiles.existingPvc is required for the postgres worker retrieval projection" }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "trpc-agent-service.fullname" . }}-worker
+  labels:
+    {{- include "trpc-agent-service.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  replicas: {{ .Values.worker.replicas }}
+  selector:
+    matchLabels:
+      {{- include "trpc-agent-service.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        {{- include "trpc-agent-service.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+    spec:
+      serviceAccountName: {{ include "trpc-agent-service.serviceAccountName" . }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: worker
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["python", "-m", "trpc_service._cli", "worker", "--no-once"]
+          envFrom:
+            - configMapRef: {name: {{ include "trpc-agent-service.fullname" . }}}
+          env:
+            - name: TRPC_SERVICE_DATABASE_URL
+              valueFrom:
+                secretKeyRef: {name: {{ required "secrets.existingSecret is required" .Values.secrets.existingSecret }}, key: {{ .Values.secrets.keys.workerDatabaseUrl }}}
+            - name: TRPC_SERVICE_DATABASE_ROLE
+              value: agent_worker
+            - name: TRPC_SERVICE_REDIS_URL
+              valueFrom:
+                secretKeyRef: {name: {{ required "secrets.existingSecret is required" .Values.secrets.existingSecret }}, key: {{ .Values.secrets.keys.redisUrl }}}
+            - name: TRPC_AGENT_API_KEY
+              valueFrom:
+                secretKeyRef: {name: {{ required "secrets.existingSecret is required" .Values.secrets.existingSecret }}, key: {{ .Values.secrets.keys.agentApiKey }}, optional: true}
+            - name: TRPC_SERVICE_WORKER_ID
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+          volumeMounts:
+            - name: storage-profiles
+              mountPath: {{ .Values.storageProfiles.mountPath }}
+      volumes:
+        - name: storage-profiles
+          persistentVolumeClaim:
+            claimName: {{ required "storageProfiles.existingPvc is required" .Values.storageProfiles.existingPvc }}

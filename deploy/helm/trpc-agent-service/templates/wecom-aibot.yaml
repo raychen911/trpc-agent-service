@@ -1,0 +1,56 @@
+{{- if .Values.wecomAibot.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "trpc-agent-service.fullname" . }}-wecom-aibot
+  labels:
+    {{- include "trpc-agent-service.labels" . | nindent 4 }}
+    app.kubernetes.io/component: wecom-aibot
+spec:
+  # One Smart Bot permits one active WebSocket.  Keep this at one replica until
+  # per-bot distributed leader election is configured.
+  replicas: {{ .Values.wecomAibot.replicas }}
+  selector:
+    matchLabels:
+      {{- include "trpc-agent-service.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: wecom-aibot
+  template:
+    metadata:
+      labels:
+        {{- include "trpc-agent-service.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: wecom-aibot
+    spec:
+      serviceAccountName: {{ include "trpc-agent-service.serviceAccountName" . }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: wecom-aibot
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["python", "-m", "trpc_service._cli", "wecom-aibot", "--no-once"]
+          envFrom:
+            - configMapRef: {name: {{ include "trpc-agent-service.fullname" . }} }
+          env:
+            - name: TRPC_SERVICE_DATABASE_URL
+              valueFrom:
+                secretKeyRef: {name: {{ required "secrets.existingSecret is required" .Values.secrets.existingSecret }}, key: {{ .Values.secrets.keys.aibotDatabaseUrl }}}
+            - name: TRPC_SERVICE_DATABASE_ROLE
+              value: agent_wecom_aibot
+            - name: TRPC_SERVICE_REDIS_URL
+              valueFrom:
+                secretKeyRef: {name: {{ required "secrets.existingSecret is required" .Values.secrets.existingSecret }}, key: {{ .Values.secrets.keys.redisUrl }}}
+            - name: TRPC_LIVE_WECOM_AIBOT_SECRET
+              valueFrom:
+                secretKeyRef: {name: {{ required "secrets.existingSecret is required" .Values.secrets.existingSecret }}, key: {{ .Values.secrets.keys.wecomAibotSecret }}}
+            - name: TRPC_SERVICE_DISPATCHER_ID
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          resources:
+            {{- toYaml .Values.wecomAibot.resources | nindent 12 }}
+{{- end }}

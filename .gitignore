@@ -4,6 +4,11 @@
 *.lock
 *.log
 
+# Deployment credentials are supplied only to the relevant local workload.
+.env
+*.env
+!*.env.example
+
 *.egg-info
 
 build

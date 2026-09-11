@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trpc-agent-service-wecom-aibot
+  labels: {app.kubernetes.io/component: wecom-aibot}
+spec:
+  # WeCom permits one live connection per Bot ID.  Do not scale this workload
+  # without first introducing a per-bot lease/leader-election implementation.
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/component: wecom-aibot}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/component: wecom-aibot}
+    spec:
+      serviceAccountName: trpc-agent-service
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: wecom-aibot
+          image: ghcr.io/example/trpc-agent-service
+          args: [python, -m, trpc_service._cli, wecom-aibot, --no-once]
+          envFrom:
+            - configMapRef: {name: trpc-agent-service}
+          env:
+            - name: TRPC_SERVICE_DATABASE_URL
+              valueFrom:
+                secretKeyRef: {name: trpc-agent-service-secrets, key: TRPC_SERVICE_AIBOT_DATABASE_URL}
+            - name: TRPC_SERVICE_DATABASE_ROLE
+              value: agent_wecom_aibot
+            - name: TRPC_SERVICE_REDIS_URL
+              valueFrom:
+                secretKeyRef: {name: trpc-agent-service-secrets, key: TRPC_SERVICE_REDIS_URL}
+            - name: TRPC_LIVE_WECOM_AIBOT_SECRET
+              valueFrom:
+                secretKeyRef: {name: trpc-agent-service-secrets, key: TRPC_LIVE_WECOM_AIBOT_SECRET, optional: true}
+            - name: TRPC_SERVICE_DISPATCHER_ID
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: 500m, memory: 512Mi}

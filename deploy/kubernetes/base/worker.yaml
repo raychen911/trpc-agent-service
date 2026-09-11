@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trpc-agent-service-worker
+  labels: {app.kubernetes.io/component: worker}
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app.kubernetes.io/component: worker}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/component: worker}
+    spec:
+      serviceAccountName: trpc-agent-service
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: worker
+          image: ghcr.io/example/trpc-agent-service
+          args: [python, -m, trpc_service._cli, worker, --no-once]
+          envFrom:
+            - configMapRef: {name: trpc-agent-service}
+          env:
+            - name: TRPC_SERVICE_DATABASE_URL
+              valueFrom:
+                secretKeyRef: {name: trpc-agent-service-secrets, key: TRPC_SERVICE_WORKER_DATABASE_URL}
+            - name: TRPC_SERVICE_DATABASE_ROLE
+              value: agent_worker
+            - name: TRPC_SERVICE_REDIS_URL
+              valueFrom:
+                secretKeyRef: {name: trpc-agent-service-secrets, key: TRPC_SERVICE_REDIS_URL}
+            - name: TRPC_AGENT_API_KEY
+              valueFrom:
+                secretKeyRef: {name: trpc-agent-service-secrets, key: TRPC_AGENT_API_KEY, optional: true}
+            - name: TRPC_SERVICE_WORKER_ID
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 250m, memory: 512Mi}
+            limits: {cpu: "1", memory: 1Gi}

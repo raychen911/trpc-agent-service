@@ -1,0 +1,113 @@
+image:
+  repository: ghcr.io/example/trpc-agent-service
+  tag: latest
+  pullPolicy: IfNotPresent
+
+serviceAccount:
+  create: true
+  name: ""
+
+secrets:
+  # Supply this Secret out-of-band (External Secrets, Sealed Secrets, or your
+  # cloud secret manager). Expected keys are documented in README.md.
+  existingSecret: trpc-agent-service-secrets
+  # Each workload receives only the database URL it needs.  Keep the database
+  # role passwords in distinct Secret keys; do not use envFrom for all of them.
+  keys:
+    apiDatabaseUrl: TRPC_SERVICE_API_DATABASE_URL
+    workerDatabaseUrl: TRPC_SERVICE_WORKER_DATABASE_URL
+    dispatcherDatabaseUrl: TRPC_SERVICE_DISPATCHER_DATABASE_URL
+    migratorDatabaseUrl: TRPC_SERVICE_MIGRATOR_DATABASE_URL
+    aibotDatabaseUrl: TRPC_SERVICE_AIBOT_DATABASE_URL
+    redisUrl: TRPC_SERVICE_REDIS_URL
+    adminApiKey: TRPC_SERVICE_ADMIN_API_KEY
+    tenantApiKeys: TRPC_SERVICE_TENANT_API_KEYS
+    agentApiKey: TRPC_AGENT_API_KEY
+    wecomAibotSecret: TRPC_LIVE_WECOM_AIBOT_SECRET
+  externalSecret:
+    enabled: false
+    secretStoreRef: platform-secrets
+    targetName: trpc-agent-service-secrets
+    remoteKeys:
+      apiDatabaseUrl: prod/trpc-agent/api-database-url
+      workerDatabaseUrl: prod/trpc-agent/worker-database-url
+      dispatcherDatabaseUrl: prod/trpc-agent/dispatcher-database-url
+      migratorDatabaseUrl: prod/trpc-agent/migrator-database-url
+      aibotDatabaseUrl: prod/trpc-agent/aibot-database-url
+      adminApiKey: prod/trpc-agent/admin-api-key
+      tenantApiKeys: prod/trpc-agent/tenant-api-keys
+      redisUrl: prod/trpc-agent/redis-url
+      agentApiKey: prod/trpc-agent/model-api-key
+      wecomAibotSecret: prod/trpc-agent/wecom-aibot-secret
+
+config:
+  environment: production
+  runtimeBackend: postgres
+  workerId: worker
+  dispatcherId: dispatcher
+  logLevel: INFO
+  otlpEndpoint: ""
+
+# The worker materializes tenant-scoped retrieval profiles here.  For the
+# default PostgreSQL runtime this must be a durable ReadWriteMany PVC because
+# multiple workers can project and query the active profile.  The chart fails
+# closed when it is omitted in postgres mode.
+storageProfiles:
+  existingPvc: ""
+  mountPath: /var/lib/trpc-storage
+
+api:
+  replicas: 2
+  service:
+    type: ClusterIP
+    port: 8000
+  resources:
+    requests: {cpu: 250m, memory: 512Mi}
+    limits: {cpu: "1", memory: 1Gi}
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    cpuUtilization: 70
+
+worker:
+  replicas: 2
+  resources:
+    requests: {cpu: 250m, memory: 512Mi}
+    limits: {cpu: "1", memory: 1Gi}
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 20
+    cpuUtilization: 70
+
+dispatcher:
+  replicas: 2
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: 500m, memory: 512Mi}
+
+wecomAibot:
+  # The gateway is opt-in because it owns a persistent connection and requires
+  # TRPC_LIVE_WECOM_AIBOT_SECRET in the referenced Secret.
+  enabled: false
+  replicas: 1
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: 500m, memory: 512Mi}
+
+migration:
+  enabled: true
+  hook: true
+
+backup:
+  # Enable only after a durable, access-controlled PVC is provisioned. The
+  # job uses pg_dump and retains a checksum beside every custom-format dump.
+  enabled: false
+  schedule: "17 2 * * *"
+  image: postgres:16-alpine
+  existingPvc: ""
+  mountPath: /backup
+
+networkPolicy:
+  enabled: true

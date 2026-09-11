@@ -1,5 +1,63 @@
 # 基于 tRPC-Agent 设计多租户节点化 Agent 部署平台
 
+> 已完成的工程设计见 [`docs/architecture-design.md`](docs/architecture-design.md)，可执行级核心表结构见 [`docs/schema.sql`](docs/schema.sql)。
+
+## Runnable reference implementation
+
+The repository now contains a working, credential-free reference deployment.
+It runs the same Inbox/Outbox, session-fencing, budget, Tool-intent, migration,
+and tenant-context paths in an in-memory profile for deterministic local testing;
+PostgreSQL 16 with RLS is the production fact-store profile.
+
+```bash
+cp .env.example .env                 # optional: defaults are already mock-safe
+./build.sh
+python -m trpc_service._cli demo
+./start.sh
+curl http://127.0.0.1:8000/health/ready
+./stop.sh
+```
+
+`demo` prints evidence for two isolated tenants, a mock IM callback and reply,
+duplicate suppression, request/trace IDs, a non-retriable unknown Tool result,
+and a hard-budget rejection.  It never requires a model key.
+
+For the production profile, start the dependencies and apply the executable
+schema/RLS revision:
+
+```bash
+docker compose up -d postgres redis minio otel-collector
+export TRPC_SERVICE_RUNTIME_BACKEND=postgres
+export TRPC_SERVICE_DATABASE_URL='postgresql+asyncpg://trpc:trpc@localhost:5432/trpc_agent'
+python -m trpc_service._cli migrate
+docker compose up --build api worker dispatcher
+```
+
+The API, worker, and dispatcher use one shared PostgreSQL fact store and Redis
+Streams consumer groups in this profile. Deployment templates are available in
+[`deploy/kubernetes`](deploy/kubernetes) and
+[`deploy/helm/trpc-agent-service`](deploy/helm/trpc-agent-service); the
+integration, backup, restore, and load runbook is in
+[`docs/operations.md`](docs/operations.md).
+
+Set all three values below to use a real OpenAI-compatible model.  Otherwise
+the deterministic model is selected automatically; no secret is written to a
+release or log.
+
+```bash
+export TRPC_AGENT_API_KEY='...'
+export TRPC_AGENT_BASE_URL='https://model.example/v1'
+export TRPC_AGENT_MODEL_NAME='approved-model'
+```
+
+The REST surface includes `/health/live`, `/health/ready`, all `/admin/v1`
+tenant/release/channel/security/budget/migration operations, callback paths for
+WeCom, Telegram, and mock (`/callbacks/{provider}/{binding_key}`), direct Agent
+runs (`/v1/tenants/{tenant}/agents/{agent}:run`), operations, audit, and manual
+unknown-operation resolution.  See [implementation status](docs/implementation-status.md)
+for the behavior-by-behavior checklist and [the architecture](docs/architecture-design.md)
+for the crash-consistency model.
+
 ## 背景和价值
 企业在落地 Agent 应用时，通常不会只部署一个单体机器人，而是希望面向多个部门、多个业务线、多个 IM 入口和多个数据后端
 ，构建一套可统一管理的 Agent 平台。例如：客服团队希望把 Agent 接入企业微信，研发团队希望接入内部群机器人，运营团队>希望接入微信公众号或微信客服，不同租户又需要隔离会话、记忆、知识库、工具权限和审计日志。
