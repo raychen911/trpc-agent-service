@@ -1,0 +1,10 @@
+# Alerts are visible through the local API/UI. Configure an owned receiver here
+# before relying on external notifications; no third-party destination is assumed.
+route:
+  receiver: local-operations
+  group_by: [alertname, service_name, queue]
+  group_wait: 10s
+  group_interval: 1m
+  repeat_interval: 4h
+receivers:
+  - name: local-operations

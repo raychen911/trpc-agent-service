@@ -1,0 +1,226 @@
+[
+  {
+    "tenant_id": "demo_wecom",
+    "name": "企微租户",
+    "status": "active",
+    "config_version": 1,
+    "storage_revision": 1,
+    "applications": [
+      {
+        "app_id": "assistant",
+        "name": "租户助手",
+        "agent_name": "tenant_assistant",
+        "model_config_id": "model_openrouter",
+        "instruction": "简短回答当前用户。不要声称读取了没有调用的业务数据。",
+        "instruction_version": 1,
+        "tool_policy": {
+          "default_deny": true,
+          "allow": [],
+          "deny": [],
+          "require_confirmation": [],
+          "max_calls_per_run": 0
+        },
+        "knowledge_base_ids": [],
+        "max_tool_iterations": 0,
+        "run_timeout_seconds": 120.0,
+        "enabled": true
+      }
+    ],
+    "models": [
+      {
+        "model_config_id": "model_openrouter",
+        "provider": "openrouter",
+        "model_name": "deepseek/deepseek-v3.2",
+        "base_url": null,
+        "api_key_ref": {
+          "uri": "env://TRPC_MODEL_API_KEY"
+        },
+        "temperature": 0.2,
+        "max_output_tokens": 128,
+        "request_timeout_seconds": 60.0,
+        "max_retries": 0,
+        "monthly_budget": null,
+        "currency": "USD"
+      }
+    ],
+    "channel_bindings": [
+      {
+        "binding_id": "primary",
+        "tenant_id": "demo_wecom",
+        "agent_app_id": "assistant",
+        "channel": "wecom",
+        "external_account_id": "YOUR_WECOM_BOT_ID",
+        "webhook_public_id": "demo_wecom_ingress",
+        "credential_refs": [
+          {
+            "name": "bot_secret",
+            "secret_ref": {
+              "uri": "env://TRPC_WECOM_BOT_SECRET"
+            }
+          }
+        ],
+        "reply_mode": "async",
+        "enabled": true,
+        "group_mode": "per_user",
+        "identity_version": 2,
+        "conversation_epoch": 1,
+        "transport": "wecom_ws"
+      }
+    ],
+    "data_backends": {
+      "session": {
+        "kind": "sql",
+        "profile_id": "sql_protected",
+        "namespace": "demo_wecom"
+      },
+      "memory": {
+        "kind": "sql",
+        "profile_id": "sql_runtime",
+        "namespace": "demo_wecom"
+      },
+      "summary": {
+        "kind": "sql",
+        "profile_id": "sql_protected",
+        "namespace": "demo_wecom"
+      },
+      "knowledge": {
+        "kind": "vector",
+        "profile_id": "vector_prod",
+        "namespace": "demo_wecom"
+      },
+      "artifact": {
+        "kind": "object",
+        "profile_id": "object_prod",
+        "namespace": "demo_wecom"
+      },
+      "audit": {
+        "kind": "sql",
+        "profile_id": "sql_audit",
+        "namespace": "demo_wecom"
+      }
+    },
+    "audit_policy": {
+      "retention_days": 180,
+      "record_prompt_body": false,
+      "record_response_body": false,
+      "hash_external_identifiers": true,
+      "redact_pii": true,
+      "redact_secrets": true,
+      "allowed_viewer_roles": [
+        "tenant_auditor"
+      ]
+    }
+  },
+  {
+    "tenant_id": "demo_feishu",
+    "name": "飞书租户",
+    "status": "active",
+    "config_version": 1,
+    "storage_revision": 1,
+    "applications": [
+      {
+        "app_id": "assistant",
+        "name": "租户助手",
+        "agent_name": "tenant_assistant",
+        "model_config_id": "model_openrouter",
+        "instruction": "简短回答当前用户。不要声称读取了没有调用的业务数据。",
+        "instruction_version": 1,
+        "tool_policy": {
+          "default_deny": true,
+          "allow": [],
+          "deny": [],
+          "require_confirmation": [],
+          "max_calls_per_run": 0
+        },
+        "knowledge_base_ids": [],
+        "max_tool_iterations": 0,
+        "run_timeout_seconds": 120.0,
+        "enabled": true
+      }
+    ],
+    "models": [
+      {
+        "model_config_id": "model_openrouter",
+        "provider": "openrouter",
+        "model_name": "deepseek/deepseek-v3.2",
+        "base_url": null,
+        "api_key_ref": {
+          "uri": "env://TRPC_MODEL_API_KEY"
+        },
+        "temperature": 0.2,
+        "max_output_tokens": 128,
+        "request_timeout_seconds": 60.0,
+        "max_retries": 0,
+        "monthly_budget": null,
+        "currency": "USD"
+      }
+    ],
+    "channel_bindings": [
+      {
+        "binding_id": "primary",
+        "tenant_id": "demo_feishu",
+        "agent_app_id": "assistant",
+        "channel": "feishu",
+        "external_account_id": "YOUR_FEISHU_APP_ID",
+        "webhook_public_id": "demo_feishu_ingress",
+        "credential_refs": [
+          {
+            "name": "app_secret",
+            "secret_ref": {
+              "uri": "env://TRPC_FEISHU_APP_SECRET"
+            }
+          }
+        ],
+        "reply_mode": "async",
+        "enabled": true,
+        "group_mode": "per_user",
+        "identity_version": 2,
+        "conversation_epoch": 1,
+        "transport": "feishu_ws"
+      }
+    ],
+    "data_backends": {
+      "session": {
+        "kind": "redis",
+        "profile_id": "redis_runtime",
+        "namespace": "demo_feishu"
+      },
+      "memory": {
+        "kind": "sql",
+        "profile_id": "sql_runtime",
+        "namespace": "demo_feishu"
+      },
+      "summary": {
+        "kind": "redis",
+        "profile_id": "redis_runtime",
+        "namespace": "demo_feishu"
+      },
+      "knowledge": {
+        "kind": "vector",
+        "profile_id": "vector_prod",
+        "namespace": "demo_feishu"
+      },
+      "artifact": {
+        "kind": "object",
+        "profile_id": "object_prod",
+        "namespace": "demo_feishu"
+      },
+      "audit": {
+        "kind": "sql",
+        "profile_id": "sql_audit",
+        "namespace": "demo_feishu"
+      }
+    },
+    "audit_policy": {
+      "retention_days": 180,
+      "record_prompt_body": false,
+      "record_response_body": false,
+      "hash_external_identifiers": true,
+      "redact_pii": true,
+      "redact_secrets": true,
+      "allowed_viewer_roles": [
+        "tenant_auditor"
+      ]
+    }
+  }
+]

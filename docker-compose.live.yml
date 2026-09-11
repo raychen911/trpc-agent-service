@@ -1,0 +1,183 @@
+name: trpc-agent-live
+
+x-runtime: &runtime
+  build: .
+  restart: unless-stopped
+  healthcheck:
+    test: ["CMD", "python", "-m", "trpc_service._cli", "healthcheck"]
+    interval: 15s
+    timeout: 10s
+    start_period: 60s
+    retries: 3
+  logging:
+    driver: json-file
+    options: {max-size: "20m", max-file: "7"}
+  environment: &environment
+    TRPC_RUNTIME_MODE: protected
+    TRPC_CONFIG_SOURCE: database
+    TRPC_DATABASE_URL: postgresql+psycopg://trpc:${TRPC_DB_PASSWORD:?Set database password}@postgres:5432/trpc
+    TRPC_SESSION_DATABASE_URL: postgresql+psycopg://trpc:${TRPC_DB_PASSWORD:?Set database password}@postgres:5432/trpc_runtime
+    TRPC_REDIS_URL: redis://redis:6379/0
+    TRPC_QDRANT_URL: http://qdrant:6333
+    TRPC_VECTOR_DIMENSIONS: "2"
+    TRPC_MINIO_ENDPOINT: minio:9000
+    TRPC_MINIO_ACCESS_KEY: trpc-minio
+    TRPC_MINIO_SECRET_KEY: ${TRPC_MINIO_SECRET_KEY:?Set object storage password}
+    TRPC_MODEL_API_KEY: ${TRPC_MODEL_API_KEY:?Set model credential}
+    TRPC_WECOM_BOT_ID: ${TRPC_WECOM_BOT_ID:?Set WeCom account}
+    TRPC_WECOM_BOT_SECRET: ${TRPC_WECOM_BOT_SECRET:?Set WeCom credential}
+    TRPC_FEISHU_APP_ID: ${TRPC_FEISHU_APP_ID:?Set Feishu account}
+    TRPC_FEISHU_APP_SECRET: ${TRPC_FEISHU_APP_SECRET:?Set Feishu credential}
+    TRPC_IDENTITY_KEY: ${TRPC_IDENTITY_KEY:?Set identity key}
+    TRPC_IM_CONTEXT_KEYS: ${TRPC_IM_CONTEXT_KEYS:?Set Fernet context key}
+    TRPC_ADMIN_TOKEN: ${TRPC_ADMIN_TOKEN:?Set operator token}
+    TRPC_ADMIN_PRINCIPALS: ${TRPC_ADMIN_PRINCIPALS:-[]}
+    TRPC_AUDIT_ARCHIVE_ENDPOINT: ${TRPC_AUDIT_ARCHIVE_ENDPOINT:-minio:9000}
+    TRPC_AUDIT_ARCHIVE_SECURE: ${TRPC_AUDIT_ARCHIVE_SECURE:-false}
+    TRPC_AUDIT_ARCHIVE_ACCESS_KEY: ${TRPC_AUDIT_ARCHIVE_ACCESS_KEY:-trpc-minio}
+    TRPC_AUDIT_ARCHIVE_SECRET_KEY: ${TRPC_AUDIT_ARCHIVE_SECRET_KEY:-${TRPC_MINIO_SECRET_KEY}}
+    TRPC_AUDIT_ARCHIVE_BUCKET: ${TRPC_AUDIT_ARCHIVE_BUCKET:-trpc-audit-archives}
+    TRPC_AUDIT_ARCHIVE_KEYS: ${TRPC_AUDIT_ARCHIVE_KEYS:-}
+    TRPC_WORKER_CONCURRENCY: "2"
+    TRPC_LEASE_SECONDS: "30"
+    OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+  depends_on:
+    postgres: {condition: service_healthy}
+    redis: {condition: service_healthy}
+    qdrant: {condition: service_started}
+    minio: {condition: service_started}
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: trpc
+      POSTGRES_USER: trpc
+      POSTGRES_PASSWORD: ${TRPC_DB_PASSWORD:?Set database password}
+    volumes:
+      - live-postgres:/var/lib/postgresql/data
+      - ./deploy/postgres-init.sql:/docker-entrypoint-initdb.d/01-databases.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trpc -d trpc"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "always", "--maxmemory-policy", "noeviction"]
+    volumes: ["live-redis:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+  qdrant:
+    image: qdrant/qdrant:v1.15.4
+    volumes: ["live-qdrant:/qdrant/storage"]
+  minio:
+    image: minio/minio:RELEASE.2025-07-23T15-54-02Z
+    command: ["server", "/data"]
+    environment:
+      MINIO_ROOT_USER: trpc-minio
+      MINIO_ROOT_PASSWORD: ${TRPC_MINIO_SECRET_KEY:?Set object storage password}
+    volumes: ["live-minio:/data"]
+  telemetry-init:
+    build: .
+    user: "0:0"
+    entrypoint: ["python", "-c"]
+    command: ["import os; os.chown('/var/lib/otel',10001,10001); os.chmod('/var/lib/otel',0o750)"]
+    volumes: ["live-telemetry:/var/lib/otel"]
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.132.0
+    user: "10001:10001"
+    depends_on:
+      telemetry-init: {condition: service_completed_successfully}
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./deploy/otel-collector.yaml:/etc/otelcol/config.yaml:ro
+      - live-telemetry:/var/lib/otel
+    ports: ["127.0.0.1:8890:8889"]
+  migrate:
+    <<: *runtime
+    command: ["migrate"]
+    restart: "no"
+    profiles: ["setup"]
+    healthcheck: {disable: true}
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yaml
+      - --storage.tsdb.retention.time=15d
+      - --storage.tsdb.retention.size=2GB
+    volumes:
+      - ./deploy/prometheus.yaml:/etc/prometheus/prometheus.yaml:ro
+      - ./deploy/phase-two-alerts.yaml:/etc/prometheus/alerts.yaml:ro
+      - live-prometheus:/prometheus
+    ports: ["127.0.0.1:9090:9090"]
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    restart: unless-stopped
+    command: ["--config.file=/etc/alertmanager/alertmanager.yaml", "--storage.path=/alertmanager"]
+    volumes:
+      - ./deploy/alertmanager.yaml:/etc/alertmanager/alertmanager.yaml:ro
+      - live-alertmanager:/alertmanager
+    ports: ["127.0.0.1:9093:9093"]
+  init-resources:
+    <<: *runtime
+    command: ["init-resources"]
+    restart: "no"
+    profiles: ["setup"]
+    healthcheck: {disable: true}
+  gateway:
+    <<: *runtime
+    command: ["gateway"]
+    ports: ["127.0.0.1:8081:8080"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health/ready',timeout=5)"]
+      interval: 15s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+  worker-1:
+    <<: *runtime
+    command: ["worker"]
+  worker-2:
+    <<: *runtime
+    command: ["worker"]
+  post-turn:
+    <<: *runtime
+    command: ["post-turn"]
+  channel:
+    <<: *runtime
+    command: ["channel"]
+  action-worker:
+    <<: *runtime
+    command: ["action-worker"]
+  audit-archive-init:
+    <<: *runtime
+    profiles: ["audit"]
+    command: ["init-audit-archive"]
+    restart: "no"
+    healthcheck: {disable: true}
+  audit-retention:
+    <<: *runtime
+    profiles: ["audit"]
+    command: ["audit-retention"]
+    stop_grace_period: 180s
+    environment:
+      <<: *environment
+      TRPC_AUDIT_ARCHIVE_INTERVAL: ${TRPC_AUDIT_ARCHIVE_INTERVAL:-300}
+      TRPC_AUDIT_ARCHIVE_BATCH_SIZE: ${TRPC_AUDIT_ARCHIVE_BATCH_SIZE:-200}
+    depends_on:
+      postgres: {condition: service_healthy}
+      audit-archive-init: {condition: service_completed_successfully}
+
+volumes:
+  live-postgres:
+  live-redis:
+  live-qdrant:
+  live-minio:
+  live-telemetry:
+  live-prometheus:
+  live-alertmanager:

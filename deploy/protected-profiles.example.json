@@ -1,0 +1,118 @@
+[
+  {
+    "profile_id": "redis_runtime",
+    "kind": "redis",
+    "provider": "redis",
+    "endpoint": "redis:6379",
+    "region": null,
+    "secret_ref": {
+      "uri": "env://TRPC_REDIS_URL"
+    },
+    "options": {
+      "session_format": "protected_v1"
+    },
+    "capabilities": [
+      "summary",
+      "session"
+    ],
+    "profile_revision": 1,
+    "enabled": true,
+    "health": "healthy"
+  },
+  {
+    "profile_id": "sql_runtime",
+    "kind": "sql",
+    "provider": "postgresql",
+    "endpoint": "postgres:5432/trpc_runtime",
+    "region": null,
+    "secret_ref": {
+      "uri": "env://TRPC_SESSION_DATABASE_URL"
+    },
+    "options": {},
+    "capabilities": [
+      "memory"
+    ],
+    "profile_revision": 1,
+    "enabled": true,
+    "health": "healthy"
+  },
+  {
+    "profile_id": "vector_prod",
+    "kind": "vector",
+    "provider": "qdrant",
+    "endpoint": "qdrant:6333",
+    "region": null,
+    "secret_ref": {
+      "uri": "env://TRPC_QDRANT_URL"
+    },
+    "options": {
+      "collection": "trpc_knowledge",
+      "index_version": 1
+    },
+    "capabilities": [
+      "knowledge"
+    ],
+    "profile_revision": 1,
+    "enabled": true,
+    "health": "healthy"
+  },
+  {
+    "profile_id": "object_prod",
+    "kind": "object",
+    "provider": "minio",
+    "endpoint": "minio:9000",
+    "region": null,
+    "secret_ref": {
+      "uri": "env://TRPC_MINIO_ENDPOINT"
+    },
+    "options": {
+      "bucket": "trpc-artifacts",
+      "secure": false,
+      "access_key_ref": "env://TRPC_MINIO_ACCESS_KEY",
+      "secret_key_ref": "env://TRPC_MINIO_SECRET_KEY"
+    },
+    "capabilities": [
+      "artifact"
+    ],
+    "profile_revision": 1,
+    "enabled": true,
+    "health": "healthy"
+  },
+  {
+    "profile_id": "sql_audit",
+    "kind": "sql",
+    "provider": "postgresql",
+    "endpoint": "postgres:5432/trpc",
+    "region": null,
+    "secret_ref": {
+      "uri": "env://TRPC_DATABASE_URL"
+    },
+    "options": {},
+    "capabilities": [
+      "audit"
+    ],
+    "profile_revision": 1,
+    "enabled": true,
+    "health": "healthy"
+  },
+  {
+    "profile_id": "sql_protected",
+    "kind": "sql",
+    "provider": "postgresql",
+    "endpoint": "postgres:5432/trpc_runtime",
+    "region": null,
+    "secret_ref": {
+      "uri": "env://TRPC_SESSION_DATABASE_URL"
+    },
+    "options": {
+      "session_format": "protected_v1"
+    },
+    "capabilities": [
+      "summary",
+      "session"
+    ],
+    "profile_revision": 1,
+    "enabled": true,
+    "health": "healthy"
+  }
+]

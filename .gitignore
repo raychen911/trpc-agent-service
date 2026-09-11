@@ -25,3 +25,10 @@ pyrightconfig.json
 
 # spec-workflow tool artifacts
 .spec-workflow
+.upstream-sdk/
+.env
+.env.*
+!.env.example
+!*.env.example
+.secrets/
+reports/

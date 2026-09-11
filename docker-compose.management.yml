@@ -1,0 +1,17 @@
+# Explicitly enable database configuration and the operator API.
+# Set TRPC_ADMIN_TOKEN in the operator environment before starting.
+services:
+  gateway:
+    environment:
+      TRPC_CONFIG_SOURCE: database
+      TRPC_ADMIN_TOKEN: ${TRPC_ADMIN_TOKEN:?Set a random operator token of at least 32 characters}
+      TRPC_ADMIN_ACTOR: ${TRPC_ADMIN_ACTOR:-platform_operator}
+  worker-1:
+    environment:
+      TRPC_CONFIG_SOURCE: database
+  worker-2:
+    environment:
+      TRPC_CONFIG_SOURCE: database
+  post-turn:
+    environment:
+      TRPC_CONFIG_SOURCE: database

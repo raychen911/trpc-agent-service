@@ -1,0 +1,214 @@
+name: trpc-agent-phase-two
+
+x-app: &app
+  build: .
+  environment: &app-environment
+    TRPC_DATABASE_URL: postgresql+psycopg://trpc:trpc@postgres:5432/trpc
+    TRPC_SESSION_DATABASE_URL: postgresql+psycopg://trpc:trpc@postgres:5432/trpc_runtime
+    TRPC_REDIS_URL: redis://redis:6379/0
+    TRPC_QDRANT_URL: http://qdrant:6333
+    TRPC_VECTOR_DIMENSIONS: "2"
+    TRPC_MINIO_ENDPOINT: minio:9000
+    TRPC_MINIO_ACCESS_KEY: trpc-minio
+    TRPC_MINIO_SECRET_KEY: trpc-minio-secret
+    TRPC_RUNTIME_MODE: simulation
+    TRPC_TENANT_CONFIG: /app/deploy/simulation-tenants.json
+    TRPC_IDENTITY_KEY: simulation-identity-key-change-for-your-environment
+    TRPC_WORKER_CONCURRENCY: "4"
+    TRPC_LEASE_SECONDS: "15"
+    OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+    init-resources:
+      condition: service_completed_successfully
+    redis:
+      condition: service_healthy
+    qdrant:
+      condition: service_healthy
+    minio:
+      condition: service_healthy
+  restart: unless-stopped
+  stop_grace_period: 30s
+  volumes:
+    - ./deploy/simulation-tenants.json:/app/deploy/simulation-tenants.json:ro
+  healthcheck:
+    test: ["CMD", "python", "-m", "trpc_service._cli", "healthcheck"]
+    interval: 5s
+    timeout: 3s
+    start_period: 20s
+    retries: 3
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: trpc
+      POSTGRES_USER: trpc
+      POSTGRES_PASSWORD: trpc
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trpc -d trpc"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./deploy/postgres-init.sql:/docker-entrypoint-initdb.d/01-databases.sql:ro
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - redis-data:/data
+
+  qdrant:
+    image: qdrant/qdrant:v1.15.4
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333'"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - qdrant-data:/qdrant/storage
+
+  minio:
+    image: minio/minio:RELEASE.2025-07-23T15-54-02Z
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: trpc-minio
+      MINIO_ROOT_PASSWORD: trpc-minio-secret
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9000/minio/health/live || exit 1"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - minio-data:/data
+
+  telemetry-init:
+    build: .
+    user: "0:0"
+    entrypoint: ["python", "-c"]
+    command: ["import os; os.chown('/var/lib/otel',10001,10001); os.chmod('/var/lib/otel',0o750)"]
+    volumes:
+      - telemetry-data:/var/lib/otel
+    restart: "no"
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.132.0
+    user: "10001:10001"
+    depends_on:
+      telemetry-init:
+        condition: service_completed_successfully
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./deploy/otel-collector.yaml:/etc/otelcol/config.yaml:ro
+      - telemetry-data:/var/lib/otel
+    ports:
+      - "127.0.0.1:8889:8889"
+
+  migrate:
+    build: .
+    command: ["migrate"]
+    environment:
+      <<: *app-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  init-resources:
+    build: .
+    command: ["init-resources"]
+    environment:
+      <<: *app-environment
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    restart: "no"
+
+  gateway:
+    <<: *app
+    command: ["gateway", "--port", "8080"]
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health/ready')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  worker-1:
+    <<: *app
+    command: ["worker"]
+
+  worker-2:
+    <<: *app
+    command: ["worker"]
+
+  post-turn:
+    <<: *app
+    command: ["post-turn"]
+
+  integration:
+    build: .
+    entrypoint: ["python"]
+    command: ["/app/tests/integration/compose_smoke.py"]
+    environment:
+      <<: *app-environment
+      PYTHONPATH: /app
+    volumes:
+      - ./tests:/app/tests:ro
+      - ./trpc_service:/app/trpc_service:ro
+    depends_on:
+      gateway:
+        condition: service_healthy
+      worker-1:
+        condition: service_started
+      worker-2:
+        condition: service_started
+    restart: "no"
+    profiles: ["test"]
+
+  e2e:
+    build:
+      context: .
+      target: e2e
+    entrypoint: ["python"]
+    command: ["-m", "pytest", "-o", "addopts=", "-p", "no:cacheprovider", "/app/tests/e2e", "--backend-mode=real", "--strict-acceptance", "-ra"]
+    environment:
+      <<: *app-environment
+      # The E2E profile exercises externally configured models and managed
+      # backends; never apply the simulation-only configuration validator.
+      TRPC_RUNTIME_MODE: protected
+      TRPC_CONFIG_SOURCE: database
+      TRPC_MODEL_API_KEY: e2e-placeholder-key
+      PYTHONPATH: /app
+    volumes:
+      - ./tests:/app/tests:ro
+      - ./trpc_service:/app/trpc_service:ro
+      - ./pyproject.toml:/app/pyproject.toml:ro
+      - ./deploy:/app/deploy:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: "no"
+    profiles: ["test"]
+
+volumes:
+  postgres-data:
+  redis-data:
+  qdrant-data:
+  minio-data:
+  telemetry-data:

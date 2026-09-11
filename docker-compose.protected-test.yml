@@ -1,0 +1,44 @@
+name: trpc-protected-test
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: trpc
+      POSTGRES_USER: trpc
+      POSTGRES_PASSWORD: protected-local-test
+    ports: ["127.0.0.1:55442:5432"]
+    volumes:
+      - protected-postgres:/var/lib/postgresql/data
+      - ./deploy/postgres-init.sql:/docker-entrypoint-initdb.d/01-databases.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trpc -d trpc"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "always", "--maxmemory-policy", "noeviction"]
+    ports: ["127.0.0.1:56382:6379"]
+    volumes: ["protected-redis:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+  qdrant:
+    image: qdrant/qdrant:v1.15.4
+    ports: ["127.0.0.1:56335:6333"]
+    volumes: ["protected-qdrant:/qdrant/storage"]
+  minio:
+    image: minio/minio:RELEASE.2025-07-23T15-54-02Z
+    command: ["server", "/data"]
+    environment:
+      MINIO_ROOT_USER: trpc-minio
+      MINIO_ROOT_PASSWORD: protected-local-minio
+    ports: ["127.0.0.1:59002:9000"]
+    volumes: ["protected-minio:/data"]
+volumes:
+  protected-postgres:
+  protected-redis:
+  protected-qdrant:
+  protected-minio:

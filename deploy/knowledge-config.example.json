@@ -1,0 +1,20 @@
+{
+  "embedding": {
+    "model_name": "qwen/qwen3-embedding-8b",
+    "base_url": "https://openrouter.ai/api/v1",
+    "api_key_ref": {"uri": "env://TRPC_MODEL_API_KEY"},
+    "dimensions": 4096
+  },
+  "application_fields": {
+    "knowledge_base_ids": ["manual"],
+    "tool_policy": {
+      "allow": ["search_knowledge"],
+      "max_calls_per_run": 6
+    },
+    "instruction": "检索时调用 search_knowledge，knowledge_base_id 使用 manual，query 使用用户的自然语言问题。"
+  },
+  "knowledge_profile_options": {
+    "collection": "tenant_manual_4096",
+    "index_version": 1
+  }
+}

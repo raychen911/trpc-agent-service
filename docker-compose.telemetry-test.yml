@@ -1,0 +1,33 @@
+# Real collector, scraper and alert engine; no IM clients are started.
+name: trpc-telemetry-test
+services:
+  telemetry-init:
+    image: python:3.12-slim
+    user: "0:0"
+    entrypoint: ["python", "-c"]
+    command: ["import os; os.chown('/var/lib/otel',10001,10001); os.chmod('/var/lib/otel',0o750)"]
+    volumes: ["telemetry-test:/var/lib/otel"]
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.132.0
+    user: "10001:10001"
+    depends_on:
+      telemetry-init: {condition: service_completed_successfully}
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./deploy/otel-collector.yaml:/etc/otelcol/config.yaml:ro
+      - telemetry-test:/var/lib/otel
+    ports: ["127.0.0.1:54318:4318"]
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    command: ["--config.file=/etc/prometheus/prometheus.yaml"]
+    volumes:
+      - ./deploy/prometheus.yaml:/etc/prometheus/prometheus.yaml:ro
+      - ./deploy/phase-two-alerts.yaml:/etc/prometheus/alerts.yaml:ro
+    ports: ["127.0.0.1:59090:9090"]
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    command: ["--config.file=/etc/alertmanager/alertmanager.yaml"]
+    volumes: ["./deploy/alertmanager.yaml:/etc/alertmanager/alertmanager.yaml:ro"]
+    ports: ["127.0.0.1:59093:9093"]
+volumes:
+  telemetry-test:

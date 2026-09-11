@@ -1,0 +1,30 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+exporters:
+  debug:
+    verbosity: basic
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    resource_to_telemetry_conversion:
+      enabled: true
+  file:
+    path: /var/lib/otel/traces.json
+    rotation:
+      max_megabytes: 20
+      max_days: 7
+      max_backups: 5
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [debug, file]
+    metrics:
+      receivers: [otlp]
+      exporters: [debug, prometheus]

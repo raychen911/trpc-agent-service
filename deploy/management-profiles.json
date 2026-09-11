@@ -1,0 +1,7 @@
+[
+  {"profile_id":"redis_runtime","profile_revision":1,"kind":"redis","provider":"redis","endpoint":"redis:6379","secret_ref":{"uri":"env://TRPC_REDIS_URL"},"capabilities":["session","summary"]},
+  {"profile_id":"sql_runtime","profile_revision":1,"kind":"sql","provider":"postgresql","endpoint":"postgres:5432/trpc_runtime","secret_ref":{"uri":"env://TRPC_SESSION_DATABASE_URL"},"capabilities":["memory"]},
+  {"profile_id":"vector_prod","profile_revision":1,"kind":"vector","provider":"qdrant","endpoint":"qdrant:6333","secret_ref":{"uri":"env://TRPC_QDRANT_URL"},"capabilities":["knowledge"],"options":{"collection":"trpc_knowledge","index_version":1}},
+  {"profile_id":"object_prod","profile_revision":1,"kind":"object","provider":"minio","endpoint":"minio:9000","secret_ref":{"uri":"env://TRPC_MINIO_ENDPOINT"},"capabilities":["artifact"],"options":{"bucket":"trpc-artifacts","secure":false,"access_key_ref":"env://TRPC_MINIO_ACCESS_KEY","secret_key_ref":"env://TRPC_MINIO_SECRET_KEY"}},
+  {"profile_id":"sql_audit","profile_revision":1,"kind":"sql","provider":"postgresql","endpoint":"postgres:5432/trpc","secret_ref":{"uri":"env://TRPC_DATABASE_URL"},"capabilities":["audit"]}
+]

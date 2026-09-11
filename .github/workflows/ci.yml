@@ -1,0 +1,101 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  real-operations:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install the pinned runtime
+        run: python -m pip install ".[dev,im]"
+      - name: Start real database and monitoring services
+        run: |
+          docker compose -f docker-compose.protected-test.yml up -d --wait
+          docker compose -f docker-compose.telemetry-test.yml up -d --wait
+          docker compose -f docker-compose.telemetry-test.yml exec -T prometheus promtool check config /etc/prometheus/prometheus.yaml
+          docker compose -f docker-compose.telemetry-test.yml exec -T alertmanager amtool check-config /etc/alertmanager/alertmanager.yaml
+      - name: Verify actual HTTP, SQL, OTLP and alert delivery
+        run: |
+          set -a
+          . deploy/protected-test.env.example
+          set +a
+          export OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:54318
+          python -m tests.integration.live_operations
+      - name: Verify real audit archival and rollback under failures
+        run: |
+          set -a
+          . deploy/protected-test.env.example
+          set +a
+          python -m pytest tests/e2e/test_audit_retention.py --backend-mode=real --strict-acceptance --junitxml=reports/real-audit-retention.xml
+      - name: Show operational evidence
+        if: always()
+        run: |
+          docker compose -f docker-compose.telemetry-test.yml logs --tail 40
+          test ! -f reports/real-operations-acceptance-2026-09-08.json || cat reports/real-operations-acceptance-2026-09-08.json
+      - name: Stop test services
+        if: always()
+        run: |
+          docker compose -f docker-compose.telemetry-test.yml down
+          docker compose -f docker-compose.protected-test.yml down
+
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install the pinned runtime and development dependencies
+        run: python -m pip install --upgrade pip && python -m pip install ".[dev,im]"
+      - name: Unit and component tests
+        run: python -m pytest
+      - name: Lint
+        run: flake8 trpc_service tests
+      - name: Validate patches and Compose
+        run: |
+          git diff --check
+          docker compose config --quiet
+
+  real-backends:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run the PostgreSQL, Redis, Qdrant and MinIO acceptance probe
+        run: sh integration.sh
+      - name: Publish service logs on failure
+        if: failure()
+        run: docker compose --profile test logs --no-color
+
+  migration-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      COMPOSE_PROJECT_NAME: trpc-agent-migration-e2e
+    steps:
+      - uses: actions/checkout@v4
+      - name: Seed and strictly verify real backend migration and operational failures
+        run: >-
+          docker compose --profile test run --build --rm e2e
+          -m pytest -o addopts= -p no:cacheprovider /app/tests/e2e
+          /app/tests/storage/test_protected_faults.py
+          --ignore=/app/tests/e2e/test_sdk_write_contract.py
+          --ignore=/app/tests/e2e/test_operations.py
+          --ignore=/app/tests/e2e/test_runtime_resources.py
+          --ignore=/app/tests/e2e/test_backend_switch_flow.py
+          --backend-mode=real --strict-acceptance -ra
+      - name: Publish service logs on failure
+        if: failure()
+        run: docker compose --profile test logs --no-color
+      - name: Stop test services
+        if: always()
+        run: docker compose --profile test down --remove-orphans

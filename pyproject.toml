@@ -1,0 +1,56 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "trpc-agent-service"
+version = "0.1.0"
+description = "Multi-tenant, horizontally scalable service platform built on tRPC-Agent-Python"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "cryptography>=46.0.0,<50.0.0",
+    "fastapi>=0.115.0",
+    "mcp>=1.10.1,<2.0.0",
+    "jsonschema>=4.20.0,<5.0.0",
+    "minio>=7.2.0,<8.0.0",
+    "pydantic>=2.11.0",
+    "psycopg[binary]>=3.2.0,<4.0.0",
+    "qdrant-client>=1.15.0,<1.17.0",
+    "redis>=6.2.0,<7.0.0",
+    "sqlalchemy>=2.0.0,<3.0.0",
+    "trpc-agent-py @ git+https://github.com/trpc-group/trpc-agent-python.git@f05797d9f9dff2461922b5985aeccc1b636b7c8d",
+    "uvicorn>=0.30.0",
+]
+
+[project.optional-dependencies]
+im = [
+    "aiofiles",
+    "lark-oapi==1.7.3",
+    "wecom-aibot-sdk-python==0.1.7",
+    "python-telegram-bot==22.8",
+]
+dev = [
+    "flake8",
+    "pytest>=8.0.0",
+    "pytest-asyncio",
+    "pytest-cov",
+    "yapf",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["trpc_service"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.pytest.ini_options]
+addopts = "-ra -q"
+testpaths = ["tests"]
+markers = [
+    "known_gap(reason): executable acceptance requirement currently unmet; strict mode must fail",
+]
+
+[tool.yapf]
+based_on_style = "pep8"
+column_limit = 120

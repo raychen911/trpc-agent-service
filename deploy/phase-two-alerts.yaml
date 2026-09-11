@@ -1,0 +1,45 @@
+groups:
+  - name: trpc-phase-two
+    rules:
+      - alert: TrpcAuditRetentionFailed
+        expr: increase(audit_retention_failures_total[15m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Audit archival failed; original SQL evidence must be retained"
+      - alert: TrpcCollectorUnavailable
+        expr: up{job="trpc-collector"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "tRPC telemetry collector cannot be scraped"
+      - alert: TrpcQueueStalled
+        expr: trpc_queue{measure="oldest_age_seconds"} > 120
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "tRPC queue has work older than two minutes"
+      - alert: TrpcTerminalWork
+        expr: trpc_queue{measure="failed"} > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "tRPC work needs operator reconciliation"
+      - alert: TrpcOperationErrors
+        expr: sum(rate(trpc_operation_calls_total{outcome="error"}[5m])) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "tRPC operations are repeatedly failing"
+      - alert: TrpcQueueMetricsUnavailable
+        expr: trpc_queue{queue="database",measure="unavailable"} == 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "tRPC shared queue metrics cannot read the database"
