@@ -1,0 +1,26 @@
+groups:
+  - name: trpc-agent-service
+    rules:
+      - alert: AgentExecutionErrorRateHigh
+        expr: >-
+          sum(rate(trpc_agent_requests_total{result="error"}[5m]))
+          / clamp_min(sum(rate(trpc_agent_requests_total[5m])), 0.001) > 0.10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Agent 执行错误率连续 10 分钟超过 10%
+      - alert: IMDeliveryFailureDetected
+        expr: sum(increase(trpc_im_deliveries_total{result="error"}[10m])) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: 最近 10 分钟出现 IM 回写失败
+      - alert: GovernanceDenialSurge
+        expr: sum(rate(trpc_governance_decisions_total{action="deny"}[5m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 治理拒绝速率持续升高

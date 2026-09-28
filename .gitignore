@@ -2,7 +2,27 @@
 .vscode
 .DS_Store
 *.lock
+!uv.lock
 *.log
+
+# Local configuration and credentials must never enter the public repository.
+# Only the redacted `.env.example` template is versioned.
+.env
+.env.*
+!.env.example
+.secret/
+.cache/
+.secrets/
+.run/
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+
+# Runtime storage data belongs under data/ but never in source control.
+data/*
+!data/README.md
 
 *.egg-info
 

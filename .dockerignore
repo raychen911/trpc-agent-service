@@ -1,0 +1,16 @@
+.git
+.venv
+.run
+.secrets
+.env
+.coverage
+.pytest_cache
+.mypy_cache
+__pycache__
+*.pyc
+coverage.xml
+data
+dev
+dist
+docs/images
+tests

@@ -1,0 +1,115 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "trpc-agent-service"
+version = "0.1.0"
+description = "Multi-tenant, node-based Agent deployment service built with tRPC-Agent-Python"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "alembic>=1.16.5",
+    "asyncpg>=0.30.0",
+    "boto3>=1.43.81",
+    "cryptography>=50.0.0,<51.0.0",
+    "fastapi>=0.116.1",
+    "httpx>=0.28.1,<1.0",
+    "jsonschema>=4.26.0",
+    "lark-channel-sdk>=1.4.0,<2.0.0",
+    "openai>=3.3.1",
+    "opentelemetry-exporter-otlp-proto-http>=1.44.0",
+    "opentelemetry-sdk>=1.44.0",
+    "pgvector>=0.5.0",
+    "prometheus-client>=0.26.0",
+    "pydantic-settings>=2.10.1",
+    "pypdf>=6.16.2",
+    "python-docx>=1.2.0",
+    "redis>=8.1.0",
+    "sqlalchemy>=2.0.43",
+    # The MCP adapter uses the SDK's protected declaration/execution hooks
+    # because 1.1.19 does not expose equivalent public metadata APIs. Pin the
+    # verified contract until an upstream public adapter surface is available.
+    "trpc-agent-py==1.1.19",
+    "uvicorn[standard]>=0.35.0",
+    "wecom-aibot-sdk>=1.0.8,<2.0.0",
+]
+
+[project.scripts]
+trpc-agent-service = "trpc_service._cli:main"
+
+[dependency-groups]
+dev = [
+    "aiosqlite>=0.21,<0.22",
+    "boto3-stubs[s3]>=1.43.81",
+    "flake8>=7.3.0",
+    "mypy>=1.17.1",
+    "pytest>=8.4.1",
+    "pytest-cov>=6.2.1",
+    "yapf>=0.43.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["trpc_service"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+# Dependency upgrades must not silently introduce APIs scheduled for removal.
+filterwarnings = [
+    "error::DeprecationWarning",
+    "error::PendingDeprecationWarning",
+    "error::FutureWarning",
+]
+
+[tool.coverage.run]
+branch = true
+# SQLAlchemy crosses greenlet contexts and bounded Workspace I/O runs in worker
+# threads. Track both so coverage measures the actual asynchronous call chain.
+concurrency = ["greenlet", "thread"]
+source = ["trpc_service"]
+omit = [
+    "trpc_service/storage/migrations/*",
+]
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
+skip_covered = true
+
+[tool.mypy]
+python_version = "3.12"
+plugins = ["pydantic.mypy"]
+strict = true
+warn_unreachable = true
+# Generated Alembic operations use dynamic SQLAlchemy signatures. Runtime ORM
+# models remain fully type-checked outside this version-history directory.
+exclude = "^trpc_service/storage/migrations/"
+
+[[tool.mypy.overrides]]
+# The SDK currently ships source annotations without a PEP 561 py.typed marker.
+# The tRPC adapter imports its concrete SDK types at one boundary while mypy
+# ignores only the dependency's missing distribution marker.
+module = ["trpc_agent_sdk.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# The WeCom SDK also omits a PEP 561 marker. Project-owned Protocols keep its
+# long-connection and reply surface checked inside this repository.
+module = ["wecom_aibot_sdk", "wecom_aibot_sdk.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# The official Feishu Channel SDK currently does not publish a PEP 561 marker.
+module = ["lark_channel", "lark_channel.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# jsonschema 4.26 does not publish a PEP 561 marker; project wrappers retain
+# concrete ValidationError annotations at the boundary.
+module = ["jsonschema", "jsonschema.*"]
+ignore_missing_imports = true
+
+[tool.yapf]
+based_on_style = "pep8"
+column_limit = 100

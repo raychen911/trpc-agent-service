@@ -1,0 +1,206 @@
+{
+  "annotations": {"list": []},
+  "editable": false,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0},
+      "id": 16,
+      "panels": [],
+      "title": "核心健康状态",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "trpc-prometheus"},
+      "description": "当前 Dashboard 时间范围内完成的 Agent 请求总数。",
+      "fieldConfig": {"defaults": {"color": {"mode": "fixedColor", "fixedColor": "blue"}, "noValue": "0", "unit": "short"}, "overrides": []},
+      "gridPos": {"h": 4, "w": 4, "x": 0, "y": 1},
+      "id": 1,
+      "options": {"colorMode": "background", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+      "targets": [{"expr": "sum(increase(trpc_agent_requests_total[$__range])) or vector(0)", "instant": true, "refId": "A"}],
+      "title": "Agent 请求总数",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "trpc-prometheus"},
+      "description": "成功请求数占全部终态请求数的比例。无请求时显示 0%。",
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "noValue": "0%", "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "orange", "value": 0.9}, {"color": "green", "value": 0.99}]}, "unit": "percentunit"}, "overrides": []},
+      "gridPos": {"h": 4, "w": 4, "x": 4, "y": 1},
+      "id": 2,
+      "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+      "targets": [{"expr": "(sum(increase(trpc_agent_requests_total{result=\"succeeded\"}[$__range])) or vector(0)) / clamp_min(sum(increase(trpc_agent_requests_total[$__range])) or vector(0), 1)", "instant": true, "refId": "A"}],
+      "title": "请求成功率",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "trpc-prometheus"},
+      "description": "所有 Worker 当前正在执行的 Agent 任务数。",
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "noValue": "0", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 4}, {"color": "red", "value": 10}]}, "unit": "short"}, "overrides": []},
+      "gridPos": {"h": 4, "w": 4, "x": 8, "y": 1},
+      "id": 3,
+      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+      "targets": [{"expr": "sum(trpc_agent_active_executions) or vector(0)", "instant": true, "refId": "A"}],
+      "title": "当前执行中",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "trpc-prometheus"},
+      "description": "当前时间范围内进入统一治理链路的 Tool/MCP 调用总数。",
+      "fieldConfig": {"defaults": {"color": {"mode": "fixedColor", "fixedColor": "purple"}, "noValue": "0", "unit": "short"}, "overrides": []},
+      "gridPos": {"h": 4, "w": 4, "x": 12, "y": 1},
+      "id": 4,
+      "options": {"colorMode": "background", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+      "targets": [{"expr": "sum(increase(trpc_tool_calls_total[$__range])) or vector(0)", "instant": true, "refId": "A"}],
+      "title": "Tool 调用总数",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "trpc-prometheus"},
+      "description": "当前时间范围内失败的 IM 投递次数。",
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "noValue": "0", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}, "unit": "short"}, "overrides": []},
+      "gridPos": {"h": 4, "w": 4, "x": 16, "y": 1},
+      "id": 5,
+      "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+      "targets": [{"expr": "sum(increase(trpc_im_deliveries_total{result!=\"success\"}[$__range])) or vector(0)", "instant": true, "refId": "A"}],
+      "title": "IM 投递失败",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "trpc-prometheus"},
+      "description": "当前时间范围内被拒绝或要求确认的治理决策数。",
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "noValue": "0", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 1}]}, "unit": "short"}, "overrides": []},
+      "gridPos": {"h": 4, "w": 4, "x": 20, "y": 1},
+      "id": 6,
+      "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+      "targets": [{"expr": "sum(increase(trpc_governance_decisions_total{action=~\"deny|review\"}[$__range])) or vector(0)", "instant": true, "refId": "A"}],
+      "title": "治理拦截/确认",
+      "type": "stat"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 5},
+      "id": 17,
+      "panels": [],
+      "title": "Agent 与模型",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "trpc-prometheus"},
+      "description": "按 IM 类型和执行结果拆分的 Agent 吞吐。",
+      "fieldConfig": {"defaults": {"unit": "reqps"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 6},
+      "id": 7,
+      "targets": [{"expr": "sum by (channel_type, result) (rate(trpc_agent_requests_total[$__rate_interval]))", "legendFormat": "{{channel_type}} / {{result}}", "refId": "A"}],
+      "title": "Agent 请求速率",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "trpc-prometheus"},
+      "description": "Agent 端到端执行时延，分别展示 P50 与 P95。",
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 6},
+      "id": 8,
+      "targets": [{"expr": "histogram_quantile(0.50, sum by (le) (rate(trpc_agent_execution_duration_seconds_bucket[$__rate_interval])))", "legendFormat": "P50", "refId": "A"}, {"expr": "histogram_quantile(0.95, sum by (le) (rate(trpc_agent_execution_duration_seconds_bucket[$__rate_interval])))", "legendFormat": "P95", "refId": "B"}],
+      "title": "Agent 执行延迟",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "trpc-prometheus"},
+      "description": "按输入/输出方向和模型 Provider 展示 Token 消耗速率。",
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 6},
+      "id": 9,
+      "targets": [{"expr": "sum by (direction, model_provider) (rate(trpc_model_tokens_total[$__rate_interval]))", "legendFormat": "{{model_provider}} / {{direction}}", "refId": "A"}],
+      "title": "模型 Token 消耗",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 14},
+      "id": 18,
+      "panels": [],
+      "title": "Tool、MCP 与治理",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "trpc-prometheus"},
+      "description": "当前时间范围内调用次数最多的 20 个 Tool/MCP。无数据表示该范围内没有调用进入治理链路。",
+      "fieldConfig": {"defaults": {"noValue": "0", "unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 15},
+      "id": 10,
+      "options": {"displayMode": "gradient", "legend": {"calcs": [], "displayMode": "list", "placement": "right", "showLegend": true}, "maxVizHeight": 300, "minVizHeight": 16, "minVizWidth": 8, "namePlacement": "auto", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": true}, "showUnfilled": true, "sizing": "auto", "valueMode": "color"},
+      "targets": [{"expr": "topk(20, sum by (tool_name, result) (increase(trpc_tool_calls_total[$__range])))", "instant": true, "legendFormat": "{{tool_name}} / {{result}}", "refId": "A"}],
+      "title": "Tool 调用明细（当前时间范围）",
+      "type": "bargauge"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "trpc-prometheus"},
+      "description": "按工具和结果展示调用 P95 延迟，便于定位慢 MCP。",
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 6, "x": 12, "y": 15},
+      "id": 11,
+      "targets": [{"expr": "histogram_quantile(0.95, sum by (le, tool_name, result) (rate(trpc_tool_call_duration_seconds_bucket[$__rate_interval])))", "legendFormat": "{{tool_name}} / {{result}}", "refId": "A"}],
+      "title": "Tool P95 延迟",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "trpc-prometheus"},
+      "description": "按决策和稳定原因码统计当前时间范围内的治理结果。",
+      "fieldConfig": {"defaults": {"noValue": "0", "unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 6, "x": 18, "y": 15},
+      "id": 12,
+      "options": {"displayMode": "lcd", "legend": {"calcs": [], "displayMode": "list", "placement": "right", "showLegend": true}, "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": true}, "showUnfilled": true, "sizing": "auto", "valueMode": "color"},
+      "targets": [{"expr": "sum by (action, reason_code) (increase(trpc_governance_decisions_total[$__range]))", "instant": true, "legendFormat": "{{action}} / {{reason_code}}", "refId": "A"}],
+      "title": "治理决策明细",
+      "type": "bargauge"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 23},
+      "id": 19,
+      "panels": [],
+      "title": "通道与基础设施",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "trpc-prometheus"},
+      "description": "按 IM 类型和结果展示消息回写吞吐。",
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 24},
+      "id": 13,
+      "targets": [{"expr": "sum by (channel_type, result) (rate(trpc_im_deliveries_total[$__rate_interval]))", "legendFormat": "{{channel_type}} / {{result}}", "refId": "A"}],
+      "title": "IM 投递结果",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "trpc-prometheus"},
+      "description": "按存储操作和结果展示适配层吞吐。",
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 24},
+      "id": 14,
+      "targets": [{"expr": "sum by (operation, result) (rate(trpc_storage_operations_total[$__rate_interval]))", "legendFormat": "{{operation}} / {{result}}", "refId": "A"}],
+      "title": "存储操作结果",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "trpc-prometheus"},
+      "description": "按 HTTP 方法与状态码类别展示 Gateway 请求速率。",
+      "fieldConfig": {"defaults": {"unit": "reqps"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 24},
+      "id": 15,
+      "targets": [{"expr": "sum by (method, status_class) (rate(trpc_http_requests_total[$__rate_interval]))", "legendFormat": "{{method}} / {{status_class}}", "refId": "A"}],
+      "title": "Gateway 请求结果",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 41,
+  "tags": ["trpc-agent-service", "agent", "operations"],
+  "templating": {"list": []},
+  "time": {"from": "now-6h", "to": "now"},
+  "timezone": "browser",
+  "title": "Agent 平台运行概览",
+  "uid": "trpc-agent-platform",
+  "version": 3
+}

@@ -1,0 +1,14 @@
+This directory contains the linear Alembic history for trpc-agent-service.
+The current schema head is `20260909_0026`.
+
+Local startup runs `upgrade head` through `start.sh`; Kubernetes uses the
+one-shot `database-migration` Job before rolling application Deployments.
+Application replicas never create production tables implicitly.
+
+For development diagnostics only, run:
+
+    uv run alembic -c trpc_service/storage/alembic.ini heads
+    uv run alembic -c trpc_service/storage/alembic.ini current
+
+Do not edit an applied revision. Add a new revision and verify both upgrade and
+downgrade against an isolated database.

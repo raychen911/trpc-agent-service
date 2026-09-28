@@ -1,0 +1,208 @@
+name: trpc-agent-service
+
+# Python intentionally runs on the host through uv. Compose contains only
+# stateful and observability infrastructure shared by local development.
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:-pgvector/pgvector:pg18}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: trpc_agent
+      POSTGRES_USER: trpc
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - ./data/postgresql:/var/lib/postgresql
+    ports:
+      # Development services bind loopback only and are not exposed to the LAN.
+      - "127.0.0.1:${TRPC_POSTGRES_PORT:-55432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trpc -d trpc_agent"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    networks:
+      - platform
+
+  redis:
+    image: ${REDIS_IMAGE:-redis:8.2-alpine}
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - ./data/redis:/data
+    ports:
+      - "127.0.0.1:${TRPC_REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - platform
+
+  seaweedfs:
+    image: ${SEAWEEDFS_IMAGE:-chrislusf/seaweedfs:4.44}
+    restart: unless-stopped
+    command:
+      - server
+      - -ip=seaweedfs
+      - -ip.bind=0.0.0.0
+      - -filer
+      - -s3
+      - -master.telemetry=false
+    volumes:
+      - ./data/seaweedfs:/data
+    ports:
+      - "127.0.0.1:${TRPC_SEAWEEDFS_S3_PORT:-8333}:8333"
+    healthcheck:
+      # S3 starts only after the single-node master elects itself and the filer
+      # connects; probing the master alone makes dependent clients race startup.
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:8333/"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    networks:
+      - platform
+
+  otel-collector:
+    image: ${OTEL_IMAGE:-otel/opentelemetry-collector-contrib:0.159.0}
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./trpc_service/config/observability/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "127.0.0.1:${TRPC_OTEL_GRPC_PORT:-4317}:4317"
+      - "127.0.0.1:${TRPC_OTEL_HTTP_PORT:-4318}:4318"
+    healthcheck:
+      test: ["CMD", "/otelcol-contrib", "components"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - platform
+    depends_on:
+      tempo:
+        condition: service_started
+
+  tempo:
+    image: ${TEMPO_IMAGE:-grafana/tempo:3.0.2}
+    restart: unless-stopped
+    command: ["-config.file=/etc/tempo.yaml", "-target=all"]
+    volumes:
+      - ./trpc_service/config/observability/tempo.yaml:/etc/tempo.yaml:ro
+      - tempo-data:/var/tempo
+    ports:
+      - "127.0.0.1:${TRPC_TEMPO_PORT:-3200}:3200"
+    networks:
+      - platform
+
+  loki:
+    image: ${LOKI_IMAGE:-grafana/loki:3.6.15}
+    restart: unless-stopped
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    volumes:
+      - ./trpc_service/config/observability/loki.yaml:/etc/loki/local-config.yaml:ro
+      - loki-data:/loki
+    ports:
+      - "127.0.0.1:${TRPC_LOKI_PORT:-3100}:3100"
+    networks:
+      - platform
+
+  alloy:
+    image: ${ALLOY_IMAGE:-grafana/alloy:v1.18.0}
+    restart: unless-stopped
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./trpc_service/config/observability/alloy.config:/etc/alloy/config.alloy:ro
+      - ./.run:/var/log/trpc:ro
+      - alloy-data:/var/lib/alloy/data
+    ports:
+      - "127.0.0.1:${TRPC_ALLOY_PORT:-12345}:12345"
+    depends_on:
+      loki:
+        condition: service_started
+    networks:
+      - platform
+
+  prometheus:
+    image: ${PROMETHEUS_IMAGE:-prom/prometheus:v3.13.0}
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle
+    volumes:
+      - ./trpc_service/config/observability/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
+      - ./trpc_service/config/observability/prometheus-rules.yaml:/etc/prometheus/rules.yaml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:${TRPC_PROMETHEUS_PORT:-9090}:9090"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:9090/-/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    depends_on:
+      otel-collector:
+        condition: service_healthy
+    networks:
+      - platform
+
+  grafana:
+    image: ${GRAFANA_IMAGE:-grafana/grafana:13.2.0}
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin_password
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_SERVER_ROOT_URL: http://127.0.0.1:${TRPC_GRAFANA_PORT:-3000}
+    secrets:
+      - grafana_admin_password
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./trpc_service/config/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./trpc_service/config/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "127.0.0.1:${TRPC_GRAFANA_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    depends_on:
+      prometheus:
+        condition: service_healthy
+      tempo:
+        condition: service_started
+      loki:
+        condition: service_started
+    networks:
+      - platform
+
+secrets:
+  postgres_password:
+    file: ./.secrets/postgres_password
+  grafana_admin_password:
+    file: ./.secrets/grafana_admin_password
+
+volumes:
+  prometheus-data:
+  grafana-data:
+  tempo-data:
+  loki-data:
+  alloy-data:
+
+networks:
+  platform:
+    name: trpc-agent-service-platform

@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>租户管理台 · tRPC Agent Service</title>
+    <link rel="stylesheet" href="/console/assets/console.css">
+    <link rel="stylesheet" href="/tenant/assets/tenant.css">
+  </head>
+  <body class="tenant-console">
+    <a class="skip-link" href="#main-content">跳到主要内容</a>
+    <section id="login-shell" class="login-shell">
+      <div class="login-story">
+        <div class="story-content">
+          <div class="product-mark"><span class="mark-symbol">T</span><div><strong>tRPC Agent Service</strong><span>Tenant workspace</span></div></div>
+          <h1>让每个团队管理自己的 Agent 工作空间</h1>
+          <p>统一维护 Agent、企业微信与飞书接入以及知识库。所有操作严格限制在当前租户范围内。</p>
+          <div class="story-list"><span>多 IM 接入</span><span>知识版本管理</span><span>租户数据隔离</span></div>
+          <div class="story-flow" aria-label="服务流程"><div><strong>连接团队</strong><small>企业微信 / 飞书</small></div><div><strong>理解需求</strong><small>Agent / 团队知识</small></div><div><strong>完成工作</strong><small>工具协作 / 可靠回复</small></div></div>
+        </div>
+      </div>
+      <div class="login-panel">
+        <div class="login-card">
+          <h2>租户管理员登录</h2>
+          <p>使用平台管理员为你的租户分配的账号。</p>
+          <p id="login-error" class="inline-notice error" hidden></p>
+          <form id="login-form" class="field-stack">
+            <label class="field">账号<input name="username" autocomplete="username" required></label>
+            <label class="field">密码<input name="password" type="password" autocomplete="current-password" required></label>
+            <button class="button primary-wide" type="submit">进入租户工作台</button>
+          </form>
+          <p class="login-switch">平台运维人员？<a href="/admin">前往系统管理入口</a></p>
+        </div>
+      </div>
+    </section>
+
+    <div id="app-shell" class="app-shell" hidden>
+      <aside class="sidebar">
+        <div class="product-mark"><span class="mark-symbol">T</span><div><strong>租户工作台</strong><span>Agent workspace</span></div></div>
+        <nav aria-label="租户管理导航">
+          <button class="nav-item active" data-view="overview">概览</button>
+          <button class="nav-item" data-view="agents">Agent</button>
+          <button class="nav-item" data-view="channels">IM 接入</button>
+          <button class="nav-item" data-view="mcp">MCP 接入</button>
+          <button class="nav-item" data-view="knowledge">知识库</button>
+          <button class="nav-item" data-view="failures">投递恢复</button>
+        </nav>
+        <div class="sidebar-foot">
+          <p id="actor-name" class="actor-name"></p><p class="actor-role">租户管理员</p>
+          <button id="logout" class="button secondary small" type="button">退出登录</button>
+        </div>
+      </aside>
+      <main class="workspace" id="main-content" tabindex="-1">
+        <header class="topbar">
+          <div><p class="page-kicker">我的团队 / 工作空间</p><h1 id="page-title">工作空间概览</h1></div>
+          <div class="top-actions"><div class="tenant-picker"><span>当前租户</span><strong id="tenant-header-name">—</strong></div></div>
+        </header>
+
+        <section id="overview" class="view active">
+          <div class="overview-intro"><div><span class="intro-mark" aria-hidden="true">T</span><h2>让团队的知识，成为行动</h2><p>连接团队使用的工具，在熟悉的会话中完成工作。</p></div><button class="button secondary" data-refresh="overview">刷新概览</button></div>
+          <div class="metric-strip">
+            <div class="metric"><span>Agent</span><strong id="metric-agents">—</strong><small>当前租户</small></div>
+            <div class="metric"><span>IM 接入</span><strong id="metric-channels">—</strong><small>启用中的 Binding</small></div>
+            <div class="metric"><span>知识文档</span><strong id="metric-documents">—</strong><small>当前 Agent 知识库</small></div>
+            <div class="metric"><span>异常投递</span><strong id="metric-failures">—</strong><small>可人工恢复</small></div>
+          </div>
+          <div class="overview-grid">
+            <article class="surface"><div class="surface-head"><h3>租户状态</h3><span id="tenant-status" class="badge">active</span></div><div class="surface-body health-list"><div class="health-item"><span>租户名称</span><strong id="tenant-name">—</strong></div><div class="health-item"><span>隔离模式</span><strong id="tenant-isolation">—</strong></div><div class="health-item"><span>当前权限</span><strong id="tenant-role">—</strong></div></div></article>
+            <article class="surface"><div class="surface-head"><h3>快捷操作</h3></div><div class="surface-body quick-list"><button class="button secondary" data-open="agent-dialog">创建 Agent</button><button class="button secondary" data-view-jump="channels">配置 IM</button><button class="button secondary" data-view-jump="knowledge">维护知识库</button></div></article>
+          </div>
+        </section>
+
+        <section id="agents" class="view">
+          <div class="page-head"><div><h2>Agent</h2><p>管理当前租户的 Agent 应用、只读工具和知识库授权。模型由平台统一分配。</p></div><div class="toolbar"><button class="button secondary" data-refresh="agents">刷新</button><button class="button" data-open="agent-dialog">创建 Agent</button></div></div>
+          <div class="data-surface"><div class="table-wrap"><table><thead><tr><th>名称</th><th>状态</th><th>知识库</th><th>稳定版本</th><th>操作</th></tr></thead><tbody id="agent-rows"></tbody></table></div></div>
+        </section>
+
+        <section id="channels" class="view">
+          <div class="page-head"><div><h2>IM 接入</h2><p>一个租户可以同时连接多种 IM；凭据只写入加密存储，不会在页面回显。</p></div><button class="button secondary" data-refresh="channels">刷新</button></div>
+          <div id="channel-cards" class="adapter-grid"></div>
+          <div class="data-surface space-top"><div class="table-wrap"><table><thead><tr><th>渠道</th><th>Agent</th><th>账号</th><th>密钥</th><th>状态</th><th>操作</th></tr></thead><tbody id="binding-rows"></tbody></table></div></div>
+        </section>
+
+        <section id="mcp" class="view">
+          <div class="page-head"><div><h2>MCP 接入</h2><p>接入租户自己的远程 MCP 服务。凭据加密保存；刷新成功不等于 Agent 已获授权，还需为目标 Agent 勾选所需工具。</p></div><div class="toolbar"><button class="button secondary" data-refresh="mcp">刷新</button><button class="button" data-open="mcp-dialog">新增连接</button></div></div>
+          <div class="data-surface"><div class="table-wrap"><table><thead><tr><th>连接</th><th>地址</th><th>认证</th><th>工具</th><th>状态</th><th>操作</th></tr></thead><tbody id="mcp-rows"></tbody></table></div></div>
+        </section>
+
+        <section id="knowledge" class="view">
+          <div class="page-head"><div><h2>知识库</h2><p>只有租户管理员可以新增、替换和删除文档；IM 用户仅能检索。</p></div><div class="toolbar"><select id="knowledge-agent" aria-label="Agent"></select><select id="knowledge-base" aria-label="知识库"></select><button class="button secondary" data-refresh="knowledge">刷新</button><button class="button" data-open="knowledge-dialog">上传文档</button></div></div>
+          <div class="data-surface"><div class="table-wrap"><table><thead><tr><th>文件</th><th>版本</th><th>分块</th><th>状态</th><th>操作</th></tr></thead><tbody id="knowledge-rows"></tbody></table></div></div>
+        </section>
+
+        <section id="failures" class="view">
+          <div class="page-head"><div><h2>投递恢复</h2><p>查看进入 DEAD_LETTER 或 UNKNOWN 的 IM 回复，并在确认外部状态后人工重放。</p></div><button class="button secondary" data-refresh="failures">刷新</button></div>
+          <div class="data-surface"><div class="table-wrap"><table><thead><tr><th>更新时间</th><th>渠道</th><th>错误</th><th>状态</th><th>操作</th></tr></thead><tbody id="failure-rows"></tbody></table></div></div>
+        </section>
+      </main>
+    </div>
+    <div id="toasts" class="notice-stack" aria-live="polite"></div>
+
+    <dialog id="agent-dialog"><div class="dialog-head"><div><h2 id="agent-dialog-title">创建 Agent</h2><p>模型参数由系统管理员统一管理；能力必须在这里显式授权。</p></div><button class="dialog-close" data-close type="button">×</button></div><form id="agent-form" class="dialog-form"><input name="agent_app_id" type="hidden"><label class="field">Agent 名称<input name="name" maxlength="120" required></label><label class="field">系统指令<textarea name="instruction" placeholder="例如：你是企业内部问答助手。"></textarea></label><label class="field">授权知识库<small>多个名称使用逗号分隔。</small><input name="knowledge_bases" value="handbook"></label><div class="field"><span>只读工具</span><div class="checkbox-row"><label><input name="tools" type="checkbox" value="calculate" checked>计算</label><label><input name="tools" type="checkbox" value="current_time" checked>时间</label><label><input name="tools" type="checkbox" value="http.get">HTTPS 查询</label><label><input name="tools" type="checkbox" value="knowledge.search" checked>知识检索</label><label><input name="tools" type="checkbox" value="knowledge.list">知识列表</label></div></div><label class="field">HTTPS 允许域名<small>仅在启用 HTTPS 查询时生效，多个域名使用逗号分隔。</small><input name="http_allowed_hosts" placeholder="api.example.com"></label><div class="field"><span>知识型 Skill</span><div id="skill-options" class="checkbox-row"><small>正在读取 Skill 目录…</small></div></div><div class="field"><span>MCP 工具</span><div id="mcp-tool-options" class="checkbox-row"><small>请先新增并刷新 MCP 连接。</small></div></div><div class="dialog-actions"><button class="button secondary" data-close type="button">取消</button><button class="button" type="submit">保存 Agent</button></div></form></dialog>
+    <dialog id="mcp-dialog"><div class="dialog-head"><div><h2 id="mcp-dialog-title">新增 MCP 连接</h2><p>当前支持基于 HTTPS 的 Streamable HTTP；GitHub 等服务通常使用 Bearer Token。</p></div><button class="dialog-close" data-close type="button">×</button></div><form id="mcp-form" class="dialog-form"><input name="connection_id" type="hidden"><label class="field">连接名称<input name="name" maxlength="120" placeholder="GitHub MCP" required></label><label class="field">MCP URL<input name="endpoint_url" type="url" maxlength="1000" placeholder="https://example.com/mcp" required></label><label class="field">认证方式<select name="auth_type"><option value="bearer">Bearer Token</option><option value="none">无需认证</option></select></label><label class="field">访问密钥<input name="secret_value" type="password" maxlength="16384" autocomplete="new-password" placeholder="仅写入，不会回显；编辑时留空则不修改"></label><label class="field">超时（秒）<input name="timeout_seconds" type="number" min="2" max="60" value="10" required></label><div class="dialog-actions"><button class="button secondary" data-close type="button">取消</button><button class="button" type="submit">保存连接</button></div></form></dialog>
+    <dialog id="knowledge-dialog"><div class="dialog-head"><div><h2 id="knowledge-dialog-title">上传知识文档</h2><p>支持 TXT、Markdown、PDF 和 DOCX，写入前将再次确认。</p></div><button class="dialog-close" data-close type="button">×</button></div><form id="knowledge-form" class="dialog-form"><input name="document_id" type="hidden"><label class="field">选择文件<input name="file" type="file" accept=".txt,.md,.markdown,.pdf,.docx" required></label><div class="dialog-actions"><button class="button secondary" data-close type="button">取消</button><button class="button" type="submit">上传并写入</button></div></form></dialog>
+    <dialog id="replay-dialog"><div class="dialog-head"><div><h2>重新投递消息</h2><p>请确认外部平台状态，并留下可审计的操作原因。</p></div><button class="dialog-close" data-close type="button">×</button></div><form id="replay-form" class="dialog-form"><input name="outbox_id" type="hidden"><label class="field">重放原因<textarea name="reason" minlength="12" maxlength="500" required>已确认外部平台状态，人工重新投递</textarea></label><div class="dialog-actions"><button class="button secondary" data-close type="button">取消</button><button class="button" type="submit">确认重新投递</button></div></form></dialog>
+    <script src="/console/config.js" defer></script>
+    <script src="/console/assets/console.js" defer></script>
+    <script src="/tenant/assets/tenant.js" defer></script>
+  </body>
+</html>

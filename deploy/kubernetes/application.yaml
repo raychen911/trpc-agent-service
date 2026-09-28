@@ -1,0 +1,415 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway
+  namespace: trpc-agent-service
+  labels:
+    app.kubernetes.io/name: gateway
+    app.kubernetes.io/part-of: trpc-agent-service
+spec:
+  type: LoadBalancer
+  selector:
+    app.kubernetes.io/name: gateway
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  namespace: trpc-agent-service
+spec:
+  replicas: 2
+  strategy:
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: gateway
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: gateway
+        app.kubernetes.io/part-of: trpc-agent-service
+        app.kubernetes.io/component: control-plane
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: gateway
+      containers:
+        - name: gateway
+          image: trpc-agent-service:0.1.0
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: trpc-application-config
+          env:
+            - name: TRPC_SERVICE_RUNTIME_ROLE
+              value: api
+            - name: TRPC_SERVICE_WORKER_CONCURRENCY
+              value: "0"
+            - name: DASHSCOPE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: trpc-runtime-secrets
+                  key: DASHSCOPE_API_KEY
+          ports:
+            - name: http
+              containerPort: 8000
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            failureThreshold: 30
+            periodSeconds: 2
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: platform-files
+              mountPath: /run/secrets/platform
+              readOnly: true
+            - name: workspace
+              mountPath: /data/workspaces
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: platform-files
+          secret:
+            secretName: trpc-platform-files
+            defaultMode: 0400
+        - name: workspace
+          emptyDir:
+            sizeLimit: 1Gi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: gateway
+  namespace: trpc-agent-service
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: gateway
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-worker
+  namespace: trpc-agent-service
+spec:
+  replicas: 2
+  strategy:
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agent-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: agent-worker
+        app.kubernetes.io/part-of: trpc-agent-service
+        app.kubernetes.io/component: data-plane
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 210
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: agent-worker
+      containers:
+        - name: agent-worker
+          image: trpc-agent-service:0.1.0
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: trpc-application-config
+          env:
+            - name: TRPC_SERVICE_RUNTIME_ROLE
+              value: worker
+            - name: TRPC_SERVICE_WORKER_CONCURRENCY
+              value: "1"
+            - name: DASHSCOPE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: trpc-runtime-secrets
+                  key: DASHSCOPE_API_KEY
+          resources:
+            requests:
+              cpu: 100m
+              memory: 192Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: platform-files
+              mountPath: /run/secrets/platform
+              readOnly: true
+            - name: workspace
+              mountPath: /data/workspaces
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: platform-files
+          secret:
+            secretName: trpc-platform-files
+            defaultMode: 0400
+        - name: workspace
+          emptyDir:
+            sizeLimit: 2Gi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: agent-worker
+  namespace: trpc-agent-service
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agent-worker
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: worker-scaler
+  namespace: trpc-agent-service
+  labels:
+    app.kubernetes.io/part-of: trpc-agent-service
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: worker-scaler
+  namespace: trpc-agent-service
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale"]
+    resourceNames: ["agent-worker"]
+    verbs: ["get", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: worker-scaler
+  namespace: trpc-agent-service
+subjects:
+  - kind: ServiceAccount
+    name: worker-scaler
+    namespace: trpc-agent-service
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: worker-scaler
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker-scaler
+  namespace: trpc-agent-service
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: worker-scaler
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: worker-scaler
+        app.kubernetes.io/part-of: trpc-agent-service
+        app.kubernetes.io/component: control-plane
+    spec:
+      serviceAccountName: worker-scaler
+      automountServiceAccountToken: true
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: worker-scaler
+          image: trpc-agent-service:0.1.0
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: trpc-application-config
+          env:
+            - name: TRPC_SERVICE_RUNTIME_ROLE
+              value: supervisor
+            - name: TRPC_SERVICE_WORKER_CONCURRENCY
+              value: "0"
+          # The supervisor imports the same typed runtime composition as
+          # Workers even though it only reconciles replicas.
+          resources:
+            requests:
+              cpu: 10m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 384Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: platform-files
+              mountPath: /run/secrets/platform
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: platform-files
+          secret:
+            secretName: trpc-platform-files
+            defaultMode: 0400
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: channel-runtime
+  namespace: trpc-agent-service
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: channel-runtime
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: channel-runtime
+        app.kubernetes.io/part-of: trpc-agent-service
+        app.kubernetes.io/component: channel-adapter
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 120
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: channel-runtime
+          image: trpc-agent-service:0.1.0
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: trpc-application-config
+          env:
+            - name: TRPC_SERVICE_RUNTIME_ROLE
+              value: channel
+            - name: TRPC_SERVICE_WORKER_CONCURRENCY
+              value: "0"
+            - name: DASHSCOPE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: trpc-runtime-secrets
+                  key: DASHSCOPE_API_KEY
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: platform-files
+              mountPath: /run/secrets/platform
+              readOnly: true
+            - name: workspace
+              mountPath: /data/workspaces
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: platform-files
+          secret:
+            secretName: trpc-platform-files
+            defaultMode: 0400
+        - name: workspace
+          emptyDir:
+            sizeLimit: 1Gi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi

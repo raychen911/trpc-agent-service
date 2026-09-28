@@ -1,0 +1,67 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: database-migration
+  namespace: trpc-agent-service
+  labels:
+    app.kubernetes.io/name: database-migration
+    app.kubernetes.io/part-of: trpc-agent-service
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: database-migration
+        app.kubernetes.io/part-of: trpc-agent-service
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: alembic
+          image: trpc-agent-service:0.1.0
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -ec
+          args:
+            - |
+              /app/.venv/bin/alembic -c /app/trpc_service/storage/alembic.ini upgrade head
+              exec /app/.venv/bin/python -m trpc_service.storage.provision
+          envFrom:
+            - configMapRef:
+                name: trpc-application-config
+          env:
+            - name: DASHSCOPE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: trpc-runtime-secrets
+                  key: DASHSCOPE_API_KEY
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: platform-files
+              mountPath: /run/secrets/platform
+              readOnly: true
+      volumes:
+        - name: platform-files
+          secret:
+            secretName: trpc-platform-files
+            defaultMode: 0400
