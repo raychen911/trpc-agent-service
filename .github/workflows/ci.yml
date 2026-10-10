@@ -16,7 +16,7 @@ jobs:
         with:
           version: "0.8.13"
           enable-cache: true
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - run: uv lock --check
@@ -37,7 +37,7 @@ jobs:
         with:
           version: "0.8.13"
           enable-cache: true
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
       - run: uv sync --extra dev --locked --python ${{ matrix.python }}
@@ -70,7 +70,7 @@ jobs:
         with:
           version: "0.8.13"
           enable-cache: true
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - run: uv sync --extra dev --locked
@@ -108,7 +108,7 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           version: "0.8.13"
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - run: uv sync --extra dev --locked
