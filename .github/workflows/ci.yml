@@ -96,7 +96,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker compose config --quiet
-      - uses: azure/setup-kubectl@v4
+      - uses: azure/setup-kubectl@v5
       - run: kubectl kustomize deploy/kustomize/base >/tmp/base.yaml
       - run: kubectl kustomize deploy/kustomize/overlays/production >/tmp/production.yaml
       - run: docker run --rm -v /tmp:/manifests ghcr.io/yannh/kubeconform:v0.7.0 -strict -summary /manifests/base.yaml /manifests/production.yaml
