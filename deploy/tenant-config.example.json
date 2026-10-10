@@ -1,0 +1,42 @@
+{
+  "app_id": "support",
+  "config": {
+    "model": {
+      "provider": "openai",
+      "model": "REPLACE_WITH_APPROVED_MODEL_ID",
+      "base_url": "https://api.openai.com/v1",
+      "api_key_ref": {
+        "uri": "file:///run/secrets/model_api_key"
+      },
+      "timeout_seconds": 60,
+      "reasoning_effort": "medium",
+      "thinking_budget_tokens": null,
+      "temperature": null,
+      "top_p": null,
+      "stop_sequences": []
+    },
+    "tools": {
+      "allow": [],
+      "require_confirmation": [],
+      "classifications": {}
+    },
+    "budget": {
+      "max_tokens_per_turn": 32000,
+      "monthly_cost_units": 1000000,
+      "max_parallel_turns": 20
+    },
+    "audit": {
+      "retention_days": 180,
+      "record_content": false
+    },
+    "storage": {
+      "profile_id": "default",
+      "session_backend": "postgresql",
+      "memory_backend": "postgresql",
+      "artifact_backend": "s3",
+      "knowledge_backend": "pgvector"
+    },
+    "instructions": "REPLACE_WITH_TENANT_AGENT_INSTRUCTIONS",
+    "policy_version": 1
+  }
+}

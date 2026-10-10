@@ -1,0 +1,32 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: trpc-service
+
+resources:
+  - namespace.yaml
+  - ../../base
+  - ../../im-external-egress
+  - infrastructure-config.yaml
+  - infrastructure-services.yaml
+  - infrastructure-statefulsets.yaml
+  - infrastructure-workloads.yaml
+  - infrastructure-network-policy.yaml
+  - prometheus-adapter.yaml
+  - ingress.yaml
+
+images:
+  - name: trpc-agent-service
+    # Replace both values with the reviewed immutable candidate digest before
+    # applying.  The runtime gate rejects example registries and tag-only refs.
+    newName: docker.io/replace/trpc-agent-service
+    digest: sha256:REPLACE_WITH_64_HEX_DIGEST
+
+patches:
+  - path: replicas-patch.yaml
+  - path: production-config-patch.yaml
+  - path: wecom-ha-patch.yaml
+  - path: im-secret-mounts-patch.yaml
+  - path: model-secret-mount-patch.yaml
+  - path: deployment-order-patch.yaml
+  - path: migration-order-patch.yaml

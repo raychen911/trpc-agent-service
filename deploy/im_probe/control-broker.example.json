@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "socket_path": "/run/trpc-im-probe/control.sock",
+  "socket_mode": "0660",
+  "channels": {
+    "feishu": {
+      "control_profile_file": "/etc/trpc-im-probe/feishu-control-profile.json",
+      "control_profile_sha256": "<sha256-of-rendered-feishu-control-profile>",
+      "allowed_actions": {
+        "feishu_round_trip": {"executable": "/usr/local/libexec/trpc-im-feishu-control-action", "sha256": "<sha256-of-feishu-control-action>", "argv": ["--config", "/etc/trpc-im-probe/feishu-control-action.json"], "timeout_seconds": 180},
+        "feishu_idempotency": {"executable": "/usr/local/libexec/trpc-im-feishu-control-action", "sha256": "<sha256-of-feishu-control-action>", "argv": ["--config", "/etc/trpc-im-probe/feishu-control-action.json"], "timeout_seconds": 180},
+        "feishu_media": {"executable": "/usr/local/libexec/trpc-im-feishu-control-action", "sha256": "<sha256-of-feishu-control-action>", "argv": ["--config", "/etc/trpc-im-probe/feishu-control-action.json"], "timeout_seconds": 180},
+        "feishu_reconnect": {"executable": "/usr/local/libexec/trpc-im-feishu-control-action", "sha256": "<sha256-of-feishu-control-action>", "argv": ["--config", "/etc/trpc-im-probe/feishu-control-action.json"], "timeout_seconds": 180},
+        "feishu_rate_limit_retry_after": {"executable": "/usr/local/libexec/trpc-im-feishu-control-action", "sha256": "<sha256-of-feishu-control-action>", "argv": ["--config", "/etc/trpc-im-probe/feishu-control-action.json"], "timeout_seconds": 180},
+        "feishu_credential_rotation": {"executable": "/usr/local/libexec/trpc-im-feishu-control-action", "sha256": "<sha256-of-feishu-control-action>", "argv": ["--config", "/etc/trpc-im-probe/feishu-control-action.json"], "timeout_seconds": 180},
+        "feishu_prolonged_outage": {"executable": "/usr/local/libexec/trpc-im-feishu-control-action", "sha256": "<sha256-of-feishu-control-action>", "argv": ["--config", "/etc/trpc-im-probe/feishu-control-action.json"], "timeout_seconds": 180},
+        "feishu_ambiguous": {"executable": "/usr/local/libexec/trpc-im-feishu-control-action", "sha256": "<sha256-of-feishu-control-action>", "argv": ["--config", "/etc/trpc-im-probe/feishu-control-action.json"], "timeout_seconds": 180}
+      }
+    },
+    "wecom": {
+      "control_profile_file": "/etc/trpc-im-probe/wecom-control-profile.json",
+      "control_profile_sha256": "<sha256-of-rendered-wecom-control-profile>",
+      "allowed_actions": {
+        "wecom_round_trip": {"executable": "/usr/local/libexec/trpc-im-wecom-control-action", "sha256": "<sha256-of-wecom-control-action>", "argv": ["--config", "/etc/trpc-im-probe/wecom-control-action.json"], "timeout_seconds": 180},
+        "wecom_idempotency": {"executable": "/usr/local/libexec/trpc-im-wecom-control-action", "sha256": "<sha256-of-wecom-control-action>", "argv": ["--config", "/etc/trpc-im-probe/wecom-control-action.json"], "timeout_seconds": 180},
+        "wecom_media": {"executable": "/usr/local/libexec/trpc-im-wecom-control-action", "sha256": "<sha256-of-wecom-control-action>", "argv": ["--config", "/etc/trpc-im-probe/wecom-control-action.json"], "timeout_seconds": 180},
+        "wecom_reconnect": {"executable": "/usr/local/libexec/trpc-im-wecom-control-action", "sha256": "<sha256-of-wecom-control-action>", "argv": ["--config", "/etc/trpc-im-probe/wecom-control-action.json"], "timeout_seconds": 180},
+        "wecom_rate_limit_retry_after": {"executable": "/usr/local/libexec/trpc-im-wecom-control-action", "sha256": "<sha256-of-wecom-control-action>", "argv": ["--config", "/etc/trpc-im-probe/wecom-control-action.json"], "timeout_seconds": 180},
+        "wecom_credential_rotation": {"executable": "/usr/local/libexec/trpc-im-wecom-control-action", "sha256": "<sha256-of-wecom-control-action>", "argv": ["--config", "/etc/trpc-im-probe/wecom-control-action.json"], "timeout_seconds": 180},
+        "wecom_prolonged_outage": {"executable": "/usr/local/libexec/trpc-im-wecom-control-action", "sha256": "<sha256-of-wecom-control-action>", "argv": ["--config", "/etc/trpc-im-probe/wecom-control-action.json"], "timeout_seconds": 180},
+        "wecom_ambiguous": {"executable": "/usr/local/libexec/trpc-im-wecom-control-action", "sha256": "<sha256-of-wecom-control-action>", "argv": ["--config", "/etc/trpc-im-probe/wecom-control-action.json"], "timeout_seconds": 180}
+      }
+    }
+  }
+}

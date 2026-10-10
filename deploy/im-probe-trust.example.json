@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "probe_url": "https://replace-with-independent-probe.example.com",
+  "key_id": "replace-with-ed25519-key-id",
+  "ed25519_public_key": "replace-with-base64-encoded-32-byte-ed25519-public-key"
+}

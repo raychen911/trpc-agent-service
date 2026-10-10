@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trpc-gateway
+spec:
+  template:
+    spec:
+      nodeSelector:
+        trpc-role: workload
+      containers:
+        - name: gateway
+          env:
+            - name: TRPC_SERVICE_DATABASE_POOL_MIN_SIZE
+              value: "5"
+            - name: TRPC_SERVICE_DATABASE_POOL_MAX_SIZE
+              value: "6"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trpc-worker
+spec:
+  template:
+    spec:
+      nodeSelector:
+        trpc-role: workload
+      containers:
+        - name: worker
+          env:
+            - name: TRPC_SERVICE_DATABASE_POOL_MIN_SIZE
+              value: "2"
+            - name: TRPC_SERVICE_DATABASE_POOL_MAX_SIZE
+              value: "8"
+            - name: TRPC_SERVICE_OFFLINE_AGENT_DELAY_SECONDS
+              value: "3.0"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trpc-outbox-dispatcher
+spec:
+  template:
+    spec:
+      nodeSelector:
+        trpc-role: workload
+      containers:
+        - name: outbox-dispatcher
+          env:
+            - name: TRPC_SERVICE_DATABASE_POOL_MIN_SIZE
+              value: "2"
+            - name: TRPC_SERVICE_DATABASE_POOL_MAX_SIZE
+              value: "4"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trpc-session-recovery
+spec:
+  template:
+    spec:
+      nodeSelector:
+        trpc-role: workload
+      containers:
+        - name: session-recovery
+          env:
+            - name: TRPC_SERVICE_DATABASE_POOL_MIN_SIZE
+              value: "1"
+            - name: TRPC_SERVICE_DATABASE_POOL_MAX_SIZE
+              value: "2"
+            - name: TRPC_SERVICE_RECOVERY_POLL_SECONDS
+              value: "1"

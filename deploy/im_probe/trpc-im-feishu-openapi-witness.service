@@ -1,0 +1,48 @@
+[Unit]
+Description=Independent tRPC Feishu OpenAPI witness
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=trpcimbroker
+Group=trpcagent
+WorkingDirectory=/opt/trpc-im-probe/current
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+ExecStartPre=/opt/trpc-im-probe/current/.venv/bin/python /opt/trpc-im-probe/current/deploy/im_probe/feishu_openapi_witness.py --host 127.0.0.1 --port 8752 --control-socket /run/trpc-im-probe/feishu-openapi-witness.sock --check
+ExecStart=/opt/trpc-im-probe/current/.venv/bin/python /opt/trpc-im-probe/current/deploy/im_probe/feishu_openapi_witness.py --host 127.0.0.1 --port 8752 --control-socket /run/trpc-im-probe/feishu-openapi-witness.sock
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+KillSignal=SIGTERM
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectClock=true
+ProtectHostname=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectKernelLogs=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+LockPersonality=true
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RuntimeDirectory=trpc-im-probe
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=yes
+ReadOnlyPaths=/opt/trpc-im-probe/current
+UMask=0077
+TasksMax=64
+MemoryHigh=128M
+MemoryMax=256M
+
+[Install]
+WantedBy=multi-user.target

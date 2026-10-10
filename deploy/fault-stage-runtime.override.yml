@@ -1,0 +1,18 @@
+services:
+  worker:
+    restart: "no"
+    environment:
+      TRPC_SERVICE_ENVIRONMENT: test
+      TRPC_SERVICE_FAULT_INJECTION_ENABLED: "true"
+      TRPC_SERVICE_FAULT_INJECTION_RUN_ID: "${TRPC_FAULT_RUN_ID:?required}"
+      TRPC_SERVICE_FAULT_INJECTION_RUN_TOKEN_REF: file:///run/secrets/fault_injection_run_token
+      TRPC_SERVICE_OFFLINE_AGENT_DELAY_SECONDS: "${TRPC_FAULT_OFFLINE_AGENT_DELAY_SECONDS:?required}"
+      TRPC_SERVICE_LEASE_SECONDS: "10"
+      TRPC_SERVICE_REDIS_RECLAIM_AFTER_MS: "1000"
+      TRPC_SERVICE_WORKER_POLL_SECONDS: "0.05"
+    secrets:
+      - fault_injection_run_token
+
+secrets:
+  fault_injection_run_token:
+    environment: TRPC_FAULT_RUN_TOKEN

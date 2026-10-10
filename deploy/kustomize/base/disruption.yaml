@@ -1,0 +1,59 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: trpc-worker
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: trpc-worker
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: trpc-gateway
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: trpc-gateway
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: trpc-outbox-dispatcher
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: trpc-outbox-dispatcher
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: trpc-channel-dispatcher
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: trpc-channel-dispatcher
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: trpc-post-turn-projector
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: trpc-post-turn-projector
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: trpc-wecom-connector
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: trpc-wecom-connector

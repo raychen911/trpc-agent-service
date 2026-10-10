@@ -1,0 +1,180 @@
+# Add this file to `patches` in an environment-specific overlay to remove the
+# default in-cluster stateful services. Supply PostgreSQL/Redis DSNs through
+# the existing application Secrets and replace the two endpoint placeholders.
+# This also removes the bundled external-metrics APIService; the managed
+# environment must register a provider for `trpc_session_ready_backlog` before
+# enabling the worker HPA.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+$patch: delete
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+$patch: delete
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: minio
+$patch: delete
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: prometheus
+$patch: delete
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+$patch: delete
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus-adapter
+$patch: delete
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: minio-bootstrap
+$patch: delete
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+$patch: delete
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+$patch: delete
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+$patch: delete
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+$patch: delete
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+$patch: delete
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus-adapter
+$patch: delete
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trpc-postgres-bootstrap
+$patch: delete
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trpc-prometheus-config
+$patch: delete
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trpc-otel-collector-config
+$patch: delete
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trpc-prometheus-adapter-config
+$patch: delete
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus-adapter
+$patch: delete
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: trpc-prometheus-adapter-resource-reader
+$patch: delete
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: trpc-prometheus-adapter-resource-reader
+$patch: delete
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: trpc-prometheus-adapter-auth-delegator
+$patch: delete
+---
+apiVersion: apiregistration.k8s.io/v1
+kind: APIService
+metadata:
+  name: v1beta1.external.metrics.k8s.io
+$patch: delete
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: trpc-allow-infrastructure-ingress
+$patch: delete
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: trpc-allow-infrastructure-egress
+$patch: delete
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: trpc-allow-prometheus-scrape
+$patch: delete
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: trpc-allow-prometheus-adapter
+$patch: delete
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: trpc-schema-migration
+spec:
+  template:
+    spec:
+      initContainers:
+        - name: wait-for-postgres
+          $patch: delete
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trpc-service-config
+data:
+  TRPC_SERVICE_S3_ENDPOINT: https://REPLACE_WITH_MANAGED_S3_ENDPOINT
+  TRPC_SERVICE_OTLP_ENDPOINT: https://REPLACE_WITH_MANAGED_OTLP_ENDPOINT

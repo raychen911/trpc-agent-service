@@ -1,0 +1,48 @@
+# Compose override for real dependency-fault acceptance.
+#
+# Use this file only with scripts/real_runtime_gate.py --use-toxiproxy.  The
+# normal Compose stack deliberately connects directly to PostgreSQL and
+# Redis.  This override routes application roles through Toxiproxy; the
+# migration job remains on the direct PostgreSQL path so schema setup is not
+# dependent on an intentionally disabled proxy.
+
+services:
+  gateway:
+    environment:
+      TRPC_SERVICE_DATABASE_DSN: postgresql+asyncpg://${TRPC_RUNTIME_USER:-trpc_runtime}@toxiproxy:15432/${POSTGRES_DB:-trpc_service}
+      TRPC_SERVICE_REDIS_URL: redis://toxiproxy:16379/0
+  admin:
+    environment:
+      TRPC_SERVICE_DATABASE_DSN: postgresql+asyncpg://${TRPC_RUNTIME_USER:-trpc_runtime}@toxiproxy:15432/${POSTGRES_DB:-trpc_service}
+      TRPC_SERVICE_REDIS_URL: redis://toxiproxy:16379/0
+  worker:
+    environment:
+      TRPC_SERVICE_DATABASE_DSN: postgresql+asyncpg://${TRPC_RUNTIME_USER:-trpc_runtime}@toxiproxy:15432/${POSTGRES_DB:-trpc_service}
+      TRPC_SERVICE_WORKER_DATABASE_DSN: postgresql+asyncpg://${TRPC_WORKER_USER:-trpc_worker}@toxiproxy:15432/${POSTGRES_DB:-trpc_service}
+      TRPC_SERVICE_REDIS_URL: redis://toxiproxy:16379/0
+      TRPC_SERVICE_OFFLINE_AGENT_DELAY_SECONDS: 0.5
+  outbox-dispatcher:
+    environment:
+      TRPC_SERVICE_DATABASE_DSN: postgresql+asyncpg://${TRPC_RUNTIME_USER:-trpc_runtime}@toxiproxy:15432/${POSTGRES_DB:-trpc_service}
+      TRPC_SERVICE_WORKER_DATABASE_DSN: postgresql+asyncpg://${TRPC_WORKER_USER:-trpc_worker}@toxiproxy:15432/${POSTGRES_DB:-trpc_service}
+      TRPC_SERVICE_REDIS_URL: redis://toxiproxy:16379/0
+  channel-dispatcher:
+    environment:
+      TRPC_SERVICE_DATABASE_DSN: postgresql+asyncpg://${TRPC_RUNTIME_USER:-trpc_runtime}@toxiproxy:15432/${POSTGRES_DB:-trpc_service}
+      TRPC_SERVICE_WORKER_DATABASE_DSN: postgresql+asyncpg://${TRPC_WORKER_USER:-trpc_worker}@toxiproxy:15432/${POSTGRES_DB:-trpc_service}
+      TRPC_SERVICE_REDIS_URL: redis://toxiproxy:16379/0
+  post-turn-projector:
+    environment:
+      TRPC_SERVICE_DATABASE_DSN: postgresql+asyncpg://${TRPC_RUNTIME_USER:-trpc_runtime}@toxiproxy:15432/${POSTGRES_DB:-trpc_service}
+      TRPC_SERVICE_WORKER_DATABASE_DSN: postgresql+asyncpg://${TRPC_WORKER_USER:-trpc_worker}@toxiproxy:15432/${POSTGRES_DB:-trpc_service}
+      TRPC_SERVICE_REDIS_URL: redis://toxiproxy:16379/0
+  session-recovery:
+    environment:
+      TRPC_SERVICE_DATABASE_DSN: postgresql+asyncpg://${TRPC_RUNTIME_USER:-trpc_runtime}@toxiproxy:15432/${POSTGRES_DB:-trpc_service}
+      TRPC_SERVICE_WORKER_DATABASE_DSN: postgresql+asyncpg://${TRPC_WORKER_USER:-trpc_worker}@toxiproxy:15432/${POSTGRES_DB:-trpc_service}
+      TRPC_SERVICE_REDIS_URL: redis://toxiproxy:16379/0
+  wecom-connector:
+    environment:
+      TRPC_SERVICE_DATABASE_DSN: postgresql+asyncpg://${TRPC_RUNTIME_USER:-trpc_runtime}@toxiproxy:15432/${POSTGRES_DB:-trpc_service}
+      TRPC_SERVICE_WORKER_DATABASE_DSN: postgresql+asyncpg://${TRPC_WORKER_USER:-trpc_worker}@toxiproxy:15432/${POSTGRES_DB:-trpc_service}
+      TRPC_SERVICE_REDIS_URL: redis://toxiproxy:16379/0

@@ -1,0 +1,78 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trpc-gateway
+spec:
+  replicas: 4
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trpc-worker
+spec:
+  replicas: 4
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trpc-outbox-dispatcher
+spec:
+  replicas: 1
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trpc-session-recovery
+spec:
+  replicas: 1
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trpc-admin
+spec:
+  replicas: 0
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trpc-artifact-gc
+spec:
+  replicas: 0
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trpc-channel-dispatcher
+spec:
+  replicas: 0
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trpc-post-turn-projector
+spec:
+  replicas: 0
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trpc-wecom-connector
+spec:
+  replicas: 0
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: trpc-gateway
+spec:
+  minReplicas: 4
+  maxReplicas: 4
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: trpc-worker
+spec:
+  minReplicas: 4
+  maxReplicas: 4

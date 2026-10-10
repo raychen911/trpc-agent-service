@@ -1,0 +1,186 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: otel-collector
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: otel-collector
+        app.kubernetes.io/component: telemetry
+        app.kubernetes.io/part-of: trpc-agent-service
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: otel-collector
+          image: docker.io/otel/opentelemetry-collector-contrib@sha256:e0f565815b2b8e78eb9fdbb80f6190c921ab323aaa8ccceab3255c6d4225f4af
+          imagePullPolicy: IfNotPresent
+          args: ["--config=/etc/otelcol-contrib/otel-collector.yaml"]
+          ports:
+            - name: otlp-grpc
+              containerPort: 4317
+            - name: otlp-http
+              containerPort: 4318
+            - name: prometheus
+              containerPort: 8889
+            - name: health
+              containerPort: 13133
+          readinessProbe:
+            httpGet:
+              path: /
+              port: health
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 6
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/otelcol-contrib/otel-collector.yaml
+              subPath: otel-collector.yaml
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: trpc-otel-collector-config
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: minio-bootstrap
+spec:
+  backoffLimit: 6
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: minio-bootstrap
+        app.kubernetes.io/component: object-store-bootstrap
+        app.kubernetes.io/part-of: trpc-agent-service
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: bootstrap
+          image: docker.io/minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: MC_CONFIG_DIR
+              value: /tmp/mc
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              root_user="$(cat /run/secrets/minio_root_user)"
+              root_password="$(cat /run/secrets/minio_root_password)"
+              application_user="$(cat /run/secrets/minio_application_user)"
+              application_password="$(cat /run/secrets/minio_application_password)"
+              until mc alias set local http://minio:9000 "$root_user" "$root_password"; do sleep 2; done
+              mc mb --ignore-existing local/trpc-artifacts
+              cat >/tmp/trpc-artifacts-policy.json <<'POLICY'
+              {
+                "Version": "2012-10-17",
+                "Statement": [
+                  {
+                    "Effect": "Allow",
+                    "Action": [
+                      "s3:GetBucketLocation",
+                      "s3:ListBucket",
+                      "s3:ListBucketMultipartUploads"
+                    ],
+                    "Resource": ["arn:aws:s3:::trpc-artifacts"]
+                  },
+                  {
+                    "Effect": "Allow",
+                    "Action": [
+                      "s3:GetObject",
+                      "s3:PutObject",
+                      "s3:DeleteObject",
+                      "s3:AbortMultipartUpload",
+                      "s3:ListMultipartUploadParts"
+                    ],
+                    "Resource": ["arn:aws:s3:::trpc-artifacts/*"]
+                  }
+                ]
+              }
+              POLICY
+              if ! mc admin policy info local trpc-artifacts-rw-v1 >/dev/null 2>&1; then
+                mc admin policy create local trpc-artifacts-rw-v1 /tmp/trpc-artifacts-policy.json
+              fi
+              printf '%s\n%s\n' "$application_user" "$application_password" |
+                mc admin user add local
+              attached_policies="$(mc admin policy entities local --user "$application_user" --json)"
+              case "$attached_policies" in
+                *trpc-artifacts-rw-v1*) ;;
+                *) mc admin policy attach local trpc-artifacts-rw-v1 --user "$application_user" ;;
+              esac
+              rm -f /tmp/trpc-artifacts-policy.json
+              unset root_user root_password application_user application_password attached_policies
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          volumeMounts:
+            - name: infrastructure-secrets
+              mountPath: /run/secrets
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: infrastructure-secrets
+          secret:
+            secretName: trpc-infrastructure-secrets
+            defaultMode: 288
+            items:
+              - {key: minio_root_user, path: minio_root_user}
+              - {key: minio_root_password, path: minio_root_password}
+              - {key: minio_application_user, path: minio_application_user}
+              - {key: minio_application_password, path: minio_application_password}
+        - name: tmp
+          emptyDir: {}

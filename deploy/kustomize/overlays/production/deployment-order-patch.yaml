@@ -1,0 +1,71 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trpc-service-config
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trpc-postgres-bootstrap
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: trpc-service
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: minio
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: minio-bootstrap
+  annotations:
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+    argocd.argoproj.io/sync-wave: "-1"

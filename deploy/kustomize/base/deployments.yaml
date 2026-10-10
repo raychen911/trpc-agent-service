@@ -1,0 +1,880 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trpc-gateway
+  labels:
+    app.kubernetes.io/name: trpc-gateway
+    app.kubernetes.io/component: gateway
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: trpc-gateway
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: trpc-gateway
+        app.kubernetes.io/component: gateway
+    spec:
+      serviceAccountName: trpc-service
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: gateway
+          image: trpc-agent-service:latest
+          imagePullPolicy: IfNotPresent
+          command: ["trpc-service"]
+          args: ["serve", "--role", "gateway"]
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: trpc-service-config
+            - secretRef:
+                name: trpc-service-secrets
+          env:
+            - name: TRPC_SERVICE_ROLE
+              value: gateway
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["trpc-service", "drain", "--role", "gateway"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trpc-artifact-gc
+  labels:
+    app.kubernetes.io/name: trpc-artifact-gc
+    app.kubernetes.io/component: artifact-gc
+spec:
+  replicas: 1
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: trpc-artifact-gc
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: trpc-artifact-gc
+        app.kubernetes.io/component: artifact-gc
+    spec:
+      serviceAccountName: trpc-service
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: artifact-gc
+          image: trpc-agent-service:latest
+          imagePullPolicy: IfNotPresent
+          command: ["trpc-service"]
+          args: ["serve", "--role", "artifact-gc"]
+          envFrom:
+            - configMapRef:
+                name: trpc-service-config
+            - secretRef:
+                name: trpc-service-secrets
+            - secretRef:
+                name: trpc-worker-secrets
+          env:
+            - name: TRPC_SERVICE_ROLE
+              value: artifact-gc
+          readinessProbe:
+            exec:
+              command: ["python", "-m", "trpc_service.probe", "--role", "artifact-gc"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            exec:
+              command: ["python", "-m", "trpc_service.probe", "--role", "artifact-gc", "--liveness"]
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["trpc-service", "drain", "--role", "artifact-gc"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trpc-backlog-exporter
+  labels:
+    app.kubernetes.io/name: trpc-backlog-exporter
+    app.kubernetes.io/component: backlog-exporter
+spec:
+  replicas: 1
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: trpc-backlog-exporter
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: trpc-backlog-exporter
+        app.kubernetes.io/component: backlog-exporter
+    spec:
+      serviceAccountName: trpc-service
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: backlog-exporter
+          image: trpc-agent-service:latest
+          imagePullPolicy: IfNotPresent
+          command: ["python", "scripts/session_ready_backlog_exporter.py"]
+          ports:
+            - name: metrics
+              containerPort: 9100
+              protocol: TCP
+          env:
+            - name: TRPC_SERVICE_METRICS_DATABASE_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: trpc-metrics-secrets
+                  key: TRPC_SERVICE_METRICS_DATABASE_DSN
+            - name: TRPC_BACKLOG_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: metrics
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["python", "-c", "import os, signal; os.kill(1, signal.SIGTERM)"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trpc-session-recovery
+  labels:
+    app.kubernetes.io/name: trpc-session-recovery
+    app.kubernetes.io/component: session-recovery
+spec:
+  replicas: 1
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: trpc-session-recovery
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: trpc-session-recovery
+        app.kubernetes.io/component: session-recovery
+    spec:
+      serviceAccountName: trpc-service
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: session-recovery
+          image: trpc-agent-service:latest
+          imagePullPolicy: IfNotPresent
+          command: ["trpc-service"]
+          args: ["serve", "--role", "session-recovery"]
+          envFrom:
+            - configMapRef:
+                name: trpc-service-config
+            - secretRef:
+                name: trpc-worker-secrets
+          env:
+            - name: TRPC_SERVICE_ROLE
+              value: session-recovery
+          readinessProbe:
+            exec:
+              command: ["python", "-m", "trpc_service.probe", "--role", "session-recovery"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            exec:
+              command: ["python", "-m", "trpc_service.probe", "--role", "session-recovery", "--liveness"]
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["trpc-service", "drain", "--role", "session-recovery"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trpc-admin
+  labels:
+    app.kubernetes.io/name: trpc-admin
+    app.kubernetes.io/component: admin
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: trpc-admin
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: trpc-admin
+        app.kubernetes.io/component: admin
+    spec:
+      serviceAccountName: trpc-service
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: admin
+          image: trpc-agent-service:latest
+          imagePullPolicy: IfNotPresent
+          command: ["trpc-service"]
+          args: ["serve", "--role", "admin"]
+          ports:
+            - name: http
+              containerPort: 8081
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: trpc-service-config
+            - secretRef:
+                name: trpc-service-secrets
+          env:
+            - name: TRPC_SERVICE_ROLE
+              value: admin
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["trpc-service", "drain", "--role", "admin"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trpc-worker
+  labels:
+    app.kubernetes.io/name: trpc-worker
+    app.kubernetes.io/component: worker
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: trpc-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: trpc-worker
+        app.kubernetes.io/component: worker
+    spec:
+      serviceAccountName: trpc-service
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 90
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: worker
+          image: trpc-agent-service:latest
+          imagePullPolicy: IfNotPresent
+          command: ["trpc-service"]
+          args: ["serve", "--role", "worker"]
+          envFrom:
+            - configMapRef:
+                name: trpc-service-config
+            - secretRef:
+                name: trpc-service-secrets
+            - secretRef:
+                name: trpc-worker-secrets
+          env:
+            - name: TRPC_SERVICE_ROLE
+              value: worker
+          readinessProbe:
+            exec:
+              command: ["python", "-m", "trpc_service.probe", "--role", "worker"]
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 2
+          livenessProbe:
+            exec:
+              command: ["python", "-m", "trpc_service.probe", "--role", "worker", "--liveness"]
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["trpc-service", "drain", "--role", "worker"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: 2000m
+              memory: 2Gi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trpc-outbox-dispatcher
+  labels:
+    app.kubernetes.io/name: trpc-outbox-dispatcher
+    app.kubernetes.io/component: outbox-dispatcher
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: trpc-outbox-dispatcher
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: trpc-outbox-dispatcher
+        app.kubernetes.io/component: outbox-dispatcher
+    spec:
+      serviceAccountName: trpc-service
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: outbox-dispatcher
+          image: trpc-agent-service:latest
+          imagePullPolicy: IfNotPresent
+          command: ["trpc-service"]
+          args: ["serve", "--role", "outbox-dispatcher"]
+          envFrom:
+            - configMapRef:
+                name: trpc-service-config
+            - secretRef:
+                name: trpc-service-secrets
+            - secretRef:
+                name: trpc-worker-secrets
+          env:
+            - name: TRPC_SERVICE_ROLE
+              value: outbox-dispatcher
+          readinessProbe:
+            exec:
+              command: ["python", "-m", "trpc_service.probe", "--role", "outbox-dispatcher"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            exec:
+              command: ["python", "-m", "trpc_service.probe", "--role", "outbox-dispatcher", "--liveness"]
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["trpc-service", "drain", "--role", "outbox-dispatcher"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trpc-channel-dispatcher
+  labels:
+    app.kubernetes.io/name: trpc-channel-dispatcher
+    app.kubernetes.io/component: channel-dispatcher
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: trpc-channel-dispatcher
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: trpc-channel-dispatcher
+        app.kubernetes.io/component: channel-dispatcher
+    spec:
+      serviceAccountName: trpc-service
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: channel-dispatcher
+          image: trpc-agent-service:latest
+          imagePullPolicy: IfNotPresent
+          command: ["trpc-service"]
+          args: ["serve", "--role", "channel-dispatcher"]
+          envFrom:
+            - configMapRef:
+                name: trpc-service-config
+            - secretRef:
+                name: trpc-service-secrets
+            - secretRef:
+                name: trpc-worker-secrets
+          env:
+            - name: TRPC_SERVICE_ROLE
+              value: channel-dispatcher
+          readinessProbe:
+            exec:
+              command: ["python", "-m", "trpc_service.probe", "--role", "channel-dispatcher"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            exec:
+              command: ["python", "-m", "trpc_service.probe", "--role", "channel-dispatcher", "--liveness"]
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["trpc-service", "drain", "--role", "channel-dispatcher"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trpc-post-turn-projector
+  labels:
+    app.kubernetes.io/name: trpc-post-turn-projector
+    app.kubernetes.io/component: post-turn-projector
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: trpc-post-turn-projector
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: trpc-post-turn-projector
+        app.kubernetes.io/component: post-turn-projector
+    spec:
+      serviceAccountName: trpc-service
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: post-turn-projector
+          image: trpc-agent-service:latest
+          imagePullPolicy: IfNotPresent
+          command: ["trpc-service"]
+          args: ["serve", "--role", "post-turn-projector"]
+          envFrom:
+            - configMapRef:
+                name: trpc-service-config
+            - secretRef:
+                name: trpc-service-secrets
+            - secretRef:
+                name: trpc-worker-secrets
+          env:
+            - name: TRPC_SERVICE_ROLE
+              value: post-turn-projector
+          readinessProbe:
+            exec:
+              command: ["python", "-m", "trpc_service.probe", "--role", "post-turn-projector"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            exec:
+              command: ["python", "-m", "trpc_service.probe", "--role", "post-turn-projector", "--liveness"]
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["trpc-service", "drain", "--role", "post-turn-projector"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trpc-wecom-connector
+  labels:
+    app.kubernetes.io/name: trpc-wecom-connector
+    app.kubernetes.io/component: wecom-connector
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: trpc-wecom-connector
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: trpc-wecom-connector
+        app.kubernetes.io/component: wecom-connector
+    spec:
+      serviceAccountName: trpc-service
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: wecom-connector
+          image: trpc-agent-service:latest
+          imagePullPolicy: IfNotPresent
+          command: ["trpc-service"]
+          args: ["serve", "--role", "wecom-connector"]
+          envFrom:
+            - configMapRef:
+                name: trpc-service-config
+            - secretRef:
+                name: trpc-service-secrets
+            - secretRef:
+                name: trpc-worker-secrets
+          env:
+            - name: TRPC_SERVICE_ROLE
+              value: wecom-connector
+          readinessProbe:
+            exec:
+              command: ["python", "-m", "trpc_service.probe", "--role", "wecom-connector"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            exec:
+              command: ["python", "-m", "trpc_service.probe", "--role", "wecom-connector", "--liveness"]
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["trpc-service", "drain", "--role", "wecom-connector"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

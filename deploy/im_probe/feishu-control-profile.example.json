@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "channel": "feishu",
+  "account_id_sha256": "<sha256-of-exact-feishu-app-id>",
+  "observer_socket": "/run/trpc-im-probe/feishu-observer.sock",
+  "openapi_witness_socket": "/run/trpc-im-probe/feishu-openapi-witness.sock",
+  "observer_profile_sha256": "<sha256-of-expected-feishu-callback-shape>",
+  "broker_actions": {
+    "round_trip": "feishu_round_trip",
+    "idempotency": "feishu_idempotency",
+    "media": "feishu_media",
+    "reconnect": "feishu_reconnect",
+    "rate_limit_retry_after": "feishu_rate_limit_retry_after",
+    "credential_rotation": "feishu_credential_rotation",
+    "prolonged_outage": "feishu_prolonged_outage",
+    "ambiguous": "feishu_ambiguous"
+  }
+}

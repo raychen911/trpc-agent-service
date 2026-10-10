@@ -1,0 +1,47 @@
+[Unit]
+Description=Independent tRPC Feishu/WeCom acceptance probe
+After=network-online.target trpc-im-control-broker.service trpc-im-feishu-callback-observer.service trpc-im-feishu-openapi-witness.service
+Wants=network-online.target
+Requires=trpc-im-control-broker.service trpc-im-feishu-callback-observer.service trpc-im-feishu-openapi-witness.service
+
+[Service]
+Type=simple
+User=trpcagent
+Group=trpcagent
+WorkingDirectory=/opt/trpc-im-probe/current
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/etc/trpc-im-probe/im-probe.env
+ExecStartPre=/opt/trpc-im-probe/current/.venv/bin/python /opt/trpc-im-probe/current/deploy/im_probe/server.py --check
+ExecStart=/opt/trpc-im-probe/current/.venv/bin/python /opt/trpc-im-probe/current/deploy/im_probe/server.py
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+KillSignal=SIGTERM
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectClock=true
+ProtectHostname=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectKernelLogs=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+LockPersonality=true
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadOnlyPaths=/opt/trpc-im-probe/current /etc/trpc-im-probe /usr/local/libexec
+UMask=0077
+TasksMax=128
+MemoryHigh=256M
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target

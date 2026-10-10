@@ -1,0 +1,114 @@
+# Install as a separate HTTPS virtual host (or merge the location blocks into
+# a private server block). Keep the probe on a private/VPN address or restrict
+# it to the release-gate egress CIDR. The Python process itself listens only
+# on loopback and does not terminate TLS.
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name probe.agent.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/probe.agent.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/probe.agent.example.com/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    client_max_body_size 1m;
+
+    location = /probe {
+        limit_except POST { deny all; }
+        allow <release-gate-egress-cidr>;
+        deny all;
+        client_max_body_size 64k;
+        proxy_pass http://127.0.0.1:8750/probe;
+        proxy_http_version 1.1;
+        proxy_connect_timeout 3s;
+        proxy_send_timeout 10s;
+        proxy_read_timeout 240s;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        access_log off;
+    }
+
+    location = /health/live {
+        allow <release-gate-egress-cidr>;
+        deny all;
+        proxy_pass http://127.0.0.1:8750/health/live;
+        proxy_set_header Host $host;
+        access_log off;
+    }
+
+    location = /health/ready {
+        allow <release-gate-egress-cidr>;
+        deny all;
+        proxy_pass http://127.0.0.1:8750/health/ready;
+        proxy_set_header Host $host;
+        access_log off;
+    }
+
+    # Online acceptance only. The Channel Dispatcher is pointed at
+    # https://probe.agent.example.com/feishu-openapi for the bounded run, so nginx
+    # removes that prefix before the loopback witness forwards the allowlisted
+    # /open-apis/auth and /open-apis/im paths to open.feishu.cn. Keep the
+    # cluster egress allowlist separate from the release-gate allowlist.
+    location ^~ /feishu-openapi/ {
+        limit_except POST { deny all; }
+        allow <channel-dispatcher-egress-cidr>;
+        deny all;
+        proxy_pass http://127.0.0.1:8752/;
+        proxy_http_version 1.1;
+        proxy_connect_timeout 3s;
+        proxy_send_timeout 20s;
+        proxy_read_timeout 20s;
+        proxy_set_header Host open.feishu.cn;
+        access_log off;
+    }
+
+    location / { return 404; }
+}
+
+# Add this server block (or merge its two locations into the existing Feishu
+# callback virtual host) when the independent callback observer is enabled.
+# The public callback proxy settings intentionally match the application
+# Gateway configuration; only the two `mirror` directives are additional.
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name <feishu-callback-host>;
+
+    ssl_certificate     /etc/letsencrypt/live/<feishu-callback-host>/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/<feishu-callback-host>/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    client_max_body_size 2m;
+
+    location ^~ /v1/channels/feishu/ {
+        limit_except POST { deny all; }
+        mirror /_trpc_feishu_callback_observer;
+        mirror_request_body on;
+        proxy_pass http://127.0.0.1:8740;
+        proxy_http_version 1.1;
+        proxy_connect_timeout 3s;
+        proxy_send_timeout 4s;
+        proxy_read_timeout 4s;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        access_log /www/wwwlogs/<feishu-callback-host>_callback.log trpc_callback;
+    }
+
+    location = /_trpc_feishu_callback_observer {
+        internal;
+        proxy_pass http://127.0.0.1:8751/mirror;
+        proxy_pass_request_body on;
+        proxy_http_version 1.1;
+        proxy_connect_timeout 100ms;
+        proxy_send_timeout 1s;
+        proxy_read_timeout 1s;
+        proxy_set_header X-Lark-Request-Timestamp $http_x_lark_request_timestamp;
+        proxy_set_header X-Lark-Request-Nonce $http_x_lark_request_nonce;
+        proxy_set_header X-Lark-Signature $http_x_lark_signature;
+        access_log off;
+    }
+
+    location / { return 404; }
+}

@@ -1,0 +1,147 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trpc-gateway
+spec:
+  template:
+    spec:
+      containers:
+        - name: gateway
+          lifecycle:
+            preStop:
+              exec:
+                command: ["trpc-service", "drain", "--role", "gateway"]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trpc-admin
+spec:
+  template:
+    spec:
+      containers:
+        - name: admin
+          lifecycle:
+            preStop:
+              exec:
+                command: ["trpc-service", "drain", "--role", "admin"]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trpc-session-recovery
+spec:
+  template:
+    spec:
+      containers:
+        - name: session-recovery
+          readinessProbe:
+            exec:
+              command: ["python", "-m", "trpc_service.probe", "--role", "session-recovery"]
+          livenessProbe:
+            exec:
+              command: ["python", "-m", "trpc_service.probe", "--role", "session-recovery", "--liveness"]
+          lifecycle:
+            preStop:
+              exec:
+                command: ["trpc-service", "drain", "--role", "session-recovery"]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trpc-worker
+spec:
+  template:
+    spec:
+      containers:
+        - name: worker
+          readinessProbe:
+            exec:
+              command: ["python", "-m", "trpc_service.probe", "--role", "worker"]
+          livenessProbe:
+            exec:
+              command: ["python", "-m", "trpc_service.probe", "--role", "worker", "--liveness"]
+          lifecycle:
+            preStop:
+              exec:
+                command: ["trpc-service", "drain", "--role", "worker"]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trpc-outbox-dispatcher
+spec:
+  template:
+    spec:
+      containers:
+        - name: outbox-dispatcher
+          readinessProbe:
+            exec:
+              command: ["python", "-m", "trpc_service.probe", "--role", "outbox-dispatcher"]
+          livenessProbe:
+            exec:
+              command: ["python", "-m", "trpc_service.probe", "--role", "outbox-dispatcher", "--liveness"]
+          lifecycle:
+            preStop:
+              exec:
+                command: ["trpc-service", "drain", "--role", "outbox-dispatcher"]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trpc-channel-dispatcher
+spec:
+  template:
+    spec:
+      containers:
+        - name: channel-dispatcher
+          readinessProbe:
+            exec:
+              command: ["python", "-m", "trpc_service.probe", "--role", "channel-dispatcher"]
+          livenessProbe:
+            exec:
+              command: ["python", "-m", "trpc_service.probe", "--role", "channel-dispatcher", "--liveness"]
+          lifecycle:
+            preStop:
+              exec:
+                command: ["trpc-service", "drain", "--role", "channel-dispatcher"]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trpc-post-turn-projector
+spec:
+  template:
+    spec:
+      containers:
+        - name: post-turn-projector
+          readinessProbe:
+            exec:
+              command: ["python", "-m", "trpc_service.probe", "--role", "post-turn-projector"]
+          livenessProbe:
+            exec:
+              command: ["python", "-m", "trpc_service.probe", "--role", "post-turn-projector", "--liveness"]
+          lifecycle:
+            preStop:
+              exec:
+                command: ["trpc-service", "drain", "--role", "post-turn-projector"]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trpc-wecom-connector
+spec:
+  template:
+    spec:
+      containers:
+        - name: wecom-connector
+          readinessProbe:
+            exec:
+              command: ["python", "-m", "trpc_service.probe", "--role", "wecom-connector"]
+          livenessProbe:
+            exec:
+              command: ["python", "-m", "trpc_service.probe", "--role", "wecom-connector", "--liveness"]
+          lifecycle:
+            preStop:
+              exec:
+                command: ["trpc-service", "drain", "--role", "wecom-connector"]

@@ -1,0 +1,167 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.13"
+          enable-cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: uv lock --check
+      - run: uv sync --extra dev --locked
+      - run: uv run ruff format --check .
+      - run: uv run ruff check .
+      - run: uv run mypy trpc_service scripts
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.13"
+          enable-cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: uv sync --extra dev --locked --python ${{ matrix.python }}
+      - name: prepare root-owned security-test temp directory
+        run: sudo install -d -m 0700 -o root -g root /root/trpc-ci-pytest
+      - name: unit tests
+        run: >-
+          sudo --preserve-env=PATH,UV_CACHE_DIR
+          env TMPDIR=/root/trpc-ci-pytest
+          uv run --python ${{ matrix.python }} pytest tests/unit
+          --cov=trpc_service --cov-branch
+          --cov-report=json:runs/multitenant/coverage.json
+      - run: >-
+          uv run --python ${{ matrix.python }} python scripts/check_coverage.py
+          runs/multitenant/coverage.json
+          --branch-minimum 88.0
+          --output runs/multitenant/coverage-gate.json
+      - run: uv run --python ${{ matrix.python }} trpc-service doctor --output runs/multitenant/sdk-upgrade.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sdk-gate-${{ matrix.python }}
+          path: runs/multitenant/*.json
+
+  production-mock:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.13"
+          enable-cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync --extra dev --locked
+      - run: uv run python scripts/mock_production_gate.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: production-mock
+          path: runs/multitenant/*-mock.json
+
+  deployment-static:
+    runs-on: ubuntu-latest
+    env:
+      POSTGRES_PASSWORD: ci-migration-password
+      MIGRATION_DATABASE_PASSWORD: ci-migration-role-password
+      RUNTIME_DATABASE_PASSWORD: ci-runtime-password
+      REDIS_PASSWORD: ci-redis-password
+      MINIO_ROOT_PASSWORD: ci-minio-password
+      SESSION_HMAC_KEY: ci-session-hmac-key-with-32-bytes
+      EMERGENCY_QUEUE_KEY: ci-emergency-key-exactly-32bytes
+      DEVELOPMENT_TOKEN: ci-development-token
+      MODEL_API_KEY: ci-model-key-not-used-for-network-calls
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose config --quiet
+      - uses: azure/setup-kubectl@v4
+      - run: kubectl kustomize deploy/kustomize/base >/tmp/base.yaml
+      - run: kubectl kustomize deploy/kustomize/overlays/production >/tmp/production.yaml
+      - run: docker run --rm -v /tmp:/manifests ghcr.io/yannh/kubeconform:v0.7.0 -strict -summary /manifests/base.yaml /manifests/production.yaml
+
+  supply-chain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.13"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync --extra dev --locked
+      - run: mkdir -p runs/multitenant
+      - run: uv export --locked --format requirements-txt --no-dev --no-emit-project --no-hashes --output-file runs/multitenant/audit-requirements.txt
+      - name: dependency audit
+        id: dependency-audit
+        shell: bash
+        run: |
+          set +e
+          uvx pip-audit -r runs/multitenant/audit-requirements.txt --no-deps --disable-pip --strict --format json --output runs/multitenant/dependency-audit.json
+          status=$?
+          printf '%s\n' "$status" > runs/multitenant/dependency-audit.exit
+          # Vulnerabilities are evaluated by supply_chain_gate so malformed or
+          # missing evidence cannot be confused with a CI step cancellation.
+          exit 0
+      - name: build immutable candidate
+        shell: bash
+        run: |
+          source_fingerprint=$(uv run python -c 'from pathlib import Path; from scripts.evidence_lineage import source_fingerprint; print(source_fingerprint(Path.cwd())["value"])')
+          test "${#source_fingerprint}" -eq 64
+          docker build \
+            --build-arg TRPC_SOURCE_FINGERPRINT="$source_fingerprint" \
+            --label io.trpc.agent-service.source-fingerprint="$source_fingerprint" \
+            -t trpc-agent-service:ci .
+      - uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: trpc-agent-service:ci
+          format: sarif
+          output: runs/multitenant/image-vulnerabilities.sarif.json
+          exit-code: "0"
+          severity: CRITICAL,HIGH
+          limit-severities-for-sarif: true
+      - uses: anchore/sbom-action@v0
+        with:
+          image: trpc-agent-service:ci
+          output-file: runs/multitenant/sbom.spdx.json
+      - name: supply-chain gate
+        shell: bash
+        run: |
+          dependency_status=pass
+          if [[ "$(cat runs/multitenant/dependency-audit.exit)" != "0" ]]; then dependency_status=fail; fi
+          uv run python scripts/supply_chain_gate.py \
+            --sbom runs/multitenant/sbom.spdx.json \
+            --vulnerabilities runs/multitenant \
+            --image trpc-agent-service:ci \
+            --dependency-audit runs/multitenant/dependency-audit.json \
+            --dependency-audit-status "$dependency_status" \
+            --dependency-audit-reason "pip-audit result is not passing" \
+            --output runs/multitenant/supply-chain.json \
+            --require-production
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sbom
+          path: runs/multitenant/*

@@ -1,0 +1,647 @@
+# Template only: render with scripts/render_runtime_support.py before applying.
+# The renderer replaces every placeholder node, image, and pull-Secret value.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: trpc-runtime-support
+  labels:
+    app.kubernetes.io/managed-by: trpc-runtime-acceptance
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: trpc-runtime-support
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: trpc-runtime-postgres
+  template:
+    metadata:
+      labels:
+        app: trpc-runtime-postgres
+    spec:
+      imagePullSecrets:
+        - name: replace-with-image-pull-secret
+      nodeSelector:
+        kubernetes.io/hostname: replace-with-support-data-node
+      containers:
+        - name: postgres
+          image: registry.invalid/template/pgvector@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: runtime-support-secrets
+                  key: postgres-admin-password
+          ports:
+            - name: postgres
+              containerPort: 5432
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres", "-d", "postgres"]
+            periodSeconds: 3
+            failureThreshold: 40
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1
+              memory: 1Gi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: trpc-runtime-support
+spec:
+  selector:
+    app: trpc-runtime-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: trpc-runtime-support
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: trpc-runtime-redis
+  template:
+    metadata:
+      labels:
+        app: trpc-runtime-redis
+    spec:
+      imagePullSecrets:
+        - name: replace-with-image-pull-secret
+      nodeSelector:
+        kubernetes.io/hostname: replace-with-support-data-node
+      containers:
+        - name: redis
+          image: registry.invalid/template/redis@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          args: ["--save", "", "--appendonly", "no"]
+          ports:
+            - name: redis
+              containerPort: 6379
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            periodSeconds: 3
+            failureThreshold: 40
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: trpc-runtime-support
+spec:
+  selector:
+    app: trpc-runtime-redis
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: postgres-bootstrap
+  namespace: trpc-runtime-support
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 300
+  template:
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: replace-with-image-pull-secret
+      nodeSelector:
+        kubernetes.io/hostname: replace-with-support-data-node
+      containers:
+        - name: bootstrap
+          image: registry.invalid/template/pgvector@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          env:
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: runtime-support-secrets
+                  key: postgres-admin-password
+            - name: RUNTIME_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: runtime-support-secrets
+                  key: runtime-password
+            - name: WORKER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: runtime-support-secrets
+                  key: worker-password
+            - name: MIGRATION_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: runtime-support-secrets
+                  key: migration-password
+            - name: METRICS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: runtime-support-secrets
+                  key: metrics-password
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              until pg_isready -h postgres -U postgres -d postgres; do sleep 2; done
+              psql -v ON_ERROR_STOP=1 -h postgres -U postgres -d postgres \
+                --set=runtime_password="$RUNTIME_PASSWORD" \
+                --set=worker_password="$WORKER_PASSWORD" \
+                --set=migration_password="$MIGRATION_PASSWORD" \
+                --set=metrics_password="$METRICS_PASSWORD" <<'SQL'
+              SELECT format('CREATE ROLE trpc_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS PASSWORD %L', :'runtime_password')
+              WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'trpc_runtime') \gexec
+              SELECT format('CREATE ROLE trpc_worker LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT BYPASSRLS PASSWORD %L', :'worker_password')
+              WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'trpc_worker') \gexec
+              SELECT format('CREATE ROLE trpc_migration LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS PASSWORD %L', :'migration_password')
+              WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'trpc_migration') \gexec
+              SELECT format('CREATE ROLE trpc_metrics LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS PASSWORD %L', :'metrics_password')
+              WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'trpc_metrics') \gexec
+              SELECT format('ALTER ROLE trpc_runtime PASSWORD %L', :'runtime_password') \gexec
+              SELECT format('ALTER ROLE trpc_worker PASSWORD %L', :'worker_password') \gexec
+              SELECT format('ALTER ROLE trpc_migration PASSWORD %L', :'migration_password') \gexec
+              SELECT format('ALTER ROLE trpc_metrics PASSWORD %L', :'metrics_password') \gexec
+              ALTER ROLE trpc_runtime NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+              ALTER ROLE trpc_worker NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT BYPASSRLS;
+              ALTER ROLE trpc_migration NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+              ALTER ROLE trpc_metrics NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+              SQL
+              if ! psql -h postgres -U postgres -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='trpc_service'" | grep -q 1; then
+                createdb -h postgres -U postgres -O trpc_migration trpc_service
+              fi
+              psql -v ON_ERROR_STOP=1 -h postgres -U postgres -d trpc_service <<'SQL'
+              CREATE EXTENSION IF NOT EXISTS vector;
+              GRANT CONNECT ON DATABASE trpc_service TO trpc_runtime, trpc_worker, trpc_migration, trpc_metrics;
+              GRANT USAGE ON SCHEMA public TO trpc_runtime, trpc_worker;
+              GRANT USAGE, CREATE ON SCHEMA public TO trpc_migration;
+              SQL
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: backlog-observer
+  namespace: trpc-runtime-support
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: trpc-runtime-backlog-observer
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: trpc-runtime-backlog-observer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: trpc-runtime-backlog-observer
+subjects:
+  - kind: ServiceAccount
+    name: backlog-observer
+    namespace: trpc-runtime-support
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backlog-metric-source
+  namespace: trpc-runtime-support
+data:
+  source.py: |
+    import http.server
+    import json
+    import ssl
+    import urllib.parse
+    import urllib.request
+
+    API = "https://kubernetes.default.svc"
+    TOKEN = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+    CA = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+    OWNER = "trpc.io/managed-by=trpc-kubernetes-runtime-gate"
+    LOAD = "trpc.io/hpa-gate=bounded-job-driver,trpc.io/hpa-phase=load"
+
+    def api(path):
+        with open(TOKEN, encoding="utf-8") as handle:
+            token = handle.read().strip()
+        request = urllib.request.Request(API + path)
+        request.add_header("Authorization", "Bearer " + token)
+        context = ssl.create_default_context(cafile=CA)
+        with urllib.request.urlopen(request, context=context, timeout=5) as response:
+            return json.load(response)
+
+    def snapshot():
+        namespaces = api("/api/v1/namespaces?labelSelector=" + urllib.parse.quote(OWNER, safe=""))
+        jobs = api("/apis/batch/v1/jobs?labelSelector=" + urllib.parse.quote(LOAD, safe=""))
+        active = {
+            item.get("metadata", {}).get("namespace")
+            for item in jobs.get("items", [])
+            if item.get("metadata", {}).get("namespace")
+        }
+        names = sorted(
+            item.get("metadata", {}).get("name")
+            for item in namespaces.get("items", [])
+            if item.get("metadata", {}).get("name")
+        )
+        lines = [
+            "# HELP trpc_session_ready_backlog Bounded acceptance backlog.",
+            "# TYPE trpc_session_ready_backlog gauge",
+        ]
+        for name in names:
+            value = 40 if name in active else 0
+            lines.append('trpc_session_ready_backlog{namespace=' + json.dumps(name) + '} ' + str(value))
+        return "\n".join(lines) + "\n"
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            try:
+                body = snapshot().encode()
+                self.send_response(200)
+            except Exception:
+                body = b"metric_source_error 1\n"
+                self.send_response(503)
+            self.send_header("Content-Type", "text/plain; version=0.0.4")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format, *args):
+            return
+
+    http.server.ThreadingHTTPServer(("0.0.0.0", 9100), Handler).serve_forever()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backlog-metric-source
+  namespace: trpc-runtime-support
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: trpc-backlog-metric-source
+  template:
+    metadata:
+      labels:
+        app: trpc-backlog-metric-source
+    spec:
+      serviceAccountName: backlog-observer
+      imagePullSecrets:
+        - name: replace-with-image-pull-secret
+      nodeSelector:
+        kubernetes.io/hostname: replace-with-support-data-node
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: source
+          image: registry.invalid/template/trpc-agent-service@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          command: ["python", "/opt/metric-source/source.py"]
+          ports:
+            - name: http
+              containerPort: 9100
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: http
+            periodSeconds: 3
+            failureThreshold: 40
+          resources:
+            requests:
+              cpu: 25m
+              memory: 48Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: source
+              mountPath: /opt/metric-source
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: source
+          configMap:
+            name: backlog-metric-source
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backlog-metric-source
+  namespace: trpc-runtime-support
+spec:
+  selector:
+    app: trpc-backlog-metric-source
+  ports:
+    - name: http
+      port: 9100
+      targetPort: http
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: trpc-runtime-support
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 5s
+      evaluation_interval: 5s
+    scrape_configs:
+      - job_name: trpc-runtime-backlog
+        static_configs:
+          - targets: ["backlog-metric-source:9100"]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: trpc-runtime-support
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: trpc-runtime-prometheus
+  template:
+    metadata:
+      labels:
+        app: trpc-runtime-prometheus
+    spec:
+      imagePullSecrets:
+        - name: replace-with-image-pull-secret
+      nodeSelector:
+        kubernetes.io/hostname: replace-with-support-data-node
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: prometheus
+          image: registry.invalid/template/prometheus@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.path=/prometheus
+            - --storage.tsdb.retention.time=1h
+          ports:
+            - name: http
+              containerPort: 9090
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+            periodSeconds: 3
+            failureThreshold: 40
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+              readOnly: true
+            - name: data
+              mountPath: /prometheus
+      volumes:
+        - name: config
+          configMap:
+            name: prometheus-config
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: trpc-runtime-support
+spec:
+  selector:
+    app: trpc-runtime-prometheus
+  ports:
+    - name: http
+      port: 9090
+      targetPort: http
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus-adapter
+  namespace: trpc-runtime-support
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: trpc-runtime-prometheus-adapter
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces", "pods", "services"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: trpc-runtime-prometheus-adapter
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: trpc-runtime-prometheus-adapter
+subjects:
+  - kind: ServiceAccount
+    name: prometheus-adapter
+    namespace: trpc-runtime-support
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: trpc-runtime-prometheus-adapter-auth-delegator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+  - kind: ServiceAccount
+    name: prometheus-adapter
+    namespace: trpc-runtime-support
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: trpc-runtime-prometheus-adapter-auth-reader
+  namespace: kube-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: extension-apiserver-authentication-reader
+subjects:
+  - kind: ServiceAccount
+    name: prometheus-adapter
+    namespace: trpc-runtime-support
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-adapter-config
+  namespace: trpc-runtime-support
+data:
+  config.yaml: |
+    rules: []
+    externalRules:
+      - seriesQuery: 'trpc_session_ready_backlog{namespace!=""}'
+        resources:
+          overrides:
+            namespace:
+              resource: namespace
+        name:
+          matches: '^trpc_session_ready_backlog$'
+          as: trpc_session_ready_backlog
+        metricsQuery: 'max(<<.Series>>{<<.LabelMatchers>>}) by (namespace)'
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus-adapter
+  namespace: trpc-runtime-support
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: trpc-runtime-prometheus-adapter
+  template:
+    metadata:
+      labels:
+        app: trpc-runtime-prometheus-adapter
+    spec:
+      serviceAccountName: prometheus-adapter
+      imagePullSecrets:
+        - name: replace-with-image-pull-secret
+      nodeSelector:
+        kubernetes.io/hostname: replace-with-support-data-node
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: adapter
+          image: registry.invalid/template/prometheus-adapter@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          args:
+            - --secure-port=6443
+            - --cert-dir=/tmp/cert
+            - --prometheus-url=http://prometheus:9090
+            - --metrics-relist-interval=5s
+            - --metrics-max-age=1m
+            - --config=/etc/adapter/config.yaml
+          ports:
+            - name: https
+              containerPort: 6443
+          readinessProbe:
+            httpGet:
+              scheme: HTTPS
+              path: /healthz
+              port: https
+            periodSeconds: 3
+            failureThreshold: 60
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 300m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/adapter
+              readOnly: true
+            - name: cert
+              mountPath: /tmp/cert
+      volumes:
+        - name: config
+          configMap:
+            name: prometheus-adapter-config
+        - name: cert
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus-adapter
+  namespace: trpc-runtime-support
+spec:
+  selector:
+    app: trpc-runtime-prometheus-adapter
+  ports:
+    - name: https
+      port: 443
+      targetPort: https
+---
+apiVersion: apiregistration.k8s.io/v1
+kind: APIService
+metadata:
+  name: v1beta1.external.metrics.k8s.io
+spec:
+  group: external.metrics.k8s.io
+  groupPriorityMinimum: 100
+  insecureSkipTLSVerify: true
+  service:
+    name: prometheus-adapter
+    namespace: trpc-runtime-support
+    port: 443
+  version: v1beta1
+  versionPriority: 100

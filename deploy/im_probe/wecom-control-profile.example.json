@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "channel": "wecom",
+  "tenant_id": "<exact-tenant-id>",
+  "binding_id": "<exact-wecom-binding-id>",
+  "account_id_sha256": "<sha256-of-exact-wecom-bot-id>",
+  "actions": {
+    "round_trip": "wecom_round_trip",
+    "idempotency": "wecom_idempotency",
+    "media": "wecom_media",
+    "reconnect": "wecom_reconnect",
+    "rate_limit_retry_after": "wecom_rate_limit_retry_after",
+    "credential_rotation": "wecom_credential_rotation",
+    "prolonged_outage": "wecom_prolonged_outage",
+    "ambiguous": "wecom_ambiguous"
+  }
+}

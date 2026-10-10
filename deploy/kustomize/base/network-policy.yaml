@@ -1,0 +1,187 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: trpc-default-deny
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: trpc-allow-runtime
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/part-of
+        operator: In
+        values:
+          - trpc-agent-service
+      - key: app.kubernetes.io/name
+        operator: NotIn
+        values:
+          - trpc-backlog-exporter
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - port: 8080
+          protocol: TCP
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: trpc-gateway
+      ports:
+        - port: 8080
+          protocol: TCP
+  egress:
+    - to:
+        - podSelector: {}
+      ports:
+        - port: 5432
+          protocol: TCP
+        - port: 6379
+          protocol: TCP
+        - port: 9000
+          protocol: TCP
+        - port: 4317
+          protocol: TCP
+        - port: 4318
+          protocol: TCP
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: database
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cache
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+      ports:
+        - port: 5432
+          protocol: TCP
+        - port: 6379
+          protocol: TCP
+        - port: 9000
+          protocol: TCP
+        - port: 4317
+          protocol: TCP
+        - port: 4318
+          protocol: TCP
+    # Permit managed private endpoints (the default production profile uses
+    # private DNS for PostgreSQL, Redis, S3-compatible storage and OTel).
+    - to:
+        - ipBlock:
+            cidr: 10.0.0.0/8
+        - ipBlock:
+            cidr: 172.16.0.0/12
+        - ipBlock:
+            cidr: 192.168.0.0/16
+      ports:
+        - port: 5432
+          protocol: TCP
+        - port: 6379
+          protocol: TCP
+        - port: 9000
+          protocol: TCP
+        - port: 4317
+          protocol: TCP
+        - port: 4318
+          protocol: TCP
+        - port: 443
+          protocol: TCP
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # External model/IM HTTPS egress is intentionally not opened by the base
+    # profile.  A production overlay must add a reviewed ipBlock/FQDN-aware
+    # policy for the exact providers it uses; otherwise the runtime remains
+    # fail-closed instead of granting arbitrary internet access.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: trpc-allow-backlog-exporter
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: trpc-backlog-exporter
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: trpc-runtime-support
+      ports:
+        - port: 9100
+          protocol: TCP
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: database
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: trpc-runtime-support
+      ports:
+        - port: 5432
+          protocol: TCP
+    # Managed PostgreSQL endpoints are represented by private address ranges
+    # in deployments where no database namespace is available.
+    - to:
+        - ipBlock:
+            cidr: 10.0.0.0/8
+        - ipBlock:
+            cidr: 172.16.0.0/12
+        - ipBlock:
+            cidr: 192.168.0.0/16
+      ports:
+        - port: 5432
+          protocol: TCP
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: trpc-allow-admin-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: trpc-admin
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - port: 8081
+          protocol: TCP

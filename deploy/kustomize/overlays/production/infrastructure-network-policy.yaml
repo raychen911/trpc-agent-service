@@ -1,0 +1,96 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: trpc-allow-auth-model-tool-https-egress
+spec:
+  # Portable role-scoped fallback. CNI-specific environment overlays should
+  # replace this IPv4-wide destination with reviewed OIDC/model/tool FQDNs.
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: [trpc-gateway, trpc-admin, trpc-worker]
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - {port: 443, protocol: TCP}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: trpc-allow-infrastructure-ingress
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: [postgres, redis, minio, otel-collector, prometheus]
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: trpc-agent-service
+      ports:
+        - {port: 5432, protocol: TCP}
+        - {port: 6379, protocol: TCP}
+        - {port: 9000, protocol: TCP}
+        - {port: 4317, protocol: TCP}
+        - {port: 4318, protocol: TCP}
+        - {port: 8889, protocol: TCP}
+        - {port: 9090, protocol: TCP}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: trpc-allow-infrastructure-egress
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: [minio-bootstrap, otel-collector, prometheus]
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: trpc-agent-service
+      ports:
+        - {port: 9000, protocol: TCP}
+        - {port: 8080, protocol: TCP}
+        - {port: 8081, protocol: TCP}
+        - {port: 8889, protocol: TCP}
+        - {port: 9100, protocol: TCP}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - {port: 53, protocol: UDP}
+        - {port: 53, protocol: TCP}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: trpc-allow-prometheus-scrape
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: [trpc-gateway, trpc-admin, trpc-backlog-exporter, otel-collector]
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - {port: 8080, protocol: TCP}
+        - {port: 8081, protocol: TCP}
+        - {port: 8889, protocol: TCP}
+        - {port: 9100, protocol: TCP}

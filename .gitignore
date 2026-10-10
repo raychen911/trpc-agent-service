@@ -1,8 +1,14 @@
 .idea
 .vscode
 .DS_Store
-*.lock
 *.log
+.env
+.env.*
+!.env.example
+*.env
+*.kubeconfig
+*.crt
+*.tar
 
 *.egg-info
 
@@ -14,10 +20,14 @@ venv*
 __pycache__
 
 .coverage
+.coverage*
 htmlcov
 cov.tmp
 coverage.xml
 .pytest_cache
+.mypy_cache
+.ruff_cache
+.cache
 
 node_modules
 package-lock.json
@@ -25,3 +35,33 @@ pyrightconfig.json
 
 # spec-workflow tool artifacts
 .spec-workflow
+
+# Generated verification artifacts. Keep only reusable acceptance wrappers;
+# reports, child evidence, local registries, kubeconfigs, coverage, and image
+# archives must never enter repository history.
+/runs/**
+!/runs/multitenant/
+!/runs/multitenant/run-final-fault-gate.ps1
+!/runs/multitenant/run-final-runtime-gates.ps1
+!/runs/multitenant/run-final-ack-performance.ps1
+!/runs/multitenant/run-current-candidate-session.ps1
+!/runs/multitenant/run-ack-backend-gate.py
+!/runs/multitenant/bind_published_candidate.py
+!/runs/multitenant/project_kubernetes_secrets.py
+!/runs/multitenant/fault-runtime-health.override.yml
+!/runs/multitenant/performance-health.override.yml
+!/runs/multitenant/runtime-delay-0_5.override.yml
+!/runs/multitenant/runtime-delay-3.override.yml
+!/runs/multitenant/ack-runtime-support.yaml
+!/runs/multitenant/ack-runtime-minio.yaml
+
+# Kind gate work directories are generated beside the repository root.
+/trpc-k8s-gate-*/
+
+# Operator-local runtime inputs are generated from reviewed examples.
+/deploy/runtime-gate.yaml
+/deploy/im-probe-trust.json
+
+# Local cluster credentials and code-understanding caches are workstation-only.
+/.kube/
+/.understand-anything/

@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "purpose": "Versioned findings from production-like deployment acceptance",
+  "findings": [
+    {
+      "id": "manual-image-digest-transcription",
+      "severity": "fatal",
+      "status": "fixed_pending_live_revalidation",
+      "observed": "A hand-copied upgrade digest failed immutable-reference validation.",
+      "prevention": "Load initial and upgrade references only from the release image binding."
+    },
+    {
+      "id": "private-registry-pull-secret",
+      "severity": "fatal",
+      "status": "fixed_pending_live_revalidation",
+      "observed": "ACK received HTTP 401 while pulling a private GHCR candidate.",
+      "prevention": "Validate and attach a namespace-scoped imagePullSecret to every runtime and HPA Job PodSpec."
+    },
+    {
+      "id": "acceptance-node-system-workload",
+      "severity": "fatal",
+      "status": "fixed_pending_live_revalidation",
+      "observed": "A CoreDNS ReplicaSet pod made the dedicated node unsafe to drain.",
+      "prevention": "Reject unrelated workloads, but permit a ready kube-system controller replica only when exactly one fresh matching PDB proves at least one disruption is currently allowed; recheck after cordon before drain."
+    },
+    {
+      "id": "windows-excluded-host-port",
+      "severity": "fatal",
+      "status": "fixed_pending_live_revalidation",
+      "observed": "A fixed Redis host port was inside a Windows excluded range.",
+      "prevention": "Validate all explicit host ports and excluded ranges before Compose startup."
+    },
+    {
+      "id": "contract-failure-diagnostics",
+      "severity": "high",
+      "status": "fixed",
+      "observed": "A 16/17 contract result did not retain the failing testcase name.",
+      "prevention": "Persist secret-safe testcase identifiers in immutable per-run diagnostics."
+    },
+    {
+      "id": "acceptance-node-failover-capacity",
+      "severity": "fatal",
+      "status": "pending_live_revalidation",
+      "observed": "Only the drain target initially carried the workload selector, leaving no schedulable failover while it was cordoned.",
+      "prevention": "Require at least two schedulable workload-selector nodes while keeping the explicitly named drain target free of unrelated non-DaemonSet workloads."
+    },
+    {
+      "id": "production-endpoint-and-replica-binding",
+      "severity": "high",
+      "status": "versioned_configuration",
+      "observed": "Managed endpoints and replica capacity must not be edited during the live gate.",
+      "prevention": "Keep non-secret runtime settings and replica counts in versioned production Kustomize patches referenced by the unified gate configuration; keep credentials only in the external Secret manifest."
+    },
+    {
+      "id": "configuration-preflight-aggregation",
+      "severity": "fatal",
+      "status": "fixed_pending_live_revalidation",
+      "observed": "The deployment preflight could stop after a binding or file error and hide independent Secret, kubeconfig, driver, or host-port failures.",
+      "prevention": "Evaluate every local prerequisite independently, including release binding, Secret metadata, repository-bound HPA driver, kubeconfig identity, and all configured host ports, then reject before any cluster mutation."
+    },
+    {
+      "id": "registry-pull-endpoint-and-digest-binding",
+      "severity": "fatal",
+      "status": "fixed_pending_live_revalidation",
+      "observed": "A canonical registry reference could be published successfully while a cold ACK node pull timed out.",
+      "prevention": "Keep canonical initial/upgrade references in the release binding, optionally rewrite only their registry host from the unified config, preserve repository paths and digests, and verify pull-host manifests before any cluster mutation."
+    }
+  ]
+}

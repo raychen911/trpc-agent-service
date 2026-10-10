@@ -1,0 +1,4 @@
+services:
+  worker:
+    environment:
+      TRPC_SERVICE_OFFLINE_AGENT_DELAY_SECONDS: "0.5"

@@ -1,0 +1,23 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - rbac.yaml
+  - config.yaml
+  - deployments.yaml
+  - services.yaml
+  - disruption.yaml
+  - network-policy.yaml
+  - autoscaling.yaml
+  - migration-job.yaml
+
+patches:
+  - path: ha-patch.yaml
+  - path: lifecycle-probe-patch.yaml
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: trpc-agent-service
+      app.kubernetes.io/managed-by: kustomize
+    includeSelectors: true
+    includeTemplates: true

@@ -1,0 +1,130 @@
+# Dedicated, bounded topology for the real 100-callback/s + 200-turn gate.
+#
+# This file is intentionally opt-in.  Always supply a unique performance
+# Compose project; an unset project value makes Compose fail before any
+# container is created.  The offline-agent delay is fixed below so operators
+# cannot select a shorter delay and mistake a partial overlap for the gate.
+# Use only with a synthetic tenant/binding whose immutable config revision has
+# model.provider=offline and model=deterministic.
+name: ${TRPC_PERF_COMPOSE_PROJECT:?set to a unique trpc-perf-<run-id> project}
+
+services:
+  # Only the synthetic Feishu HTTP ingress is enabled.  It is bound to a
+  # caller-selected loopback port and the candidate image; no channel
+  # dispatcher or outbound connector is part of this topology.
+  gateway:
+    image: ${TRPC_PERF_IMAGE:?set to the candidate image built with TRPC_SOURCE_FINGERPRINT}
+    ports: !override
+      - "127.0.0.1:${TRPC_PERF_GATEWAY_PORT:?set to an unused local performance gateway port}:8080"
+    environment:
+      TRPC_SERVICE_ENVIRONMENT: test
+      TRPC_SERVICE_CAPTURE_CONTENT: "false"
+      TRPC_SERVICE_OTLP_ENDPOINT: ""
+      TRPC_SERVICE_PROMETHEUS_ENABLED: "false"
+      TRPC_SERVICE_TENANT_SECRET_ROOT: /run/secrets
+      TRPC_SERVICE_TENANT_SECRET_ENV_NAMES: '["TRPC_PERF_FIXTURE_UNUSED_APP_SECRET","TRPC_PERF_FIXTURE_UNUSED_VERIFICATION_TOKEN","TRPC_PERF_FIXTURE_UNUSED_ENCRYPT_KEY"]'
+      # Pre-open enough PostgreSQL connections for the 100 callback/s gate;
+      # 24 is below the 32-request client cap and leaves a bounded global
+      # connection budget for four Workers, the dispatcher, and gate probes.
+      TRPC_SERVICE_DATABASE_POOL_MIN_SIZE: "20"
+      TRPC_SERVICE_DATABASE_POOL_MAX_SIZE: "24"
+      # The fixture stores env:// references only.  Values are supplied by
+      # the invoking shell and are deliberately not committed here.
+      TRPC_PERF_FIXTURE_UNUSED_APP_SECRET: ${TRPC_PERF_FIXTURE_UNUSED_APP_SECRET:?set a random synthetic fixture app secret}
+      TRPC_PERF_FIXTURE_UNUSED_VERIFICATION_TOKEN: ${TRPC_PERF_FIXTURE_UNUSED_VERIFICATION_TOKEN:?set a random synthetic fixture verification token}
+      TRPC_PERF_FIXTURE_UNUSED_ENCRYPT_KEY: ${TRPC_PERF_FIXTURE_UNUSED_ENCRYPT_KEY:?set a random synthetic fixture encrypt key}
+  admin:
+    profiles: [performance-disabled]
+  channel-dispatcher:
+    profiles: [performance-disabled]
+  post-turn-projector:
+    profiles: [performance-disabled]
+  wecom-connector:
+    profiles: [performance-disabled]
+  otel-collector:
+    profiles: [performance-disabled]
+  prometheus:
+    profiles: [performance-disabled]
+  jaeger:
+    profiles: [performance-disabled]
+  toxiproxy:
+    profiles: [performance-disabled]
+
+  migrate:
+    # The gate must run the exact image whose source fingerprint is recorded
+    # in the acceptance report. There is deliberately no development-image
+    # fallback here.
+    image: ${TRPC_PERF_IMAGE:?set to the candidate image built with TRPC_SOURCE_FINGERPRINT}
+    environment:
+      TRPC_SERVICE_ENVIRONMENT: test
+      TRPC_SERVICE_OTLP_ENDPOINT: ""
+
+  minio-init:
+    # Required only to make the existing artifact profile usable; it exits
+    # after creating the private bucket and never handles test traffic.
+    profiles: []
+
+  outbox-dispatcher:
+    image: ${TRPC_PERF_IMAGE:?set to the candidate image built with TRPC_SOURCE_FINGERPRINT}
+    environment:
+      TRPC_SERVICE_ENVIRONMENT: test
+      TRPC_SERVICE_OTLP_ENDPOINT: ""
+      TRPC_SERVICE_CAPTURE_CONTENT: "false"
+      TRPC_SERVICE_DATABASE_POOL_MIN_SIZE: "2"
+      TRPC_SERVICE_DATABASE_POOL_MAX_SIZE: "4"
+
+    deploy:
+      # One dispatcher is sufficient for this bounded acceptance topology;
+      # scale is explicit at `docker compose up` call sites.
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+        reservations:
+          cpus: "0.1"
+          memory: 128M
+
+  session-recovery:
+    image: ${TRPC_PERF_IMAGE:?set to the candidate image built with TRPC_SOURCE_FINGERPRINT}
+    environment:
+      TRPC_SERVICE_ENVIRONMENT: test
+      TRPC_SERVICE_OTLP_ENDPOINT: ""
+      TRPC_SERVICE_CAPTURE_CONTENT: "false"
+      TRPC_SERVICE_DATABASE_POOL_MIN_SIZE: "1"
+      TRPC_SERVICE_DATABASE_POOL_MAX_SIZE: "2"
+      TRPC_SERVICE_RECOVERY_BATCH_SIZE: "25"
+      TRPC_SERVICE_RECOVERY_POLL_SECONDS: "1"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 256M
+        reservations:
+          cpus: "0.05"
+          memory: 64M
+
+  worker:
+    image: ${TRPC_PERF_IMAGE:?set to the candidate image built with TRPC_SOURCE_FINGERPRINT}
+    # A killed worker must stay down so takeover/fencing evidence is about a
+    # real process loss, not an automatic Compose restart.
+    restart: "no"
+    deploy:
+      # The real gate supplies --scale worker=4 explicitly.
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+    environment:
+      TRPC_SERVICE_ENVIRONMENT: test
+      TRPC_SERVICE_CAPTURE_CONTENT: "false"
+      TRPC_SERVICE_ONLINE_TESTS_ENABLED: "false"
+      TRPC_SERVICE_OTLP_ENDPOINT: ""
+      TRPC_SERVICE_TENANT_SECRET_ROOT: /run/secrets
+      TRPC_SERVICE_TENANT_SECRET_ENV_NAMES: '["TRPC_PERF_FIXTURE_UNUSED_APP_SECRET","TRPC_PERF_FIXTURE_UNUSED_VERIFICATION_TOKEN","TRPC_PERF_FIXTURE_UNUSED_ENCRYPT_KEY"]'
+      TRPC_SERVICE_WORKER_CONCURRENCY: "50"
+      TRPC_SERVICE_DATABASE_POOL_MIN_SIZE: "2"
+      TRPC_SERVICE_DATABASE_POOL_MAX_SIZE: "8"
+      TRPC_SERVICE_OFFLINE_AGENT_DELAY_SECONDS: "3.0"

@@ -1,0 +1,165 @@
+# Safety envelope for every real acceptance Compose stack.
+#
+# This file is intentionally opt-in.  Keep the ordinary docker-compose.yml
+# defaults unchanged for development and production-like local operation; all
+# acceptance commands must add this file after the base Compose file (and any
+# scenario-specific override).  In particular, restart=no prevents Docker
+# Desktop from reviving a killed acceptance process after a host restart.
+
+x-acceptance-defaults: &acceptance-defaults
+  restart: "no"
+  pids_limit: 256
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  migrate:
+    <<: *acceptance-defaults
+    pids_limit: 128
+    deploy:
+      resources:
+        limits:
+          pids: 128
+          cpus: "0.50"
+          memory: 512M
+  gateway:
+    <<: *acceptance-defaults
+    deploy:
+      resources:
+        limits:
+          pids: 256
+          cpus: "2.00"
+          memory: 768M
+  admin:
+    <<: *acceptance-defaults
+    deploy:
+      resources:
+        limits:
+          pids: 256
+          cpus: "0.50"
+          memory: 512M
+  worker:
+    <<: *acceptance-defaults
+    deploy:
+      resources:
+        limits:
+          pids: 256
+          cpus: "1.00"
+          memory: 1G
+  outbox-dispatcher:
+    <<: *acceptance-defaults
+    deploy:
+      resources:
+        limits:
+          pids: 256
+          cpus: "0.50"
+          memory: 512M
+  channel-dispatcher:
+    <<: *acceptance-defaults
+    deploy:
+      resources:
+        limits:
+          pids: 256
+          cpus: "0.50"
+          memory: 512M
+  post-turn-projector:
+    <<: *acceptance-defaults
+    deploy:
+      resources:
+        limits:
+          pids: 256
+          cpus: "0.50"
+          memory: 512M
+  wecom-connector:
+    <<: *acceptance-defaults
+    deploy:
+      resources:
+        limits:
+          pids: 256
+          cpus: "0.50"
+          memory: 512M
+  session-recovery:
+    <<: *acceptance-defaults
+    deploy:
+      resources:
+        limits:
+          pids: 256
+          cpus: "0.25"
+          memory: 256M
+  artifact-gc:
+    <<: *acceptance-defaults
+    deploy:
+      resources:
+        limits:
+          pids: 256
+          cpus: "0.25"
+          memory: 256M
+  postgres:
+    <<: *acceptance-defaults
+    deploy:
+      resources:
+        limits:
+          pids: 256
+          cpus: "4.00"
+          memory: 1G
+  redis:
+    <<: *acceptance-defaults
+    deploy:
+      resources:
+        limits:
+          pids: 256
+          cpus: "0.50"
+          memory: 512M
+  minio:
+    <<: *acceptance-defaults
+    deploy:
+      resources:
+        limits:
+          pids: 256
+          cpus: "1.00"
+          memory: 1G
+  minio-init:
+    <<: *acceptance-defaults
+    pids_limit: 128
+    deploy:
+      resources:
+        limits:
+          pids: 128
+          cpus: "0.25"
+          memory: 256M
+  otel-collector:
+    <<: *acceptance-defaults
+    deploy:
+      resources:
+        limits:
+          pids: 256
+          cpus: "0.50"
+          memory: 512M
+  prometheus:
+    <<: *acceptance-defaults
+    deploy:
+      resources:
+        limits:
+          pids: 256
+          cpus: "0.50"
+          memory: 768M
+  jaeger:
+    <<: *acceptance-defaults
+    deploy:
+      resources:
+        limits:
+          pids: 256
+          cpus: "0.50"
+          memory: 768M
+  toxiproxy:
+    <<: *acceptance-defaults
+    pids_limit: 128
+    deploy:
+      resources:
+        limits:
+          pids: 128
+          cpus: "0.25"
+          memory: 256M

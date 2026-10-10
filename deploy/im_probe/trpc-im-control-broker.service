@@ -1,0 +1,49 @@
+[Unit]
+Description=Independent tRPC IM control broker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=trpcimbroker
+Group=trpcagent
+WorkingDirectory=/opt/trpc-im-probe/current
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+Environment=TRPC_IM_CONTROL_BROKER_CONFIG_FILE=/etc/trpc-im-probe/control-broker.json
+ExecStartPre=/opt/trpc-im-probe/current/.venv/bin/python /opt/trpc-im-probe/current/deploy/im_probe/control_broker.py --check
+ExecStart=/opt/trpc-im-probe/current/.venv/bin/python /opt/trpc-im-probe/current/deploy/im_probe/control_broker.py
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+KillSignal=SIGTERM
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectClock=true
+ProtectHostname=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectKernelLogs=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+LockPersonality=true
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RuntimeDirectory=trpc-im-probe
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=yes
+ReadOnlyPaths=/opt/trpc-im-probe/current /etc/trpc-im-probe /usr/local/libexec
+UMask=0077
+TasksMax=64
+MemoryHigh=128M
+MemoryMax=256M
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,516 @@
+name: trpc-agent-service
+
+x-core-depends: &core-depends
+  migrate:
+    condition: service_completed_successfully
+  redis:
+    condition: service_healthy
+  minio:
+    condition: service_healthy
+  minio-init:
+    condition: service_completed_successfully
+
+x-app: &app
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: ${TRPC_SERVICE_IMAGE:-trpc-agent-service:dev}
+  init: true
+  restart: unless-stopped
+  stop_grace_period: 60s
+  environment: &app-environment
+    TRPC_SERVICE_ENVIRONMENT: ${TRPC_SERVICE_ENVIRONMENT:-development}
+    TRPC_SERVICE_LOG_FORMAT: ${TRPC_SERVICE_LOG_FORMAT:-json}
+    TRPC_SERVICE_LOG_LEVEL: ${TRPC_SERVICE_LOG_LEVEL:-INFO}
+    TRPC_SERVICE_DATABASE_HOST: postgres
+    TRPC_SERVICE_DATABASE_PORT: 5432
+    TRPC_SERVICE_DATABASE_NAME: ${POSTGRES_DB:-trpc_service}
+    TRPC_SERVICE_DATABASE_USER: ${TRPC_RUNTIME_USER:-trpc_runtime}
+    TRPC_SERVICE_DATABASE_POOL_MIN_SIZE: ${TRPC_SERVICE_DATABASE_POOL_MIN_SIZE:-2}
+    TRPC_SERVICE_DATABASE_POOL_MAX_SIZE: ${TRPC_SERVICE_DATABASE_POOL_MAX_SIZE:-20}
+    TRPC_SERVICE_DATABASE_PASSWORD_REF: file:///run/secrets/runtime_database_password
+    TRPC_SERVICE_DATABASE_DSN: postgresql+asyncpg://${TRPC_RUNTIME_USER:-trpc_runtime}@postgres:5432/${POSTGRES_DB:-trpc_service}
+    TRPC_SERVICE_REDIS_URL: redis://redis:6379/0
+    TRPC_SERVICE_SCHEDULER_VERSION: ${TRPC_SERVICE_SCHEDULER_VERSION:-v2}
+    TRPC_SERVICE_REDIS_STREAM: ${TRPC_SERVICE_REDIS_STREAM:-trpc:session-ready:v2}
+    TRPC_SERVICE_REDIS_CONSUMER_GROUP: ${TRPC_SERVICE_REDIS_CONSUMER_GROUP:-trpc-session-ready-v2}
+    TRPC_SERVICE_REDIS_RECLAIM_AFTER_MS: ${TRPC_SERVICE_REDIS_RECLAIM_AFTER_MS:-60000}
+    TRPC_SERVICE_REDIS_PASSWORD_REF: file:///run/secrets/redis_password
+    TRPC_SERVICE_RUNTIME_STATE_DIR: ${TRPC_SERVICE_RUNTIME_STATE_DIR:-/tmp/trpc-agent-service}
+    TRPC_SERVICE_TENANT_SECRET_ROOT: ${TRPC_SERVICE_TENANT_SECRET_ROOT:-/run/secrets}
+    TRPC_SERVICE_TENANT_SECRET_ENV_NAMES: ${TRPC_SERVICE_TENANT_SECRET_ENV_NAMES:-[]}
+    TRPC_SERVICE_MODEL_ENDPOINT_HOSTS: ${TRPC_SERVICE_MODEL_ENDPOINT_HOSTS:-["api.openai.com"]}
+    TRPC_SERVICE_FEISHU_ALLOW_STALE_BINDING_CACHE: ${TRPC_SERVICE_FEISHU_ALLOW_STALE_BINDING_CACHE:-false}
+    TRPC_SERVICE_S3_ENDPOINT: http://minio:9000
+    TRPC_SERVICE_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-trpc-minio}
+    TRPC_SERVICE_S3_SECRET_KEY_REF: file:///run/secrets/minio_root_password
+    TRPC_SERVICE_S3_BUCKET: ${MINIO_BUCKET:-trpc-artifacts}
+    TRPC_SERVICE_OTLP_ENDPOINT: http://otel-collector:4317
+    TRPC_SERVICE_PROMETHEUS_ENABLED: "true"
+    TRPC_SERVICE_CAPTURE_CONTENT: ${TRPC_SERVICE_CAPTURE_CONTENT:-false}
+    TRPC_SERVICE_WORKER_CONCURRENCY: ${TRPC_SERVICE_WORKER_CONCURRENCY:-1}
+    TRPC_SERVICE_OFFLINE_AGENT_DELAY_SECONDS: ${TRPC_SERVICE_OFFLINE_AGENT_DELAY_SECONDS:-0}
+    TRPC_SERVICE_SESSION_HMAC_REF: file:///run/secrets/session_hmac_key
+    TRPC_SERVICE_EMERGENCY_QUEUE_KEY_REF: file:///run/secrets/emergency_queue_key
+    TRPC_SERVICE_EMERGENCY_QUEUE_KEY_VERSION: ${TRPC_SERVICE_EMERGENCY_QUEUE_KEY_VERSION:-v1}
+    TRPC_SERVICE_EMERGENCY_QUEUE_PREVIOUS_KEY_REFS: ${TRPC_SERVICE_EMERGENCY_QUEUE_PREVIOUS_KEY_REFS:-{}}
+    TRPC_SERVICE_DEVELOPMENT_TOKEN_REF: file:///run/secrets/development_token
+  secrets:
+    - runtime_database_password
+    - redis_password
+    - minio_root_password
+    - session_hmac_key
+    - emergency_queue_key
+    - development_token
+  depends_on: *core-depends
+
+x-worker-secrets: &worker-secrets
+  - runtime_database_password
+  - worker_database_password
+  - redis_password
+  - minio_root_password
+  - session_hmac_key
+  - emergency_queue_key
+  - development_token
+
+services:
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ${TRPC_SERVICE_IMAGE:-trpc-agent-service:dev}
+    command: ["migrate"]
+    restart: "no"
+    environment:
+      TRPC_SERVICE_ENVIRONMENT: development
+      TRPC_SERVICE_DATABASE_DSN: postgresql+asyncpg://${TRPC_MIGRATION_USER:-trpc_migration}@postgres:5432/${POSTGRES_DB:-trpc_service}
+      TRPC_SERVICE_DATABASE_PASSWORD_REF: file:///run/secrets/migration_database_password
+    secrets:
+      - migration_database_password
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  gateway:
+    <<: *app
+    command: ["serve", "--role", "gateway"]
+    environment:
+      <<: *app-environment
+      TRPC_SERVICE_ROLE: gateway
+    ports:
+      - "127.0.0.1:${GATEWAY_PORT:-8080}:8080"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:8080/health/ready', timeout=3)
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+  admin:
+    <<: *app
+    command: ["serve", "--role", "admin"]
+    environment:
+      <<: *app-environment
+      TRPC_SERVICE_ROLE: admin
+    ports:
+      - "127.0.0.1:${ADMIN_PORT:-8081}:8081"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:8081/health/ready', timeout=3)
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+  worker:
+    <<: *app
+    command: ["serve", "--role", "worker"]
+    environment:
+      <<: *app-environment
+      TRPC_SERVICE_ROLE: worker
+      TRPC_SERVICE_WORKER_DATABASE_DSN_REF: env://TRPC_SERVICE_WORKER_DATABASE_DSN
+      TRPC_SERVICE_WORKER_DATABASE_DSN: postgresql+asyncpg://${TRPC_WORKER_USER:-trpc_worker}@postgres:5432/${POSTGRES_DB:-trpc_service}
+      TRPC_SERVICE_WORKER_DATABASE_PASSWORD_REF: file:///run/secrets/worker_database_password
+    secrets:
+      - runtime_database_password
+      - worker_database_password
+      - redis_password
+      - minio_root_password
+      - session_hmac_key
+      - emergency_queue_key
+      - development_token
+      - model_api_key
+    healthcheck:
+      test: ["CMD", "python", "-m", "trpc_service.probe", "--role", "worker"]
+      interval: 10s
+      timeout: 10s
+      retries: 6
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+
+  outbox-dispatcher:
+    <<: *app
+    command: ["serve", "--role", "outbox-dispatcher"]
+    environment:
+      <<: *app-environment
+      TRPC_SERVICE_ROLE: outbox-dispatcher
+      TRPC_SERVICE_WORKER_DATABASE_DSN_REF: env://TRPC_SERVICE_WORKER_DATABASE_DSN
+      TRPC_SERVICE_WORKER_DATABASE_DSN: postgresql+asyncpg://${TRPC_WORKER_USER:-trpc_worker}@postgres:5432/${POSTGRES_DB:-trpc_service}
+      TRPC_SERVICE_WORKER_DATABASE_PASSWORD_REF: file:///run/secrets/worker_database_password
+    secrets: *worker-secrets
+    healthcheck:
+      test: ["CMD", "python", "-m", "trpc_service.probe", "--role", "outbox-dispatcher"]
+      interval: 10s
+      timeout: 10s
+      retries: 6
+      start_period: 20s
+
+  channel-dispatcher:
+    <<: *app
+    command: ["serve", "--role", "channel-dispatcher"]
+    environment:
+      <<: *app-environment
+      TRPC_SERVICE_ROLE: channel-dispatcher
+      TRPC_SERVICE_WORKER_DATABASE_DSN_REF: env://TRPC_SERVICE_WORKER_DATABASE_DSN
+      TRPC_SERVICE_WORKER_DATABASE_DSN: postgresql+asyncpg://${TRPC_WORKER_USER:-trpc_worker}@postgres:5432/${POSTGRES_DB:-trpc_service}
+      TRPC_SERVICE_WORKER_DATABASE_PASSWORD_REF: file:///run/secrets/worker_database_password
+      TRPC_SERVICE_ONLINE_TESTS_ENABLED: ${TRPC_SERVICE_ONLINE_TESTS_ENABLED:-false}
+      TRPC_SERVICE_FEISHU_SEND_API_ROOT: ${TRPC_SERVICE_FEISHU_SEND_API_ROOT:-https://open.feishu.cn}
+    secrets: *worker-secrets
+    healthcheck:
+      test: ["CMD", "python", "-m", "trpc_service.probe", "--role", "channel-dispatcher"]
+      interval: 10s
+      timeout: 10s
+      retries: 6
+      start_period: 20s
+
+  post-turn-projector:
+    <<: *app
+    command: ["serve", "--role", "post-turn-projector"]
+    environment:
+      <<: *app-environment
+      TRPC_SERVICE_ROLE: post-turn-projector
+      TRPC_SERVICE_WORKER_DATABASE_DSN_REF: env://TRPC_SERVICE_WORKER_DATABASE_DSN
+      TRPC_SERVICE_WORKER_DATABASE_DSN: postgresql+asyncpg://${TRPC_WORKER_USER:-trpc_worker}@postgres:5432/${POSTGRES_DB:-trpc_service}
+      TRPC_SERVICE_WORKER_DATABASE_PASSWORD_REF: file:///run/secrets/worker_database_password
+    secrets: *worker-secrets
+    healthcheck:
+      test: ["CMD", "python", "-m", "trpc_service.probe", "--role", "post-turn-projector"]
+      interval: 10s
+      timeout: 10s
+      retries: 6
+      start_period: 20s
+
+  wecom-connector:
+    <<: *app
+    command: ["serve", "--role", "wecom-connector"]
+    environment:
+      <<: *app-environment
+      TRPC_SERVICE_ROLE: wecom-connector
+      TRPC_SERVICE_WECOM_ENABLED: ${TRPC_SERVICE_WECOM_ENABLED:-false}
+      TRPC_SERVICE_WORKER_DATABASE_DSN_REF: env://TRPC_SERVICE_WORKER_DATABASE_DSN
+      TRPC_SERVICE_WORKER_DATABASE_DSN: postgresql+asyncpg://${TRPC_WORKER_USER:-trpc_worker}@postgres:5432/${POSTGRES_DB:-trpc_service}
+      TRPC_SERVICE_WORKER_DATABASE_PASSWORD_REF: file:///run/secrets/worker_database_password
+    secrets: *worker-secrets
+    healthcheck:
+      test: ["CMD", "python", "-m", "trpc_service.probe", "--role", "wecom-connector"]
+      interval: 10s
+      timeout: 10s
+      retries: 6
+      start_period: 20s
+
+  session-recovery:
+    <<: *app
+    command: ["serve", "--role", "session-recovery"]
+    environment:
+      <<: *app-environment
+      TRPC_SERVICE_ROLE: session-recovery
+      TRPC_SERVICE_WORKER_DATABASE_DSN_REF: env://TRPC_SERVICE_WORKER_DATABASE_DSN
+      TRPC_SERVICE_WORKER_DATABASE_DSN: postgresql+asyncpg://${TRPC_WORKER_USER:-trpc_worker}@postgres:5432/${POSTGRES_DB:-trpc_service}
+      TRPC_SERVICE_WORKER_DATABASE_PASSWORD_REF: file:///run/secrets/worker_database_password
+      TRPC_SERVICE_DATABASE_POOL_MIN_SIZE: ${TRPC_SERVICE_RECOVERY_DATABASE_POOL_MIN_SIZE:-1}
+      TRPC_SERVICE_DATABASE_POOL_MAX_SIZE: ${TRPC_SERVICE_RECOVERY_DATABASE_POOL_MAX_SIZE:-2}
+      TRPC_SERVICE_RECOVERY_BATCH_SIZE: ${TRPC_SERVICE_RECOVERY_BATCH_SIZE:-25}
+      TRPC_SERVICE_RECOVERY_POLL_SECONDS: ${TRPC_SERVICE_RECOVERY_POLL_SECONDS:-5}
+    secrets:
+      - runtime_database_password
+      - worker_database_password
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-m", "trpc_service.probe", "--role", "session-recovery"]
+      interval: 10s
+      timeout: 10s
+      retries: 6
+      start_period: 20s
+
+  artifact-gc:
+    <<: *app
+    command: ["serve", "--role", "artifact-gc"]
+    environment:
+      <<: *app-environment
+      TRPC_SERVICE_ROLE: artifact-gc
+      TRPC_SERVICE_WORKER_DATABASE_DSN_REF: env://TRPC_SERVICE_WORKER_DATABASE_DSN
+      TRPC_SERVICE_WORKER_DATABASE_DSN: postgresql+asyncpg://${TRPC_WORKER_USER:-trpc_worker}@postgres:5432/${POSTGRES_DB:-trpc_service}
+      TRPC_SERVICE_WORKER_DATABASE_PASSWORD_REF: file:///run/secrets/worker_database_password
+      TRPC_SERVICE_DATABASE_POOL_MIN_SIZE: ${TRPC_SERVICE_ARTIFACT_GC_DATABASE_POOL_MIN_SIZE:-1}
+      TRPC_SERVICE_DATABASE_POOL_MAX_SIZE: ${TRPC_SERVICE_ARTIFACT_GC_DATABASE_POOL_MAX_SIZE:-2}
+      TRPC_SERVICE_ARTIFACT_GC_BATCH_SIZE: ${TRPC_SERVICE_ARTIFACT_GC_BATCH_SIZE:-100}
+      TRPC_SERVICE_ARTIFACT_GC_POLL_SECONDS: ${TRPC_SERVICE_ARTIFACT_GC_POLL_SECONDS:-60}
+      TRPC_SERVICE_ARTIFACT_STAGING_TTL_SECONDS: ${TRPC_SERVICE_ARTIFACT_STAGING_TTL_SECONDS:-86400}
+    secrets:
+      - runtime_database_password
+      - worker_database_password
+      - minio_root_password
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-m", "trpc_service.probe", "--role", "artifact-gc"]
+      interval: 10s
+      timeout: 10s
+      retries: 6
+      start_period: 20s
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-trpc_service}
+      POSTGRES_USER: ${POSTGRES_USER:-trpc}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./deploy/postgres/init.sh:/docker-entrypoint-initdb.d/10-runtime-role.sh:ro
+    secrets:
+      - postgres_password
+      - migration_database_password
+      - runtime_database_password
+      - worker_database_password
+      - metrics_database_password
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command:
+      - /bin/sh
+      - -c
+      - >-
+        exec redis-server --appendonly yes --save 60 1000
+        --requirepass "$$(cat /run/secrets/redis_password)"
+    secrets:
+      - redis_password
+    volumes:
+      - redisdata:/data
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$(cat /run/secrets/redis_password)\" ping | grep -q PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    restart: unless-stopped
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-trpc-minio}
+      MINIO_ROOT_PASSWORD_FILE: /run/secrets/minio_root_password
+    secrets:
+      - minio_root_password
+    volumes:
+      - miniodata:/data
+    ports:
+      - "127.0.0.1:${MINIO_PORT:-9000}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  minio-init:
+    image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z
+    restart: "no"
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}"
+        "$$(cat /run/secrets/minio_root_password)";
+        mc mb --ignore-existing local/$${MINIO_BUCKET};
+        mc anonymous set none local/$${MINIO_BUCKET}
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-trpc-minio}
+      MINIO_BUCKET: ${MINIO_BUCKET:-trpc-artifacts}
+    secrets:
+      - minio_root_password
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.132.0
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol-contrib/otel-collector.yaml"]
+    volumes:
+      - ./deploy/otel-collector.yaml:/etc/otelcol-contrib/otel-collector.yaml:ro
+    ports:
+      - "127.0.0.1:4317:4317"
+      - "127.0.0.1:4318:4318"
+      - "127.0.0.1:8889:8889"
+    depends_on:
+      jaeger:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--quiet", "http://127.0.0.1:13133/"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          cpus: "0.1"
+          memory: 128M
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-15d}
+      - --web.enable-lifecycle
+    volumes:
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheusdata:/prometheus
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+    depends_on:
+      gateway:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--quiet", "http://127.0.0.1:9090/-/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+        reservations:
+          cpus: "0.1"
+          memory: 256M
+
+  jaeger:
+    image: jaegertracing/jaeger:2.20.0
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${JAEGER_UI_PORT:-16686}:16686"
+      - "127.0.0.1:14250:14250"
+      - "127.0.0.1:14317:4317"
+      - "127.0.0.1:14318:4318"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--quiet", "http://127.0.0.1:16686/"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 768M
+        reservations:
+          cpus: "0.1"
+          memory: 256M
+
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.12.0
+    restart: unless-stopped
+    command: ["-host=0.0.0.0", "-config=/config/toxiproxy.json"]
+    volumes:
+      - ./deploy/toxiproxy.json:/config/toxiproxy.json:ro
+    ports:
+      - "127.0.0.1:${TOXIPROXY_API_PORT:-8474}:8474"
+      - "127.0.0.1:${TOXIPROXY_POSTGRES_PORT:-15432}:15432"
+      - "127.0.0.1:${TOXIPROXY_REDIS_PORT:-16379}:16379"
+      - "127.0.0.1:${TOXIPROXY_S3_PORT:-19000}:19000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/toxiproxy-cli", "--host", "http://127.0.0.1:8474", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+volumes:
+  pgdata:
+  redisdata:
+  miniodata:
+  prometheusdata:
+
+secrets:
+  # Set these in the shell or in a local .env file. They are intentionally
+  # environment-backed so no credential file is committed to the repository.
+  postgres_password:
+    environment: POSTGRES_PASSWORD
+  runtime_database_password:
+    environment: RUNTIME_DATABASE_PASSWORD
+  worker_database_password:
+    environment: WORKER_DATABASE_PASSWORD
+  metrics_database_password:
+    environment: METRICS_DATABASE_PASSWORD
+  migration_database_password:
+    environment: MIGRATION_DATABASE_PASSWORD
+  redis_password:
+    environment: REDIS_PASSWORD
+  minio_root_password:
+    environment: MINIO_ROOT_PASSWORD
+  session_hmac_key:
+    environment: SESSION_HMAC_KEY
+  emergency_queue_key:
+    environment: EMERGENCY_QUEUE_KEY
+  development_token:
+    environment: DEVELOPMENT_TOKEN
+  model_api_key:
+    environment: MODEL_API_KEY

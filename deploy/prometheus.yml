@@ -1,0 +1,29 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    service: trpc-agent-service
+
+scrape_configs:
+  - job_name: trpc-gateway
+    metrics_path: /metrics
+    static_configs:
+      - targets: [gateway:8080]
+        labels:
+          role: gateway
+
+  - job_name: trpc-admin
+    metrics_path: /metrics
+    static_configs:
+      - targets: [admin:8081]
+        labels:
+          role: admin
+
+  - job_name: otel-collector
+    metrics_path: /metrics
+    static_configs:
+      - targets: [otel-collector:8889]
+
+  - job_name: prometheus
+    static_configs:
+      - targets: [localhost:9090]

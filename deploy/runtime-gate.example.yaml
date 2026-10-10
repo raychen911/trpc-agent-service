@@ -1,0 +1,131 @@
+schema_version: 1
+
+# Copy this file to deploy/runtime-gate.yaml. Keep raw nonces, registry tokens,
+# kubeconfig contents, DSNs, and Secret values outside this file.
+release:
+  id: replace-with-current-release-id
+  nonce_env: TRPC_RELEASE_NONCE
+  # candidate-lock.json preserves the same image-binding schema while also
+  # content-addressing the registry report used to create it.
+  image_binding: ../runs/multitenant/candidate-lock.json
+
+kubernetes:
+  kubeconfig: C:/secure/ack-admin.kubeconfig
+  context: replace-with-explicit-context
+  timeout_seconds: 1500
+  secret_manifest: C:/secure/trpc-runtime-secrets.yaml
+  image_pull_secret: xuanyuan-pull
+  # Runtime registry host used by every rendered image. Keep this as docker.io
+  # when ACK node pools configure a transparent Docker Hub mirror (for example
+  # Xuanyuan); repository paths and @sha256 digests remain canonical evidence.
+  pull_registry: docker.io
+  # Optional acceptance-only override. Values are copied into the rendered
+  # ConfigMap; credentials remain in the external Secret manifest.
+  object_store:
+    endpoint: http://minio.runtime-support.svc.cluster.local:9000
+    bucket: trpc-artifacts
+  # Optional ACK support recovery settings. Omit this block to retain the
+  # existing single-node runtime-gate behavior.
+  support:
+    data_node: replace-with-support-data-node
+    postgres_image: docker.io/pgvector/pgvector@sha256:<64-hex-digest>
+    redis_image: docker.io/library/redis@sha256:<64-hex-digest>
+    minio_image: docker.io/owner/support-images@sha256:<64-hex-digest>
+    minio_client_image: docker.io/owner/support-images@sha256:<64-hex-digest>
+    prometheus_image: docker.io/owner/support-images@sha256:<64-hex-digest>
+    prometheus_adapter_image: docker.io/owner/support-images@sha256:<64-hex-digest>
+    postgres_host_path: /srv/trpc/support/postgres
+    redis_host_path: /srv/trpc/support/redis
+    minio_host_path: /srv/trpc/support/minio
+  # Zero-cost functional recovery uses this same support image block and the
+  # immutable candidate lock above. It creates a temporary emptyDir-only
+  # namespace; set TRPC_DR_FUNCTIONAL_ENABLED=true only for that drill. The
+  # runner copies image_pull_secret (for example xuanyuan-pull) into the
+  # temporary namespace without writing its decoded credentials to reports.
+  # Optional, explicitly enabled only for the in-cluster real performance
+  # acceptance.  The runner uses Service DNS and never depends on a local
+  # port-forward that can disappear during a rollout.
+  performance:
+    enabled: false
+    namespace: trpc-service
+    service_dns:
+      gateway: trpc-gateway.trpc-service.svc.cluster.local
+      postgres: postgres.trpc-runtime-support.svc.cluster.local
+      redis: redis.trpc-runtime-support.svc.cluster.local
+    gateway_port: 8080
+    postgres_port: 5432
+    redis_port: 6379
+    runner:
+      node_label: trpc-role=load-driver
+      taint:
+        key: trpc-role
+        value: load-driver
+        effect: NoSchedule
+      resources:
+        requests:
+          cpu: "2"
+          memory: 2Gi
+        limits:
+          cpu: "4"
+          memory: 4Gi
+      max_inflight: 64
+      db_pool_size: 32
+    workload:
+      node_label: trpc-role=workload
+      gateway:
+        replicas: 4
+        database_pool:
+          min_size: 5
+          max_size: 6
+      worker:
+        database_pool:
+          min_size: 2
+          max_size: 8
+        offline_agent_delay_seconds: 3.0
+      outbox:
+        replicas: 1
+        database_pool:
+          min_size: 2
+          max_size: 4
+      recovery:
+        replicas: 1
+        database_pool:
+          min_size: 1
+          max_size: 2
+        poll_seconds: 1
+    fixture_secret_env_names:
+      - TRPC_PERF_FIXTURE_UNUSED_APP_SECRET
+      - TRPC_PERF_FIXTURE_UNUSED_VERIFICATION_TOKEN
+      - TRPC_PERF_FIXTURE_UNUSED_ENCRYPT_KEY
+    workers: 4
+    worker_concurrency: 50
+  node:
+    name: replace-with-dedicated-node
+    label: trpc-runtime-gate=acceptance
+    drain_confirmation: I_UNDERSTAND_ISOLATED_NODE_DRAIN
+  hpa:
+    driver: ../scripts/kubernetes_hpa_load_driver.py
+    kubeconfig: C:/secure/hpa-driver.kubeconfig
+    context: replace-with-driver-context
+    subject: system:serviceaccount:trpc-runtime-driver:hpa-driver
+    job_image: docker.io/owner/trpc-hpa-backlog@sha256:<64-hex-digest>
+    job_command: [python, -c, 'print("bounded-backlog-marker")']
+    # Requires trpc-metrics-secrets and the real PostgreSQL-backed exporter.
+    backlog_metric_enabled: true
+
+# Explicit host ports are checked together before Compose starts. Container
+# ports remain fixed; these are host-only mappings.
+compose:
+  ports:
+    gateway: 38080
+    admin: 38081
+    postgres: 35432
+    redis: 36379
+    minio: 39000
+    minio_console: 39001
+    toxiproxy_api: 38474
+    toxiproxy_postgres: 45432
+    toxiproxy_redis: 46379
+    toxiproxy_s3: 49000
+    prometheus: 39090
+    jaeger: 36686

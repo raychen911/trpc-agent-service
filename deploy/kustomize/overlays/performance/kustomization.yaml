@@ -1,0 +1,33 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# This overlay is deliberately separate from production.  Applying it is an
+# explicit choice to run the real performance acceptance topology.
+namespace: trpc-service
+
+resources:
+  - namespace.yaml
+  - ../../base
+  - ../../im-external-egress
+  - performance-network-policy.yaml
+
+images:
+  - name: trpc-agent-service
+    # Keep every runtime container on the same immutable candidate image.  The
+    # canonical Docker Hub reference stays visible in workload and release
+    # evidence. ACK's node-pool containerd mirror transparently accelerates
+    # docker.io through Xuanyuan; update only the digest after publishing a
+    # new candidate lock.
+    newName: docker.io/zixuan760/trpc-agent-service
+    digest: sha256:40b332ac00e3fefa04f90a56513a528dc25d610f312d9e06f76a608cb78003fc
+
+patches:
+  - path: performance-config-patch.yaml
+  - path: performance-replicas-patch.yaml
+  - path: performance-workload-patch.yaml
+  - path: performance-image-pull-secret-patch.yaml
+    target:
+      kind: Deployment
+  - path: performance-image-pull-secret-patch.yaml
+    target:
+      kind: Job

@@ -1,0 +1,40 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: trpc-schema-migration
+  annotations:
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  template:
+    spec:
+      initContainers:
+        - name: wait-for-postgres
+          image: docker.io/pgvector/pgvector@sha256:a6579dded3ff4ed3d9565ae54ab253e2cb7ae24c5d1eb3bec8a89e73f038b68a
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              attempt=0
+              while [ "$attempt" -lt 150 ]; do
+                if pg_isready -h postgres -p 5432 -d trpc_service; then
+                  exit 0
+                fi
+                attempt=$((attempt + 1))
+                sleep 2
+              done
+              echo "postgres did not become ready within 300 seconds" >&2
+              exit 1
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi

@@ -1,0 +1,91 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: trpc-allow-performance-runner-egress
+spec:
+  # The actual Job is created only by the explicitly enabled performance
+  # runner.  This stable label keeps its network contract independent of a
+  # generated Job name.
+  podSelector:
+    matchLabels:
+      trpc.io/performance-runner: "true"
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: trpc-gateway
+      ports:
+        - port: 8080
+          protocol: TCP
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: trpc-runtime-support
+          podSelector:
+            matchLabels:
+              app: trpc-runtime-postgres
+      ports:
+        - port: 5432
+          protocol: TCP
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: trpc-runtime-support
+          podSelector:
+            matchLabels:
+              app: trpc-runtime-redis
+      ports:
+        - port: 6379
+          protocol: TCP
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: trpc-allow-performance-runner-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: trpc-gateway
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              trpc.io/performance-runner: "true"
+      ports:
+        - port: 8080
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: trpc-allow-performance-prometheus-backlog
+spec:
+  # The base policy keeps the exporter egress DB/DNS-only.  This overlay
+  # makes the in-cluster acceptance Prometheus namespace explicit as the only
+  # additional reader of the exporter endpoint.
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: trpc-backlog-exporter
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: trpc-runtime-support
+      ports:
+        - port: 9100
+          protocol: TCP

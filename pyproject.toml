@@ -1,0 +1,117 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "trpc-agent-service"
+version = "0.1.0"
+description = "Multi-tenant, horizontally scalable production runtime for tRPC-Agent-Python."
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+license = { text = "Apache-2.0" }
+authors = [{ name = "tRPC-Agent-Service contributors" }]
+dependencies = [
+  "alembic>=1.16,<2",
+  "asyncpg>=0.30,<1",
+  "boto3>=1.40,<2",
+  "cryptography>=50,<51",
+  "defusedxml>=0.7,<1",
+  "fastapi>=0.116,<1",
+  "httpx>=0.28,<1",
+  "nanobot-ai>=0.3,<0.4",
+  "opentelemetry-api>=1.36,<2",
+  "opentelemetry-exporter-otlp-proto-grpc>=1.36,<2",
+  "opentelemetry-sdk>=1.36,<2",
+  "orjson>=3.10,<4",
+  "pgvector>=0.4,<1",
+  "prometheus-client>=0.22,<1",
+  "psycopg[binary]>=3.2,<4",
+  "pydantic-settings>=2.10,<3",
+  "PyJWT[crypto]>=2.10,<3",
+  "redis[hiredis]>=6.4,<8",
+  "sqlalchemy[asyncio]>=2.0.43,<3",
+  "tenacity>=9.1,<10",
+  "trpc-agent-py[openclaw]>=1.1.17,<1.2",
+  "typer>=0.16,<1",
+  "uvicorn[standard]>=0.35,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "mypy>=1.17,<2",
+  "pytest>=8.4,<9",
+  "pytest-asyncio>=1.1,<2",
+  "pytest-cov>=6.2,<8",
+  "pytest-httpx>=0.35,<1",
+  "pyyaml>=6,<7",
+  "ruff>=0.12,<1",
+  "testcontainers>=4.12,<5",
+  "types-defusedxml>=0.7,<1",
+]
+
+[project.scripts]
+trpc-service = "trpc_service._cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["trpc_service"]
+
+[tool.hatch.build.targets.sdist]
+exclude = ["/.cache", "/.venv", "/dist", "/htmlcov", "/runs"]
+
+[tool.uv]
+override-dependencies = [
+  "dulwich>=1.2.12,<2",
+  "pypdf>=6.16.1,<7",
+]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-config --strict-markers"
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+  "integration: requires local infrastructure",
+  "online: requires explicitly supplied external credentials",
+  "performance: load and soak tests",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["trpc_service"]
+omit = ["trpc_service/version.py"]
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
+skip_covered = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC", "S", "RUF"]
+ignore = ["S101"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S105", "S106", "S107"]
+"migrations/**" = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+explicit_package_bases = true
+allow_subclassing_any = true
+warn_unused_configs = true
+plugins = ["pydantic.mypy"]
+exclude = ["migrations"]
+
+[[tool.mypy.overrides]]
+module = [
+  "asyncpg",
+  "boto3",
+  "botocore.*",
+  "trpc_agent_sdk.*",
+  "wecom_aibot_sdk.*",
+  "yaml",
+]
+ignore_missing_imports = true

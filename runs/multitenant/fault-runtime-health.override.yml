@@ -1,0 +1,16 @@
+services:
+  worker:
+    healthcheck:
+      timeout: 45s
+  outbox-dispatcher:
+    healthcheck:
+      timeout: 45s
+  channel-dispatcher:
+    healthcheck:
+      timeout: 45s
+  post-turn-projector:
+    healthcheck:
+      timeout: 45s
+  session-recovery:
+    healthcheck:
+      timeout: 45s

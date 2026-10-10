@@ -1,0 +1,27 @@
+services:
+  gateway:
+    secrets:
+      - feishu_verification_token
+      - feishu_encrypt_key
+
+  channel-dispatcher:
+    secrets:
+      - feishu_app_secret
+
+  worker:
+    secrets:
+      - feishu_app_secret
+
+  wecom-connector:
+    secrets:
+      - wecom_bot_secret
+
+secrets:
+  wecom_bot_secret:
+    environment: WECOM_BOT_SECRET
+  feishu_verification_token:
+    environment: FEISHU_VERIFICATION_TOKEN
+  feishu_encrypt_key:
+    environment: FEISHU_ENCRYPT_KEY
+  feishu_app_secret:
+    environment: FEISHU_APP_SECRET

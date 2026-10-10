@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "channel": "feishu",
+  "tenant_id": "<feishu-tenant-id>",
+  "binding_id": "<feishu-binding-id>",
+  "control_token_file": "/etc/trpc-im-probe/secrets/<feishu-control-token-file>",
+  "evidence_base_url": "https://<admin-host>.example.invalid",
+  "evidence_token_file": "/etc/trpc-im-probe/secrets/<admin-token-file>",
+  "hooks": {
+    "feishu_round_trip": {"url": "https://<control-host>.example.invalid/v1/im/feishu/round_trip", "timeout_seconds": 30},
+    "feishu_idempotency": {"url": "https://<control-host>.example.invalid/v1/im/feishu/idempotency", "timeout_seconds": 30},
+    "feishu_media": {"url": "https://<control-host>.example.invalid/v1/im/feishu/media", "timeout_seconds": 30},
+    "feishu_reconnect": {"url": "https://<control-host>.example.invalid/v1/im/feishu/reconnect", "timeout_seconds": 30},
+    "feishu_rate_limit_retry_after": {"url": "https://<control-host>.example.invalid/v1/im/feishu/rate_limit_retry_after", "timeout_seconds": 30},
+    "feishu_credential_rotation": {"url": "https://<control-host>.example.invalid/v1/im/feishu/credential_rotation", "timeout_seconds": 30},
+    "feishu_prolonged_outage": {"url": "https://<control-host>.example.invalid/v1/im/feishu/prolonged_outage", "timeout_seconds": 175},
+    "feishu_ambiguous": {"url": "https://<control-host>.example.invalid/v1/im/feishu/ambiguous", "timeout_seconds": 30}
+  }
+}

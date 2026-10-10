@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "channel": "wecom",
+  "tenant_id": "<wecom-tenant-id>",
+  "binding_id": "<wecom-binding-id>",
+  "account_id_sha256": "<sha256-of-wecom-account-id>",
+  "admin_base_url": "https://<admin-host>.example.invalid",
+  "admin_token_file": "/etc/trpc-im-probe/secrets/<admin-token-file>",
+  "control_base_url": "https://<control-host>.example.invalid",
+  "control_token_file": "/etc/trpc-im-probe/secrets/<wecom-control-token-file>",
+  "timeout_seconds": 175
+}

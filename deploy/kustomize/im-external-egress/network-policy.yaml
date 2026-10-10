@@ -1,0 +1,25 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: trpc-allow-im-provider-https-egress
+spec:
+  # Standard Kubernetes NetworkPolicy cannot select FQDNs.  Keep this
+  # compatibility rule limited to the two IM provider clients and TCP/443;
+  # clusters with FQDN-aware policy support should replace the IPv4-wide
+  # destination with the reviewed Feishu, WeCom, and probe hostnames.
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values:
+          - trpc-channel-dispatcher
+          - trpc-wecom-connector
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - port: 443
+          protocol: TCP

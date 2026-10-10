@@ -1,0 +1,7 @@
+services:
+  outbox-dispatcher:
+    healthcheck:
+      timeout: 45s
+  session-recovery:
+    healthcheck:
+      timeout: 45s
