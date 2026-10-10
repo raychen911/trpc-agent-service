@@ -56,7 +56,7 @@ jobs:
           --branch-minimum 88.0
           --output runs/multitenant/coverage-gate.json
       - run: uv run --python ${{ matrix.python }} trpc-service doctor --output runs/multitenant/sdk-upgrade.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: sdk-gate-${{ matrix.python }}
@@ -75,7 +75,7 @@ jobs:
           python-version: "3.12"
       - run: uv sync --extra dev --locked
       - run: uv run python scripts/mock_production_gate.py
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: production-mock
@@ -160,7 +160,7 @@ jobs:
             --dependency-audit-reason "pip-audit result is not passing" \
             --output runs/multitenant/supply-chain.json \
             --require-production
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: sbom
